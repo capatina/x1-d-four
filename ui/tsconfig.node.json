@@ -15,5 +15,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["vite.config.ts", "svelte.config.js", "mock/**/*.ts"]
+  "include": ["vite.config.ts", "svelte.config.js", "mock/**/*.ts", "scripts/**/*.ts"]
 }

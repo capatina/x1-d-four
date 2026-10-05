@@ -242,7 +242,7 @@
       <Minimap msg={ex} />
     {/if}
     {#if showStats && stats}
-      <div class="stats">
+      <div class="stats" role="status">
         {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr.toFixed(2)} · world {stats.frameMs.toFixed(2)} ms · wave {waveMs.toFixed(2)} ms
         <span class="growth">growth {Math.round(stats.growth * 100)}% · evening {Math.round(stats.day * 100)}%</span>
       </div>
@@ -262,7 +262,7 @@
           {#each children as c (c.id)}
             <li>
               <button type="button" class:aimed={c.id === ex?.aim} onclick={() => client.send({ cmd: 'explore_aim', id: c.id })}>
-                {title(c.id)} <span>{Math.round(c.sim * 100)}%</span>
+                {title(c.id)} <span>{client.library.get(c.id)?.artist ?? 'Unknown artist'} · {fmtBpm(c.tempo ?? client.library.get(c.id)?.bpm ?? null) || '—'} BPM · {Math.round(c.sim * 100)}%</span>
               </button>
             </li>
           {/each}
@@ -358,7 +358,7 @@
     box-shadow: 0 5px 20px #1b281c14;
   }
   .labels :global(.xl)::after {
-    content: ''; position: absolute; height: 19px; width: 1px;
+    content: ''; position: absolute; height: var(--stem, 19px); width: 1px;
     top: 100%; left: 50%; background: #e6d8a788;
   }
   .labels :global(.xl:hover), .labels :global(.xl:focus-visible) { background: #233228ec; }
@@ -366,7 +366,7 @@
   .labels :global(.xl-t) { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; font: 550 clamp(12px, .86vw, 15px)/1.3 var(--font-ui); text-wrap: balance; }
   .labels :global(.xl-a) { font-size: 11px; color: #c9cdb8; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .labels :global(.xl-m) { margin-top: 8px; font: 500 10px/1.4 var(--font-mono); color: #dfd7b7; white-space: pre; }
-  .labels :global(.xl[data-kind='aimed']) { padding: 18px 20px; border-top: 2px solid var(--band); background: linear-gradient(#213329ed,#1c3025ce); }
+  .labels :global(.xl[data-kind='aimed']) { z-index: 2; padding: 18px 20px; border-top: 2px solid var(--band); background: linear-gradient(#213329ed,#1c3025ce); }
   .labels :global(.xl[data-kind='aimed'])::before { content: 'AIMED · NEXT PATH'; display: block; color: var(--band); font-size: 9px; letter-spacing: .22em; margin-bottom: 10px; }
   .labels :global(.xl[data-kind='aimed'] .xl-t) { font: 400 clamp(21px, 1.85vw, 32px)/1.08 Georgia, serif; letter-spacing: -.02em; }
   .labels :global(.xl[data-kind='aimed'] .xl-a) { font-size: 13px; margin-top: 8px; }

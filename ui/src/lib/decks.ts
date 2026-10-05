@@ -1,8 +1,8 @@
 /** Mineral blue, ochre, limestone and heather. Luminance and stroke patterns
  * supplement hue so deck identity survives common colour-vision deficiencies. */
 const DECK_HUES = [230, 80, 100, 335] as const;
-const DECK_LIGHTNESS = [.72, .78, .89, .72] as const;
-const DECK_CHROMA = [.075, .11, .045, .07] as const;
+const DECK_LIGHTNESS = [0.72, 0.78, 0.89, 0.72] as const;
+const DECK_CHROMA = [0.075, 0.11, 0.045, 0.07] as const;
 export const DECK_DASHES: number[][] = [[], [10, 4], [2, 4], [10, 3, 2, 3]];
 
 export type Rgb = [number, number, number];
@@ -30,10 +30,10 @@ export const DECK_COLORS: readonly string[] = DECK_HUES.map((h, i) => oklch(DECK
 
 /** Per-deck band shades for the waveform strip. */
 export const DECK_SHADES: readonly DeckShades[] = DECK_HUES.map((h, i) => ({
-  low: oklch(DECK_LIGHTNESS[i] - .22, DECK_CHROMA[i] * .7, h),
+  low: oklch(DECK_LIGHTNESS[i] - 0.22, DECK_CHROMA[i] * 0.7, h),
   mid: DECK_COLORS[i],
-  high: oklch(DECK_LIGHTNESS[i] - .08, DECK_CHROMA[i] * .6, h),
-  line: oklch(Math.min(.93, DECK_LIGHTNESS[i] + .09), DECK_CHROMA[i], h),
+  high: oklch(DECK_LIGHTNESS[i] - 0.08, DECK_CHROMA[i] * 0.6, h),
+  line: oklch(Math.min(0.93, DECK_LIGHTNESS[i] + 0.09), DECK_CHROMA[i], h),
 }));
 
 export function deckColor(deck: number): string {

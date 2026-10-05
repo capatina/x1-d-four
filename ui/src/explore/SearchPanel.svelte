@@ -9,9 +9,9 @@
   import { search, TRACK_DRAG } from '../lib/search.svelte';
 
   /**
-   * Type anywhere in the tunnel to search. Results come ranked from the server
+   * Type anywhere in the valley to search. Results come ranked from the server
    * (`browser.ids`) and its selection is the best match, so the mixer's load
-   * buttons act on it. Enter flies the tunnel there; Esc closes.
+   * buttons act on it. Enter flies the valley there; Esc closes.
    */
 
   const MAX_ROWS = 12;
@@ -132,7 +132,7 @@
 
     <footer>
       <span><kbd>↑↓</kbd> pick</span>
-      <span><kbd>Enter</kbd> fly the tunnel here</span>
+      <span><kbd>Enter</kbd> explore from here</span>
       {#if loadKeys.length}<span>{#each loadKeys as k, i (i)}{#if i}/{/if}<MixerKey {k} />{/each} load</span>{/if}
       {#if rootKeys.length}<span>{#each rootKeys as k, i (i)}{#if i}/{/if}<MixerKey {k} />{/each} fly here</span>{/if}
       <span>drag onto a deck to load</span>
@@ -152,7 +152,7 @@
     padding: 10px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 14px;
-    background: rgba(9, 10, 14, 0.82);
+    background: rgba(22, 35, 27, 0.94);
     backdrop-filter: blur(14px) saturate(1.2);
     box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px color-mix(in srgb, var(--band, #fff) 14%, transparent);
   }

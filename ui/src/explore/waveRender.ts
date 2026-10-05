@@ -63,7 +63,13 @@ export class WaveRenderer {
     if (!ctx) throw new Error('2D canvas unavailable');
     this.#ctx = ctx;
     for (let i = 0; i < DECK_COUNT; i++) {
-      this.#env.push({ n: 0, xs: new Float32Array(0), yl: new Float32Array(0), ym: new Float32Array(0), yh: new Float32Array(0) });
+      this.#env.push({
+        n: 0,
+        xs: new Float32Array(0),
+        yl: new Float32Array(0),
+        ym: new Float32Array(0),
+        yh: new Float32Array(0),
+      });
     }
 
     this.#mono = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() || 'monospace';
@@ -120,17 +126,23 @@ export class WaveRenderer {
     {
       const ctx = this.#ctx;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const fade = Math.min(80, w * .05);
-      this.#leftFade = ctx.createLinearGradient(0,0,fade,0);
-      this.#leftFade.addColorStop(0,'#000'); this.#leftFade.addColorStop(1,'#0000');
-      this.#rightFade = ctx.createLinearGradient(w-fade*1.6,0,w,0);
-      this.#rightFade.addColorStop(0,'#0000'); this.#rightFade.addColorStop(1,'#000');
-      this.#headGlow = ctx.createLinearGradient(w/2-12,0,w/2+12,0);
-      this.#headGlow.addColorStop(0,'#ede4b900');this.#headGlow.addColorStop(.5,'#ede4b928');this.#headGlow.addColorStop(1,'#ede4b900');
-      this.#loopGradients.length=0;
-      for(let i=0;i<DECK_COUNT;i++) {
-        const g=ctx.createLinearGradient(0,0,0,h);
-        g.addColorStop(0,rgba(DECK_SHADES[i].mid,.25));g.addColorStop(.4,rgba(DECK_SHADES[i].mid,.04));g.addColorStop(1,rgba(DECK_SHADES[i].mid,.18));
+      const fade = Math.min(80, w * 0.05);
+      this.#leftFade = ctx.createLinearGradient(0, 0, fade, 0);
+      this.#leftFade.addColorStop(0, '#000');
+      this.#leftFade.addColorStop(1, '#0000');
+      this.#rightFade = ctx.createLinearGradient(w - fade * 1.6, 0, w, 0);
+      this.#rightFade.addColorStop(0, '#0000');
+      this.#rightFade.addColorStop(1, '#000');
+      this.#headGlow = ctx.createLinearGradient(w / 2 - 12, 0, w / 2 + 12, 0);
+      this.#headGlow.addColorStop(0, '#ede4b900');
+      this.#headGlow.addColorStop(0.5, '#ede4b928');
+      this.#headGlow.addColorStop(1, '#ede4b900');
+      this.#loopGradients.length = 0;
+      for (let i = 0; i < DECK_COUNT; i++) {
+        const g = ctx.createLinearGradient(0, 0, 0, h);
+        g.addColorStop(0, rgba(DECK_SHADES[i].mid, 0.25));
+        g.addColorStop(0.4, rgba(DECK_SHADES[i].mid, 0.04));
+        g.addColorStop(1, rgba(DECK_SHADES[i].mid, 0.18));
         this.#loopGradients.push(g);
       }
     }
@@ -219,7 +231,7 @@ export class WaveRenderer {
     if (!st || w < 10 || h < 10) return;
 
     const cx = w / 2;
-    const cy = h * .64;
+    const cy = h * 0.64;
     const pps = w / (2 * WINDOW_S);
     // Beat-grid ruler along both edges: one lane per deck, deck 1 outermost.
     const lane = clamp(h * 0.04, 4, 6);
@@ -261,9 +273,7 @@ export class WaveRenderer {
     if (any) {
       // The lead deck in its true colours.
       if (lead >= 0 && this.#env[lead].n >= 2) this.#fill(lead, this.#env[lead], cy, st.decks[lead]?.playing ?? false);
-      // The others as luminous outlines on top: a soft glow (screened, so
-      // crossing decks mix), a thin dark casing so the line reads over the
-      // lead deck's fill, then the line itself.
+      // Patterned contours with a dark casing stay distinct over the filled bank.
       ctx.lineJoin = 'bevel';
       for (const i of order) {
         const env = this.#env[i];
@@ -273,7 +283,7 @@ export class WaveRenderer {
         ctx.setLineDash(DECK_DASHES[i]);
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = '#18291f';
-        ctx.globalAlpha = a * .65;
+        ctx.globalAlpha = a * 0.65;
         ctx.lineWidth = 3.5;
         ctx.stroke();
         ctx.strokeStyle = DECK_SHADES[i].line;
@@ -291,7 +301,18 @@ export class WaveRenderer {
       const sh = this.#shown[i];
       const grid = ds && sh.live ? gridFor(i, ds) : null;
       if (!ds || !grid) continue;
-      this.#ticks(i, grid, sh.pos, rate(ds), ds.length, cx, pps, lane, ruler, i === lead ? 'lead' : ds.playing ? 'playing' : 'paused');
+      this.#ticks(
+        i,
+        grid,
+        sh.pos,
+        rate(ds),
+        ds.length,
+        cx,
+        pps,
+        lane,
+        ruler,
+        i === lead ? 'lead' : ds.playing ? 'playing' : 'paused',
+      );
     }
 
     // The past fades a little; both ends fade out.
@@ -310,7 +331,16 @@ export class WaveRenderer {
   }
 
   /** Envelope of one deck over the visible window, in CSS px from the centre line. */
-  #sample(env: Envelope, wave: DeckWave, pos: number, r: number, length: number, cx: number, pps: number, half: number): void {
+  #sample(
+    env: Envelope,
+    wave: DeckWave,
+    pos: number,
+    r: number,
+    length: number,
+    cx: number,
+    pps: number,
+    half: number,
+  ): void {
     const w = this.#w;
     const end = Math.min(length > 0 ? length : Infinity, wave.blocks * wave.blockSec);
     const x0 = Math.max(0, cx + ((0 - pos) / r) * pps);
@@ -324,7 +354,7 @@ export class WaveRenderer {
     for (let k = 0; k < n; k++) {
       const x = k === n - 1 ? x1 : x0 + k * STEP;
       // Block centres sit half a block in.
-      const f = (pos / wave.blockSec) + (x - cx) * perPx - 0.5;
+      const f = pos / wave.blockSec + (x - cx) * perPx - 0.5;
       let lo: number;
       let mi: number;
       let hi: number;
@@ -381,8 +411,8 @@ export class WaveRenderer {
     ctx.beginPath();
     ctx.moveTo(xs[0], cy - smoothAt(yh, n, 0));
     for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - smoothAt(yh, n, k));
-    ctx.moveTo(xs[0], cy + smoothAt(yh, n, 0) * .32);
-    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy + smoothAt(yh, n, k) * .32);
+    ctx.moveTo(xs[0], cy + smoothAt(yh, n, 0) * 0.32);
+    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy + smoothAt(yh, n, k) * 0.32);
   }
 
   /** An active loop: a tint in the deck colour, bracketed at both ends. */
@@ -469,26 +499,34 @@ export class WaveRenderer {
 
   /** Deck to draw filled (-1: none has a waveform). */
   #lead(st: StateMsg): number {
-    let first = -1, playing = -1, master = -1;
-    for(let i=0;i<DECK_COUNT;i++) {
-      const ds=st.decks[i], wave=waves.decks[i];
-      if(!ds?.track_id || !this.#shown[i].live || wave?.trackId!==ds.track_id) continue;
-      if(i===st.focused) return i;
-      if(first<0) first=i;
-      if(ds.playing && playing<0) playing=i;
-      if(ds.master) master=i;
+    let first = -1,
+      playing = -1,
+      master = -1;
+    for (let i = 0; i < DECK_COUNT; i++) {
+      const ds = st.decks[i],
+        wave = waves.decks[i];
+      if (!ds?.track_id || !this.#shown[i].live || wave?.trackId !== ds.track_id) continue;
+      if (i === st.focused) return i;
+      if (first < 0) first = i;
+      if (ds.playing && playing < 0) playing = i;
+      if (ds.master) master = i;
     }
-    return master>=0 ? master : playing>=0 ? playing : first;
+    return master >= 0 ? master : playing >= 0 ? playing : first;
   }
 
   #playhead(cx: number, h: number): void {
     const ctx = this.#ctx;
     const x = Math.round(cx * this.#dpr) / this.#dpr;
-    ctx.fillStyle=this.#headGlow;
-    ctx.fillRect(x-12,0,24,h);
-    ctx.fillStyle='#eee6c9';
-    ctx.fillRect(x-.75,0,1.5,h);
-    ctx.beginPath();ctx.moveTo(x-4,0);ctx.lineTo(x+4,0);ctx.lineTo(x,5);ctx.closePath();ctx.fill();
+    ctx.fillStyle = this.#headGlow;
+    ctx.fillRect(x - 12, 0, 24, h);
+    ctx.fillStyle = '#eee6c9';
+    ctx.fillRect(x - 0.75, 0, 1.5, h);
+    ctx.beginPath();
+    ctx.moveTo(x - 4, 0);
+    ctx.lineTo(x + 4, 0);
+    ctx.lineTo(x, 5);
+    ctx.closePath();
+    ctx.fill();
   }
 
   /** Deck numbers down the right edge, in their colours; the focused one filled. */
@@ -542,7 +580,7 @@ function mirrored(ctx: CanvasRenderingContext2D, env: Envelope, ys: Float32Array
   ctx.beginPath();
   ctx.moveTo(xs[0], cy - ys[0]);
   for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - ys[k]);
-  for (let k = n - 1; k >= 0; k--) ctx.lineTo(xs[k], cy + ys[k] * .32);
+  for (let k = n - 1; k >= 0; k--) ctx.lineTo(xs[k], cy + ys[k] * 0.32);
   ctx.closePath();
 }
 
@@ -578,5 +616,5 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 function smoothAt(ys: Float32Array, n: number, k: number): number {
-  return (ys[Math.max(0,k-1)] + 2*ys[k] + ys[Math.min(n-1,k+1)]) / 4;
+  return (ys[Math.max(0, k - 1)] + 2 * ys[k] + ys[Math.min(n - 1, k + 1)]) / 4;
 }

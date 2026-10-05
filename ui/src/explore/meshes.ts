@@ -3,16 +3,21 @@ import * as THREE from 'three';
 /** Shared, mutable uniforms: every blade, tree and bank grows from the same ground. */
 export function makeShared() {
   return {
-    uTime: { value: 0 }, uWind: { value: 0 }, uGrowth: { value: 0 },
-    uDay: { value: 0 }, uPlace: { value: 0 }, uBand: { value: 0 },
-    uLife: { value: 0 }, uMotion: { value: 1 },
+    uTime: { value: 0 },
+    uWind: { value: 0 },
+    uGrowth: { value: 0 },
+    uDay: { value: 0 },
+    uPlace: { value: 0 },
+    uBand: { value: 0 },
+    uLife: { value: 0 },
+    uMotion: { value: 1 },
     uSpectrum: { value: new Float32Array(64) },
     uDecks: { value: new THREE.Vector4() },
   };
 }
 export type Shared = ReturnType<typeof makeShared>;
 
-const common = /* glsl */`
+const common = /* glsl */ `
   uniform float uTime, uWind, uGrowth, uDay, uPlace, uBand, uLife, uMotion;
   uniform float uSpectrum[64];
   uniform vec4 uDecks;
@@ -39,8 +44,12 @@ const common = /* glsl */`
 `;
 
 function material(s: Shared, vertexShader: string, fragmentShader: string, extra: THREE.ShaderMaterialParameters = {}) {
-  return new THREE.ShaderMaterial({ uniforms: s, vertexShader: common + vertexShader,
-    fragmentShader: common + fragmentShader, ...extra });
+  return new THREE.ShaderMaterial({
+    uniforms: s,
+    vertexShader: common + vertexShader,
+    fragmentShader: common + fragmentShader,
+    ...extra,
+  });
 }
 
 /** One seeded random stream at construction; animation never creates geometry. */
@@ -54,10 +63,15 @@ export function random(seed: number) {
 }
 
 export function makeSky(s: Shared) {
-  return new THREE.Mesh(new THREE.SphereGeometry(370, 32, 16), material(s, /* glsl */`
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(370, 32, 16),
+    material(
+      s,
+      /* glsl */ `
     varying vec3 vDir;
     void main() { vDir=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vDir;
     void main() {
       vec3 d=normalize(vDir);
@@ -74,14 +88,21 @@ export function makeSky(s: Shared) {
       col=mix(col,vec3(.89,.87,.75),cover);
       gl_FragColor=vec4(col,1.);
     }
-  `, { side: THREE.BackSide, depthWrite: false }));
+  `,
+      { side: THREE.BackSide, depthWrite: false },
+    ),
+  );
 }
 
 export function makeLand(s: Shared) {
   const geo = new THREE.PlaneGeometry(560, 430, 180, 150);
   geo.rotateX(-Math.PI / 2);
   geo.translate(0, 0, -155);
-  return new THREE.Mesh(geo, material(s, /* glsl */`
+  return new THREE.Mesh(
+    geo,
+    material(
+      s,
+      /* glsl */ `
     varying vec3 vP, vN;
     void main() {
       vec3 p=position; p.y=ground(p.xz);
@@ -90,7 +111,8 @@ export function makeLand(s: Shared) {
       vN=normalize(vec3(-dx,.4,-dz)); vP=p;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
     }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vP, vN;
     void main() {
       float n=noise(vP.xz*.9)*.3+noise(vP.xz*.14)*.7;
@@ -103,17 +125,24 @@ export function makeLand(s: Shared) {
       float light=.60+.40*max(0.,dot(vN,normalize(vec3(-.6,.7,.3))));
       gl_FragColor=vec4(earth(c*light,vP),1.);
     }
-  `));
+  `,
+    ),
+  );
 }
 
 export function makeWater(s: Shared) {
   const geo = new THREE.PlaneGeometry(560, 430);
   geo.rotateX(-Math.PI / 2);
-  geo.translate(0, -.05, -155);
-  return new THREE.Mesh(geo, material(s, /* glsl */`
+  geo.translate(0, -0.05, -155);
+  return new THREE.Mesh(
+    geo,
+    material(
+      s,
+      /* glsl */ `
     varying vec3 vP;
     void main() { vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vP;
     void main() {
       float t=uTime*uMotion;
@@ -124,24 +153,33 @@ export function makeWater(s: Shared) {
       c+=vec3(.28,.21,.1)*pow(ripple*fine,5.)*sun;
       gl_FragColor=vec4(earth(c,vP),1.);
     }
-  `));
+  `,
+    ),
+  );
 }
 
 export function makeGrass(s: Shared, count = 44000) {
   const r = random(43);
   const geo = new THREE.InstancedBufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute([-.07,0,0, .07,0,0, -.04,.55,0, .04,.55,0, .03,1,0],3));
-  geo.setIndex([0,1,2, 1,3,2, 2,3,4]);
-  const offset = new Float32Array(count*4);
-  for (let i=0;i<count;i++) {
-    offset[i*4]=(r()-.5)*150;
-    offset[i*4+1]=30-r()*160;
-    offset[i*4+2]=.35+r()*.85;
-    offset[i*4+3]=r()*Math.PI*2;
+  geo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute([-0.07, 0, 0, 0.07, 0, 0, -0.04, 0.55, 0, 0.04, 0.55, 0, 0.03, 1, 0], 3),
+  );
+  geo.setIndex([0, 1, 2, 1, 3, 2, 2, 3, 4]);
+  const offset = new Float32Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    offset[i * 4] = (r() - 0.5) * 150;
+    offset[i * 4 + 1] = 30 - r() * 160;
+    offset[i * 4 + 2] = 0.35 + r() * 0.85;
+    offset[i * 4 + 3] = r() * Math.PI * 2;
   }
-  geo.setAttribute('aBlade',new THREE.InstancedBufferAttribute(offset,4));
-  geo.instanceCount=count;
-  const mesh=new THREE.Mesh(geo,material(s, /* glsl */`
+  geo.setAttribute('aBlade', new THREE.InstancedBufferAttribute(offset, 4));
+  geo.instanceCount = count;
+  const mesh = new THREE.Mesh(
+    geo,
+    material(
+      s,
+      /* glsl */ `
     attribute vec4 aBlade;
     varying vec3 vP;
     varying float vY, vSeed;
@@ -160,7 +198,8 @@ export function makeGrass(s: Shared, count = 44000) {
       vP=p; vY=position.y; vSeed=fract(aBlade.w*5.);
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
     }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vP;
     varying float vY, vSeed;
     void main() {
@@ -170,31 +209,47 @@ export function makeGrass(s: Shared, count = 44000) {
       vec3 tip=mix(vec3(.65,.59,.32),vec3(.56,.63,.38),clamp(uBand,0.,1.));
       gl_FragColor=vec4(earth(mix(base*.65,tip,vY*.7),vP),1.);
     }
-  `,{side:THREE.DoubleSide}));
-  mesh.frustumCulled=false;
+  `,
+      { side: THREE.DoubleSide },
+    ),
+  );
+  mesh.frustumCulled = false;
   return mesh;
 }
 
 /** Small overlapping leaf sprays make porous, irregular crowns instead of solid blobs. */
 export function makeTrees(s: Shared) {
-  const r=random(711);
-  const trunks: number[]=[];
-  const leaves: number[]=[];
-  for (let i=0;i<105;i++) {
-    const z=10-r()*235, x=(i%2 ? 1 : -1)*(18+r()*95), h=3+r()*6;
-    trunks.push(x,z,h,r());
-    for(let j=0;j<180;j++) {
-      const angle=r()*Math.PI*2, vertical=r()*2-1, radius=Math.cbrt(r());
-      const spread=Math.sqrt(1-vertical*vertical)*radius;
-      leaves.push(x+Math.cos(angle)*spread*h*.43,z+Math.sin(angle)*spread*h*.35,h*(.78+vertical*radius*.36),.25+r()*.5);
+  const r = random(711);
+  const trunks: number[] = [];
+  const leaves: number[] = [];
+  for (let i = 0; i < 105; i++) {
+    const z = 10 - r() * 235,
+      x = (i % 2 ? 1 : -1) * (18 + r() * 95),
+      h = 3 + r() * 6;
+    trunks.push(x, z, h, r());
+    for (let j = 0; j < 180; j++) {
+      const angle = r() * Math.PI * 2,
+        vertical = r() * 2 - 1,
+        radius = Math.cbrt(r());
+      const spread = Math.sqrt(1 - vertical * vertical) * radius;
+      leaves.push(
+        x + Math.cos(angle) * spread * h * 0.43,
+        z + Math.sin(angle) * spread * h * 0.35,
+        h * (0.78 + vertical * radius * 0.36),
+        0.25 + r() * 0.5,
+      );
     }
   }
   function mesh(base: THREE.BufferGeometry, values: number[], leaf: boolean) {
-    const geo=new THREE.InstancedBufferGeometry().copy(base as THREE.InstancedBufferGeometry);
+    const geo = new THREE.InstancedBufferGeometry().copy(base as THREE.InstancedBufferGeometry);
     base.dispose();
-    geo.setAttribute('aTree',new THREE.InstancedBufferAttribute(new Float32Array(values),4));
-    geo.instanceCount=values.length/4;
-    const m=new THREE.Mesh(geo,material(s, /* glsl */`
+    geo.setAttribute('aTree', new THREE.InstancedBufferAttribute(new Float32Array(values), 4));
+    geo.instanceCount = values.length / 4;
+    const m = new THREE.Mesh(
+      geo,
+      material(
+        s,
+        /* glsl */ `
       attribute vec4 aTree;
       varying vec3 vP, vN;
       varying float vSeed;
@@ -203,52 +258,80 @@ export function makeTrees(s: Shared) {
         vec3 p=position; vUv=uv;
         float growth=.85+uGrowth*.18;
         vSeed=hash(aTree.xy);
-        ${leaf ? `
+        ${
+          leaf
+            ? `
           p*=aTree.w*growth;
           p.xz=mat2(cos(vSeed*6.28),-sin(vSeed*6.28),sin(vSeed*6.28),cos(vSeed*6.28))*p.xz;
           p.y+=aTree.z*growth;
-        ` : 'p.xz*=.10+aTree.z*.018; p.y=(p.y+.5)*aTree.z*growth;'}
+        `
+            : 'p.xz*=.10+aTree.z*.018; p.y=(p.y+.5)*aTree.z*growth;'
+        }
         p.x+=sin(uTime*.65+aTree.x)*.09*position.y*uWind*uMotion;
         p+=vec3(aTree.x,ground(aTree.xy),aTree.y);
         vP=p; vN=normal;
         gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
       }
-    `, /* glsl */`
+    `,
+        /* glsl */ `
       varying vec3 vP, vN;
       varying float vSeed;
       varying vec2 vUv;
       void main() {
-        ${leaf ? `
+        ${
+          leaf
+            ? `
           vec2 uv=vUv*2.-1.;
           if(dot(uv,uv)>.82+noise(uv*9.)*.18) discard;
           vec3 c=mix(vec3(.13,.22,.11),vec3(.41,.44,.22),vSeed);
           c=mix(c,c*vec3(.76,1.04,.87),clamp(uBand,0.,1.));
           c=mix(c,vec3(.33,.41,.31),max(0.,uBand-1.)*.35);
           c*=.75+.25*noise(vP.xz*3.);
-        ` : 'vec3 c=vec3(.24,.20,.14);'}
+        `
+            : 'vec3 c=vec3(.24,.20,.14);'
+        }
         float light=.74+.26*max(0.,dot(vN,normalize(vec3(-.5,.8,.3))));
         gl_FragColor=vec4(earth(c*light,vP),1.);
       }
-    `,{side:leaf?THREE.DoubleSide:THREE.FrontSide}));
-    m.frustumCulled=false;
+    `,
+        { side: leaf ? THREE.DoubleSide : THREE.FrontSide },
+      ),
+    );
+    m.frustumCulled = false;
     return m;
   }
-  return [mesh(new THREE.CylinderGeometry(.7,1.3,1,7),trunks,false),mesh(new THREE.PlaneGeometry(2,1.8),leaves,true)];
+  return [
+    mesh(new THREE.CylinderGeometry(0.7, 1.3, 1, 7), trunks, false),
+    mesh(new THREE.PlaneGeometry(2, 1.8), leaves, true),
+  ];
 }
 
 /** Swallows and small meadow butterflies: articulated triangles, one draw per species. */
 export function makeLife(s: Shared, butterfly: boolean) {
-  const r=random(butterfly ? 82 : 29);
-  const n=butterfly ? 65 : 24;
-  const geo=new THREE.InstancedBufferGeometry();
-  geo.setAttribute('position',new THREE.Float32BufferAttribute([
-    0,0,.25, -.9,0,-.1, -.35,0,.25, 0,0,.25, .35,0,.25, .9,0,-.1,
-  ],3));
-  const a=new Float32Array(n*4);
-  for(let i=0;i<n;i++) { a[i*4]=(r()-.5)*95; a[i*4+1]=-r()*110; a[i*4+2]=r(); a[i*4+3]=i/n; }
-  geo.setAttribute('aLife',new THREE.InstancedBufferAttribute(a,4));
-  geo.instanceCount=n;
-  const m=new THREE.Mesh(geo,material(s, /* glsl */`
+  const r = random(butterfly ? 82 : 29);
+  const n = butterfly ? 65 : 24;
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [0, 0, 0.25, -0.9, 0, -0.1, -0.35, 0, 0.25, 0, 0, 0.25, 0.35, 0, 0.25, 0.9, 0, -0.1],
+      3,
+    ),
+  );
+  const a = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    a[i * 4] = (r() - 0.5) * 95;
+    a[i * 4 + 1] = -r() * 110;
+    a[i * 4 + 2] = r();
+    a[i * 4 + 3] = i / n;
+  }
+  geo.setAttribute('aLife', new THREE.InstancedBufferAttribute(a, 4));
+  geo.instanceCount = n;
+  const m = new THREE.Mesh(
+    geo,
+    material(
+      s,
+      /* glsl */ `
     attribute vec4 aLife;
     varying vec3 vP;
     varying float vSeed;
@@ -265,68 +348,107 @@ export function makeLife(s: Shared, butterfly: boolean) {
       vP=p; vSeed=aLife.z;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
     }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vP; varying float vSeed;
     void main() { gl_FragColor=vec4(earth(${butterfly ? 'mix(vec3(.81,.62,.3),vec3(.91,.84,.61),vSeed)' : 'vec3(.12,.16,.14)'},vP),1.); }
-  `,{side:THREE.DoubleSide}));
-  m.frustumCulled=false;
+  `,
+      { side: THREE.DoubleSide },
+    ),
+  );
+  m.frustumCulled = false;
   return m;
 }
 
 /** The tree's edges are pale worn paths, its nodes river-stone cairns. */
 export function makePlaces(s: Shared, capacity: number) {
-  const stones=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1,1),material(s, /* glsl */`
+  const stones = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(1, 1),
+    material(
+      s,
+      /* glsl */ `
     varying vec3 vP, vN;
     void main() {
       vec3 p=(instanceMatrix*vec4(position,1.)).xyz;
       p.y+=ground(p.xz)+.12; vP=p; vN=normal;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
     }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vP,vN;
     void main() {
       vec3 c=vec3(.56,.52,.38)*(.72+.28*max(0.,dot(vN,normalize(vec3(-.5,.8,.3)))));
       gl_FragColor=vec4(earth(c,vP),1.);
     }
-  `),capacity*3);
+  `,
+    ),
+    capacity * 3,
+  );
   stones.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  stones.frustumCulled=false; stones.count=0;
-  const pathGeo=new THREE.BufferGeometry();
-  const positions=new Float32Array(capacity*24*6*3);
-  const strengths=new Float32Array(capacity*24*6);
-  pathGeo.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
-  pathGeo.setAttribute('aStrength',new THREE.BufferAttribute(strengths,1).setUsage(THREE.DynamicDrawUsage));
-  const paths=new THREE.Mesh(pathGeo,material(s, /* glsl */`
+  stones.frustumCulled = false;
+  stones.count = 0;
+  const pathGeo = new THREE.BufferGeometry();
+  const positions = new Float32Array(capacity * 24 * 6 * 3);
+  const strengths = new Float32Array(capacity * 24 * 6);
+  pathGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+  pathGeo.setAttribute('aStrength', new THREE.BufferAttribute(strengths, 1).setUsage(THREE.DynamicDrawUsage));
+  const paths = new THREE.Mesh(
+    pathGeo,
+    material(
+      s,
+      /* glsl */ `
     attribute float aStrength; varying vec3 vP; varying float vStrength;
     void main() {
       vec3 p=position; p.y=ground(p.xz)+.035; vP=p; vStrength=aStrength;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
     }
-  `, /* glsl */`
+  `,
+      /* glsl */ `
     varying vec3 vP; varying float vStrength;
     void main() {
       float n=noise(vP.xz*3.);
       vec3 c=mix(vec3(.36,.36,.23),vec3(.73,.64,.39),vStrength)*(.85+n*.15);
       gl_FragColor=vec4(earth(c,vP),1.);
     }
-  `,{side:THREE.DoubleSide}));
-  paths.frustumCulled=false; pathGeo.setDrawRange(0,0);
+  `,
+      { side: THREE.DoubleSide },
+    ),
+  );
+  paths.frustumCulled = false;
+  pathGeo.setDrawRange(0, 0);
   return { stones, paths, positions, strengths };
 }
 
 // CPU counterpart only used for label placement (a handful of points, at 20 Hz).
-function fract(v: number) { return v-Math.floor(v); }
-function groundHash(a: number,b: number) { return fract(Math.sin(a*127.1+b*311.7)*43758.5453); }
-function groundNoise(a: number,b: number) {
-  const i=Math.floor(a),j=Math.floor(b); let f=fract(a),g=fract(b);
-  f=f*f*(3-2*f);g=g*g*(3-2*g);
-  return (groundHash(i,j)*(1-f)+groundHash(i+1,j)*f)*(1-g)+(groundHash(i,j+1)*(1-f)+groundHash(i+1,j+1)*f)*g;
+function fract(v: number) {
+  return v - Math.floor(v);
 }
-function smooth(a: number,b: number,v: number) {const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);}
-export function groundHeight(x: number,z: number,place: number) {
-  const river=Math.sin(z*.037+place*.11)*7+Math.sin(z*.016-place*.06)*9;
-  const d=Math.abs(x-river),w=3.6+13*smooth(-45,32,z);
-  const qx=x*.025+place*.17,qz=z*.025+place*.08;
-  const n=groundNoise(qx,qz)*.65+groundNoise(qx*2.07,qz*2.07)*.25+groundNoise(qx*4.1,qz*4.1)*.1;
-  return -.48+smooth(w-1,w+8,d)*(.65+n*3.2)+n*smooth(14,95,d)*18;
+function groundHash(a: number, b: number) {
+  return fract(Math.sin(a * 127.1 + b * 311.7) * 43758.5453);
+}
+function groundNoise(a: number, b: number) {
+  const i = Math.floor(a),
+    j = Math.floor(b);
+  let f = fract(a),
+    g = fract(b);
+  f = f * f * (3 - 2 * f);
+  g = g * g * (3 - 2 * g);
+  return (
+    (groundHash(i, j) * (1 - f) + groundHash(i + 1, j) * f) * (1 - g) +
+    (groundHash(i, j + 1) * (1 - f) + groundHash(i + 1, j + 1) * f) * g
+  );
+}
+function smooth(a: number, b: number, v: number) {
+  const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+export function groundHeight(x: number, z: number, place: number) {
+  const river = Math.sin(z * 0.037 + place * 0.11) * 7 + Math.sin(z * 0.016 - place * 0.06) * 9;
+  const d = Math.abs(x - river),
+    w = 3.6 + 13 * smooth(-45, 32, z);
+  const qx = x * 0.025 + place * 0.17,
+    qz = z * 0.025 + place * 0.08;
+  const n =
+    groundNoise(qx, qz) * 0.65 + groundNoise(qx * 2.07, qz * 2.07) * 0.25 + groundNoise(qx * 4.1, qz * 4.1) * 0.1;
+  return -0.48 + smooth(w - 1, w + 8, d) * (0.65 + n * 3.2) + n * smooth(14, 95, d) * 18;
 }

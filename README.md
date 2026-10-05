@@ -17,12 +17,12 @@ The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. F
 - **The mixer's MIDI controls**: buttons, encoders, faders and jog wheels, mapped in a TOML file that reloads on save, with LED feedback on the lit buttons. The UI's live MIDI monitor names every control as you touch it.
 - **Readout of the mixer's own MIDI clock BPM.**
 
-## Explore: fly through your library
+## Explore: a living river valley
 
-The main screen is a tunnel through your music.
+The main screen is a living river valley through your music.
 - Every track is analysed in three bands, like the mixer's EQ: **low** (kick, bass, groove), **mid** (harmony, key) and **high** (hats, percussion, air).
-- The tunnel shows the tracks most similar to what's playing, in the band you choose. As the track moves into a breakdown or a drop, the neighbours shift.
-- Aim at a portal, fly into it, and keep going. The walls pulse with the kick, shift colour with the harmony and sparkle with the hats, locked to the mixer's BPM clock.
+- Branching paths show the tracks most similar to what's playing, in the band you choose. As the track moves into a breakdown or a drop, the neighbours shift.
+- Aim at a path, dive into the next grove, and keep going. Music drives the wind; grass grows, wildlife arrives, and daylight shifts over the mix. Four deck waveforms become the river's foreground contours, with aligned beat grids and visible loops.
 - Analysing a 2,300-track library takes about a minute on a desktop CPU; after that it's instant from a cache.
 
 It's played entirely from the mixer:
@@ -31,8 +31,8 @@ It's played entirely from the mixer:
 |---|---|---|
 | Lit buttons 1–4 | load the aimed track onto deck 1–4 | play/pause deck 1–4 |
 | Jog wheel | move through the focused deck: turn slowly for precision, spin to fly (a synced deck moves in whole beats) | shift the focused deck to fix its sync (it keeps the offset) |
-| JOG/SELECT | focus deck 1–4 (the tunnel grows from it); push to start from the search selection | aim between portals; push to reset the focused deck's sync |
-| Buttons | A low, B mid, C high band; E follow the focused deck on/off | M dive into the aimed portal |
+| JOG/SELECT | focus deck 1–4 (the valley grows from it); push to start from the search selection | aim between paths; push to reset the focused deck's sync |
+| Buttons | A low, B mid, C high band; E follow the focused deck on/off | M dive into the aimed path |
 | Encoders 1–4 | push = 8-bar loop on deck 1–4; turn = loop length | skip ±2 s; push = sync |
 | Faders 1–4 | pitch ±8 % | |
 
