@@ -8,13 +8,20 @@
  *                      [--bad-mappings] [--glitches] [--quiet]
  *                      [--view explore|decks] [--band low|mid|high]
  *                      [--idle] [--analysis-seconds 4] [--section-seconds 12]
- *                      [--ticker]
+ *                      [--ticker] [--loop]
  *
  * Starts in the explore view like the real server (--view decks for the deck
  * view); --idle starts with nothing playing, so the explorer has no root.
  * --section-seconds 0 turns off the periodic "section" re-shuffles (steady
  * screenshots). --ticker turns the left jog every few seconds, moving the
  * library selection away from the aim so Explore shows its library ticker.
+ * --loop starts deck 2 playing in an active 8-beat loop.
+ *
+ * Decks 1–3 start with beat sync on (deck 1 the master), so their different
+ * tempos play at one tempo with bars lined up. GET /api/decks/{n}/wave serves
+ * a fake three-band waveform that follows each track's beat grid: a 4/4 kick
+ * in the lows, offbeat hats in the highs, phrase-level swells in the mids and
+ * an 8-bar breakdown every 32 bars.
  */
 import { existsSync, statSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
@@ -22,6 +29,7 @@ import { parseArgs } from 'node:util';
 import type {
   AnalysisMsg,
   Band,
+  BeatGrid,
   BrowserMsg,
   Command,
   DeckLoadedMsg,
@@ -56,6 +64,7 @@ const { values: opts } = parseArgs({
     'analysis-seconds': { type: 'string', default: '4' },
     'section-seconds': { type: 'string', default: '12' },
     ticker: { type: 'boolean', default: false },
+    loop: { type: 'boolean', default: false },
   },
 });
 
@@ -160,6 +169,98 @@ function makePeaks(seed: number): number[] {
   return peaks;
 }
 
+const WAVE_BLOCK_FRAMES = 480;
+const WAVE_BLOCK_S = WAVE_BLOCK_FRAMES / 48_000;
+
+/**
+ * Fake detailed waveform, [low, mid, high] bytes per 10 ms block, following
+ * the beat grid: a 4/4 kick plus a bassline in the lows, hats and shakers in
+ * the highs, chord stabs and slow phrase swells in the mids. A 16-bar intro,
+ * then every 32 bars an 8-bar breakdown (no kick, pads swell, a noise riser
+ * into the drop), and a 16-bar outro. Each track gets its own kick, bass
+ * style, hat type and stab rhythm, so overlaid decks look different.
+ */
+function makeWave(track: Track, grid: BeatGrid | null): Uint8Array {
+  const length = track.duration ?? 0;
+  const blocks = Math.ceil((length * 48_000) / WAVE_BLOCK_FRAMES);
+  const out = new Uint8Array(blocks * 3);
+  const r = mulberry32(hash(`wave${track.id}`));
+  const bpm = grid?.bpm ?? 120;
+  const first = grid?.first_beat ?? 0;
+  const beat = 60 / bpm;
+  const totalBars = Math.floor((length - first) / beat / 4);
+  const c = mulberry32(hash(`mix${track.id}`));
+  const kickDecay = 0.035 + 0.08 * c();
+  const kickLevel = 0.7 + 0.3 * c();
+  const bassStyle = Math.floor(c() * 3); // 0 offbeat sub, 1 rolling 16ths, 2 side-chained sustain
+  const bassLevel = 0.3 + 0.25 * c();
+  const hatDecay = c() < 0.5 ? 0.022 : 0.07; // closed or open hats
+  const hatLevel = 0.45 + 0.45 * c();
+  const shakerLevel = 0.3 * c();
+  const midLevel = 0.55 + 0.4 * c();
+  const swellBars = c() < 0.5 ? 8 : 16;
+  // Chord stabs on a per-track set of 8th-note positions within the bar.
+  const stabs = [0, 1, 2, 3, 4, 5, 6, 7].filter(() => c() < 0.32).map((e) => e / 2);
+  if (!stabs.length) stabs.push(0);
+  const decay = (dt: number, tau: number) => (dt >= 0 ? Math.exp(-dt / tau) : 0);
+  const fade = (t: number) => Math.min(1, t / 0.4, (length - t) / 1.5);
+  for (let i = 0; i < blocks; i++) {
+    const t = (i + 0.5) * WAVE_BLOCK_S;
+    const beats = (t - first) / beat;
+    const bar = Math.floor(beats / 4);
+    const inBar = ((beats % 4) + 4) % 4; // beats into the bar
+    const inBeat = (beats - Math.floor(beats)) * beat; // seconds since the beat
+    const inOff = ((((beats + 0.5) % 1) + 1) % 1) * beat; // seconds since the offbeat
+    const in16 = ((((beats * 4) % 1) + 1) % 1) * (beat / 4);
+    const phraseBar = bar >= 16 ? (bar - 16) % 32 : -1;
+    const intro = bar < 16;
+    const outro = bar >= totalBars - 16;
+    const breakdown = !outro && phraseBar >= 24;
+    const kickOn = beats >= 0 && !breakdown;
+
+    const kick = kickOn ? Math.min(1, inBeat / 0.006) * decay(inBeat, kickDecay) * kickLevel : 0;
+    let bass = 0;
+    if (kickOn && !intro) {
+      if (bassStyle === 0) bass = decay(inOff, 0.11);
+      else if (bassStyle === 1) bass = inBeat < beat / 4 ? 0 : 0.8 * decay(in16, 0.06);
+      else bass = 0.75 * (1 - decay(inBeat, 0.16));
+    }
+    const drone = breakdown ? 0.16 + 0.06 * Math.sin(t * 2.1) : 0.04;
+    const low = Math.min(1, kick + bass * bassLevel + drone + 0.03 * r());
+
+    const swell = 0.5 + 0.5 * Math.sin((2 * Math.PI * (beats / 4)) / swellBars - Math.PI / 2);
+    let stab = 0;
+    for (const at of stabs) stab = Math.max(stab, decay((inBar - at) * beat, 0.08));
+    let mid = intro ? 0.1 + 0.2 * swell * (bar / 16) + 0.15 * stab * (bar / 16) : 0.18 + 0.3 * swell + 0.32 * stab;
+    if (breakdown) mid = 0.35 + 0.5 * ((phraseBar - 24 + inBar / 4) / 8) + 0.08 * Math.sin(t * 5.3);
+    if (outro) mid *= Math.max(0.15, (totalBars - bar) / 16);
+    mid = Math.min(1, mid * midLevel + 0.04 * r());
+
+    const hatsOn = bar >= 8 && !breakdown;
+    const hat = hatsOn ? decay(inOff, hatDecay) * hatLevel : 0;
+    const shaker = hatsOn && !intro ? decay(in16, 0.012) * shakerLevel : 0;
+    const riser = breakdown && phraseBar >= 28 ? ((phraseBar - 28 + inBar / 4) / 4) ** 2 * 0.7 : 0;
+    const high = Math.min(1, hat + shaker + riser * (0.7 + 0.3 * r()) + 0.05 + 0.04 * r());
+
+    const g = beats < 0 ? 0.15 : fade(t);
+    out[i * 3] = Math.round(low * g * 235);
+    out[i * 3 + 1] = Math.round(mid * g * 190);
+    out[i * 3 + 2] = Math.round(high * g * 160);
+  }
+  return out;
+}
+
+const waveCache = new Map<string, Uint8Array>();
+function waveOf(d: MockDeck): Uint8Array | null {
+  if (!d.track || !(d.track.duration ?? 0)) return null;
+  let wave = waveCache.get(d.track.id);
+  if (!wave) {
+    wave = makeWave(d.track, d.grid);
+    waveCache.set(d.track.id, wave);
+  }
+  return wave;
+}
+
 let tracks: Track[] = opts.empty ? [] : makeTracks(Number(opts.tracks));
 const byId = () => new Map(tracks.map((t) => [t.id, t]));
 let index = byId();
@@ -170,6 +271,7 @@ let index = byId();
 type MockDeck = {
   track: Track | null;
   peaks: number[];
+  grid: BeatGrid | null;
   loading: boolean;
   playing: boolean;
   previewing: boolean;
@@ -177,11 +279,16 @@ type MockDeck = {
   rate: number;
   cue: number;
   trim: number;
+  sync: boolean;
+  loop: { active: boolean; beats: number; start: number | null; end: number | null };
+  /** Seconds of `jog` still to glide through. */
+  jog: number;
 };
 
 const emptyDeck = (): MockDeck => ({
   track: null,
   peaks: [],
+  grid: null,
   loading: false,
   playing: false,
   previewing: false,
@@ -189,21 +296,74 @@ const emptyDeck = (): MockDeck => ({
   rate: 1,
   cue: 0,
   trim: 1,
+  sync: false,
+  loop: { active: false, beats: 8, start: null, end: null },
+  jog: 0,
 });
 
 const decks: MockDeck[] = Array.from({ length: DECKS }, emptyDeck);
 let focused = 1;
 
 function put(deck: number, track: Track, patch: Partial<MockDeck> = {}) {
-  Object.assign(decks[deck], emptyDeck(), { track, peaks: makePeaks(hash(track.id)) }, patch);
+  // A reload keeps the deck's sync setting, like the real decks.
+  const sync = decks[deck].sync;
+  Object.assign(decks[deck], emptyDeck(), { track, peaks: makePeaks(hash(track.id)), grid: gridOf(track), sync }, patch);
+}
+
+/** Beat grid from the tags; tracks without a tempo tag have none. */
+function gridOf(track: Track): BeatGrid | null {
+  if (track.bpm == null) return null;
+  const first = 0.1 + 0.4 * mulberry32(hash(`grid${track.id}`))();
+  return { bpm: track.bpm, first_beat: Math.round(first * 1000) / 1000 };
 }
 
 if (tracks.length > 20) {
-  put(0, tracks[3], { playing: !opts.idle, position: 62.4, cue: 0.5, rate: 1.0 });
-  put(1, tracks[10], { position: 16.2, cue: 16.2, rate: 1.012 });
-  const t2 = tracks[17];
-  put(2, t2, { playing: !opts.idle, position: (t2.duration ?? 240) - 27, cue: 31.9, rate: 0.985 });
+  const withGrid = tracks.filter((t) => t.bpm != null && (t.duration ?? 0) > 120);
+  put(0, withGrid[3], { playing: !opts.idle, position: 62.4, cue: 0.5, rate: 1.0, sync: true });
+  put(1, withGrid[10], { playing: opts.loop && !opts.idle, position: 96.2, cue: 16.2, rate: 1.012, sync: true });
+  const t2 = withGrid[17];
+  put(2, t2, { playing: !opts.idle, position: (t2.duration ?? 240) - 58, cue: 31.9, rate: 0.985, sync: true });
 }
+
+/** The deck synced decks follow: the first playing synced deck with a grid, else the first synced one. */
+function masterDeck(): number | null {
+  const synced = decks.map((d, i) => (d.sync && d.grid && d.track ? i : -1)).filter((i) => i >= 0);
+  return synced.find((i) => decks[i].playing) ?? synced[0] ?? null;
+}
+
+/** Tempo of the master deck, or null. */
+function masterTempo(): number | null {
+  const m = masterDeck();
+  const d = m == null ? null : decks[m];
+  return d?.grid ? d.grid.bpm * d.rate : null;
+}
+
+/** Bars elapsed on a deck (fractional), by its grid. */
+function barsAt(d: MockDeck): number {
+  return d.grid ? ((d.position - d.grid.first_beat) * d.grid.bpm) / 60 / 4 : 0;
+}
+
+/** Sync a deck to the master: match its tempo and line its bars up with the master's. */
+function align(deck: number) {
+  const d = decks[deck];
+  const m = masterDeck();
+  if (!d.sync || !d.grid || m == null || m === deck) return;
+  const tempo = masterTempo();
+  if (tempo) d.rate = Math.min(2, Math.max(0.5, tempo / d.grid.bpm));
+  const diff = barsAt(decks[m]) - barsAt(d);
+  const shift = (diff - Math.round(diff)) * 4 * (60 / d.grid.bpm);
+  d.position = Math.min(d.track?.duration ?? 0, Math.max(0, d.position + shift));
+}
+
+function loopAt(d: MockDeck, position: number) {
+  if (!d.grid) return;
+  const beat = 60 / d.grid.bpm;
+  const start = d.grid.first_beat + Math.max(0, Math.round((position - d.grid.first_beat) / beat)) * beat;
+  d.loop = { active: true, beats: d.loop.beats, start, end: start + d.loop.beats * beat };
+}
+
+for (let i = 0; i < DECKS; i++) align(i);
+if (opts.loop && decks[1].track) loopAt(decks[1], decks[1].position);
 
 const allIds = () => tracks.map((t) => t.id);
 let browser: BrowserMsg = { type: 'browser', query: '', ids: allIds(), selected: tracks[5]?.id ?? tracks[0]?.id ?? null };
@@ -252,7 +412,7 @@ const device: DeviceStatus = {
 function stateMsg(): StateMsg {
   return {
     type: 'state',
-    decks: decks.map((d) => ({
+    decks: decks.map((d, i) => ({
       // Like the real server: the current track stays (and keeps playing)
       // until the new one has decoded.
       track_id: d.track?.id ?? null,
@@ -263,6 +423,10 @@ function stateMsg(): StateMsg {
       rate: d.rate,
       cue: d.cue,
       trim: d.trim,
+      sync: d.sync,
+      master: i === masterDeck(),
+      bpm: d.grid ? Math.round(d.grid.bpm * d.rate * 100) / 100 : null,
+      loop: { ...d.loop },
     })),
     focused,
     device,
@@ -274,7 +438,16 @@ function stateMsg(): StateMsg {
 function deckLoaded(deck: number): DeckLoadedMsg | null {
   const d = decks[deck];
   if (!d.track) return null;
-  return { type: 'deck_loaded', deck, track: d.track, length: d.track.duration ?? 0, peaks: d.peaks };
+  const length = d.track.duration ?? 0;
+  return {
+    type: 'deck_loaded',
+    deck,
+    track: d.track,
+    length,
+    peaks: d.peaks,
+    grid: d.grid,
+    wave: length > 0 ? { block_frames: WAVE_BLOCK_FRAMES, blocks: Math.ceil((length * 48_000) / WAVE_BLOCK_FRAMES) } : null,
+  };
 }
 
 /** The default config/mappings.toml, as GET /api/mappings lists it. */
@@ -357,8 +530,10 @@ function handle(cmd: Command): string | null {
     case 'play_pause': {
       const d = decks[cmd.deck];
       if (!d.track) return `Deck ${cmd.deck + 1} is empty`;
+      const was = d.playing;
       d.playing = cmd.cmd === 'play' ? true : cmd.cmd === 'pause' ? false : !d.playing;
       d.previewing = false;
+      if (d.playing && !was) align(cmd.deck);
       return null;
     }
     case 'cue': {
@@ -396,6 +571,39 @@ function handle(cmd: Command): string | null {
     case 'rate':
       decks[cmd.deck].rate = Math.min(2, Math.max(0.5, cmd.rate));
       return null;
+    case 'jog': {
+      const d = decks[cmd.deck];
+      if (!d.track) return null;
+      d.jog += (Number(cmd.ms) || 0) / 1000;
+      return null;
+    }
+    case 'sync': {
+      const d = decks[cmd.deck];
+      d.sync = cmd.on ?? !d.sync;
+      align(cmd.deck);
+      return null;
+    }
+    case 'loop': {
+      const d = decks[cmd.deck];
+      if (!d.track) return `Deck ${cmd.deck + 1} is empty`;
+      if (d.loop.active) {
+        d.loop = { ...d.loop, active: false, start: null, end: null };
+        return null;
+      }
+      if (!d.grid) return `Deck ${cmd.deck + 1} has no beat grid`;
+      loopAt(d, d.position);
+      return null;
+    }
+    case 'loop_length': {
+      const d = decks[cmd.deck];
+      const steps = Math.trunc(Number(cmd.steps) || 0);
+      d.loop.beats = Math.min(32, Math.max(1 / 8, d.loop.beats * 2 ** steps));
+      if (d.loop.active && d.loop.start != null && d.grid) {
+        d.loop.end = d.loop.start + d.loop.beats * (60 / d.grid.bpm);
+        if (d.position >= d.loop.end) d.position = d.loop.start + ((d.position - d.loop.start) % (d.loop.end - d.loop.start));
+      }
+      return null;
+    }
     case 'trim':
       decks[cmd.deck].trim = Math.max(0, cmd.gain);
       return null;
@@ -920,6 +1128,14 @@ const server = Bun.serve<undefined>({
           return json(stateMsg());
         case 'GET /api/decks':
           return json(decks.map((_, i) => deckLoaded(i)).filter(Boolean));
+        default: {
+          const m = /^GET \/api\/decks\/(\d+)\/wave$/.exec(route);
+          const d = m ? decks[Number(m[1])] : undefined;
+          if (!m) break;
+          const wave = d ? waveOf(d) : null;
+          if (!wave) return json({ error: 'deck is empty' }, 404);
+          return new Response(wave, { headers: { 'content-type': 'application/octet-stream' } });
+        }
         case 'GET /api/midi/recent':
           return json(midiLog);
         case 'GET /api/controls':
@@ -1022,15 +1238,30 @@ setInterval(() => {
   const t = performance.now();
   const dt = (t - last) / 1000;
   last = t;
-  for (const d of decks) {
-    if (!d.playing || !d.track) continue;
+  const tempo = masterTempo();
+  const master = masterDeck();
+  decks.forEach((d, i) => {
+    if (!d.track) return;
     const length = d.track.duration ?? 0;
+    // Synced decks follow the master's tempo.
+    if (d.sync && d.grid && tempo && i !== master) d.rate = Math.min(2, Math.max(0.5, tempo / d.grid.bpm));
+    // Jog: glide through what's left (a brief speed bend while playing).
+    if (d.jog !== 0) {
+      const step = Math.abs(d.jog) < 0.0005 ? d.jog : d.jog * (1 - Math.exp(-dt / 0.08));
+      d.jog -= step;
+      d.position = Math.min(length, Math.max(0, d.position + step));
+    }
+    if (!d.playing) return;
     d.position += dt * d.rate;
+    const { active, start, end } = d.loop;
+    if (active && start != null && end != null && end > start && d.position >= end) {
+      d.position = start + ((d.position - start) % (end - start));
+    }
     if (d.position >= length) {
       d.position = length;
       d.playing = false;
     }
-  }
+  });
   if (device.state === 'running') device.packets_out += Math.round(dt * 600);
   if (device.state === 'running') device.max_gap_us = 980 + Math.round(rnd() * 120);
   broadcast(stateMsg());

@@ -169,6 +169,8 @@ export class ExploreEngine {
   #time = 0;
   #width = 1;
   #height = 1;
+  /** CSS px the tunnel's vanishing point sits above the canvas centre. */
+  #shiftY = 0;
   #dpr = 1;
   #maxDpr = 2;
   #reduced: boolean;
@@ -312,6 +314,18 @@ export class ExploreEngine {
   setReducedMotion(reduced: boolean): void {
     this.#reduced = reduced;
     this.#bend.amount = reduced ? 0.5 : 1;
+  }
+
+  /**
+   * Raise the tunnel's vanishing point by `px` CSS px, to centre it in the
+   * space the bottom HUD leaves. The canvas still fills the view (the tunnel
+   * shows through the HUD); only the projection moves.
+   */
+  setViewShift(px: number): void {
+    const shift = Math.max(0, Math.round(px));
+    if (shift === this.#shiftY) return;
+    this.#shiftY = shift;
+    this.#applySize();
   }
 
   dispose(): void {
@@ -863,7 +877,7 @@ export class ExploreEngine {
     let oy = 1;
     if (l.kind === 'child') {
       const dx = p.sx - this.#width / 2;
-      const dy = p.sy - this.#height / 2;
+      const dy = p.sy - (this.#height / 2 - this.#shiftY);
       const len = Math.hypot(dx, dy) || 1;
       ox = dx / len;
       oy = dy / len;
@@ -1011,6 +1025,8 @@ export class ExploreEngine {
     this.#composer.setPixelRatio(this.#dpr);
     this.#composer.setSize(this.#width, this.#height);
     this.#camera.aspect = this.#width / this.#height;
+    if (this.#shiftY) this.#camera.setViewOffset(this.#width, this.#height, 0, this.#shiftY, this.#width, this.#height);
+    else this.#camera.clearViewOffset();
     this.#camera.updateProjectionMatrix();
   }
 

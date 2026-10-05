@@ -1,6 +1,7 @@
 import {
   DECK_COUNT,
   type AnalysisMsg,
+  type BeatGrid,
   type BrowserMsg,
   type Command,
   type DeckLoadedMsg,
@@ -13,12 +14,14 @@ import {
   type StateMsg,
   type Track,
   type View,
+  type WaveInfo,
 } from './protocol';
 import { applyViz } from './viz';
+import { waves } from './waves';
 
 export type WsStatus = 'connecting' | 'open' | 'closed';
 export type LibraryStatus = 'loading' | 'ready' | 'error';
-export type DeckInfo = { track: Track; length: number; peaks: number[] };
+export type DeckInfo = { track: Track; length: number; peaks: number[]; grid: BeatGrid | null; wave: WaveInfo | null };
 export type MidiEntry = MidiMsg & { key: number };
 export type Toast = { id: number; kind: 'error' | 'info'; message: string; count: number };
 
@@ -227,6 +230,8 @@ class Client {
   #handle(msg: ServerMsg): void {
     switch (msg.type) {
       case 'state':
+        // The waveform strip dead-reckons from the arrival time, so note it now.
+        waves.noteState(msg, performance.now());
         // Coalesce: keep only the newest tick and apply it on the next frame.
         this.#pendingState = msg;
         if (!this.#stateFrame) {
@@ -242,9 +247,11 @@ class Client {
         break;
       case 'deck_loaded':
         this.#setDeck(msg.deck, deckInfoFrom(msg));
+        waves.load(msg.deck, msg.track.id, msg.wave);
         break;
       case 'deck_ejected':
         this.#setDeck(msg.deck, null);
+        waves.drop(msg.deck);
         break;
       case 'midi':
         this.midi = [{ ...msg, key: ++this.#midiSeq }, ...this.midi].slice(0, MIDI_KEEP);
@@ -324,7 +331,7 @@ class Client {
 }
 
 function deckInfoFrom(msg: DeckLoadedMsg): DeckInfo {
-  return { track: msg.track, length: msg.length, peaks: msg.peaks };
+  return { track: msg.track, length: msg.length, peaks: msg.peaks, grid: msg.grid ?? null, wave: msg.wave ?? null };
 }
 
 function errorText(err: unknown): string {

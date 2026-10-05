@@ -38,8 +38,23 @@ export type DeckState = {
   /** Playing tempo (beat-grid tempo × rate); null without a grid. */
   bpm?: number | null;
   /** Loop state; `beats` is the length (the next loop's when not active). */
-  loop?: { active: boolean; beats: number };
+  loop?: LoopState;
 };
+
+export type LoopState = {
+  active: boolean;
+  /** Loop length in beats (the next loop's when not active). */
+  beats: number;
+  /** Loop region in seconds of track time; null when no loop is set. */
+  start?: number | null;
+  end?: number | null;
+};
+
+/** Beat grid: tempo and the first beat, in seconds of track time. */
+export type BeatGrid = { bpm: number; first_beat: number };
+
+/** What `GET /api/decks/{n}/wave` returns: `blocks` × [low, mid, high] bytes. */
+export type WaveInfo = { block_frames: number; blocks: number };
 
 export type DeviceStateName = 'connecting' | 'running' | 'stalled' | 'missing' | 'error';
 
@@ -90,6 +105,10 @@ export type DeckLoadedMsg = {
   length: number;
   /** 1024 values 0..255. */
   peaks: number[];
+  /** Null when the track has no beat grid. */
+  grid: BeatGrid | null;
+  /** Detailed three-band waveform; absent from servers that predate it. */
+  wave: WaveInfo | null;
 };
 
 export type DeckEjectedMsg = { type: 'deck_ejected'; deck: number };
@@ -251,6 +270,8 @@ export type Command =
   | { cmd: 'sync'; deck: number; on?: boolean }
   | { cmd: 'loop'; deck: number }
   | { cmd: 'loop_length'; deck: number; steps: number }
+  /** Smooth nudge in ± ms of track time: playing = brief speed bend, paused = glide. */
+  | { cmd: 'jog'; deck: number; ms: number }
   /** 1-3 raw bytes to the mixer (LED tests). */
   | { cmd: 'midi_out'; bytes: number[] }
   | { cmd: 'view'; view: View }

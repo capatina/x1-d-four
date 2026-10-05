@@ -11,6 +11,7 @@
   import type { EngineStats, ExploreEngine } from './engine';
   import LibraryTicker from './LibraryTicker.svelte';
   import SearchPanel from './SearchPanel.svelte';
+  import WaveStrip from './WaveStrip.svelte';
   import { search } from '../lib/search.svelte';
   import Minimap from './Minimap.svelte';
   import { BAND_PALETTE, bandPalette } from './palette';
@@ -23,9 +24,15 @@
   let bottomH = $state(0);
   let failed = $state<string | null>(null);
   let stats = $state.raw<EngineStats | null>(null);
+  let waveMs = $state(0);
   const showStats = new URLSearchParams(location.search).has('stats');
-  /** Height of the top bar (brand, chips, "now at"), and the footer's distance from the bottom edge. */
-  const TOP_BAR = 76;
+  /**
+   * The tunnel is centred between this top inset and the bottom HUD. Less than
+   * the top bar's height: the bar hugs the left edge, the tunnel's top label
+   * sits in the middle.
+   */
+  const TOP_INSET = 40;
+  /** The footer's distance from the bottom edge (.bottom). */
   const BOTTOM_GAP = 14;
 
   const ex = $derived(client.explore);
@@ -137,7 +144,7 @@
   // Centre the tunnel in the space between the top bar and the bottom HUD
   // (waveforms, legend, decks), so the aimed label clears the waveforms.
   $effect(() => {
-    engine?.setViewShift(bottomH > 0 ? (bottomH + BOTTOM_GAP - TOP_BAR) / 2 : 0);
+    engine?.setViewShift(bottomH > 0 ? (bottomH + BOTTOM_GAP - TOP_INSET) / 2 : 0);
   });
 
   function setBand(b: Band) {
@@ -240,7 +247,7 @@
       <div class="stats">
         {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr}{stats.bloom
           ? ' · bloom'
-          : ''}
+          : ''} · wave {waveMs.toFixed(2)} ms
       </div>
     {/if}
   </aside>
@@ -298,6 +305,7 @@
 
   <!-- Bottom: what the mixer does here, then the decks -->
   <footer class="bottom" bind:clientHeight={bottomH}>
+    <WaveStrip onStats={showStats ? (ms) => (waveMs = ms) : undefined} />
     <MixerLegend slots={EXPLORE_LEGEND} view="explore" tone="overlay" />
     <DeckHud rootDeck={ex?.root_deck ?? null} />
   </footer>

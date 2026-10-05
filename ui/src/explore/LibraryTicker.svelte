@@ -134,8 +134,9 @@
 <style>
   .wrap {
     position: absolute;
-    top: 0;
-    bottom: 0;
+    /* Centred between the top bar and the waveforms, legend and decks. */
+    top: 84px;
+    bottom: calc(var(--explore-bottom, 0px) + 24px);
     left: 16px;
     display: flex;
     align-items: center;
