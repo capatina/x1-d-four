@@ -30,7 +30,7 @@ type Track = {
 
 ## Server → client
 
-**`state`** is sent about 30 times a second:
+**`state`** is sent 60 times a second, and about 2 ms after every deck command (so a jog, play or loop shows at once):
 ```ts
 {
   type: "state",
@@ -197,7 +197,7 @@ The **aimed** child of `current` is also the library selection, so every "load s
 
 ## Waveforms (the overlaid deck strip)
 
-When a track loads, the server computes a detailed three-band waveform. There is one block per 480 frames (10 ms at 48 kHz), holding the low/mid/high RMS levels, each 0..255. The splits are 250 Hz and 3 kHz.
+When a track loads, the server computes a detailed three-band waveform. There is one block per 480 frames (10 ms at 48 kHz), holding the low/mid/high peak levels, each linear 0..255 (255 = full scale). The bands are split at 250 Hz and 3 kHz by 4th-order Linkwitz-Riley filters, so kicks land in low and hats in high. Levels are not normalised: scale the whole track by one factor so breakdowns stay quieter than drops.
 
 **`deck_loaded`** gains:
 ```ts
@@ -212,7 +212,7 @@ When a track loads, the server computes a detailed three-band waveform. There is
   loop: { active: boolean, beats: number, start: number | null, end: number | null }, // seconds
 ```
 
-To draw a frame at 60 fps between the 30 Hz `state` messages, advance a playing deck's position by `rate × elapsed seconds`, and resync whenever a `state` message arrives. A deck's frame at track time `p` is drawn at `(p − position) / rate` seconds from now. Because of that, decks synced to the same tempo show their beats lined up.
+To draw a frame between `state` messages, advance a playing deck's position by `rate × elapsed seconds`, and resync whenever a `state` message arrives. A deck's frame at track time `p` is drawn at `(p − position) / rate` seconds from now. Because of that, decks synced to the same tempo show their beats lined up.
 
 ### Client → server
 ```ts

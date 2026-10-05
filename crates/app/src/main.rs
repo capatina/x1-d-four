@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use axum::serve::ListenerExt;
 use clap::{Parser, Subcommand};
 use notify::{RecursiveMode, Watcher};
 use ploytec::{FRAMES_PER_PACKET, Frame, Renderer, StreamConfig, StreamStats, Xone};
@@ -141,13 +142,13 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
         std::thread::Builder::new().name("x1d4-viz".into()).spawn(move || viz::run(app, viz_feed, stop))?;
     }
 
-    // Event pump: MIDI from the mixer -> mappings. Polls every millisecond.
+    // Event pump: MIDI from the mixer -> mappings. Polls every 250 µs.
     {
         let (app, stop) = (app.clone(), stop.clone());
         std::thread::Builder::new().name("x1-d-four-events".into()).spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 if app.pump_events() == 0 {
-                    std::thread::sleep(Duration::from_millis(1));
+                    std::thread::sleep(Duration::from_micros(250));
                 }
             }
         })?;
@@ -179,9 +180,16 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
         {
             let app = app.clone();
             tokio::spawn(async move {
-                let mut tick = tokio::time::interval(Duration::from_millis(33));
+                let mut tick = tokio::time::interval(Duration::from_micros(16_667));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
-                    tick.tick().await;
+                    tokio::select! {
+                        _ = tick.tick() => {}
+                        _ = app.state_kick.notified() => {
+                            // The audio thread applies commands on its next packet (every 1.7 ms).
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                    }
                     app.tick();
                 }
             });
@@ -206,6 +214,10 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 stop.store(true, Ordering::Relaxed);
             }
         };
+        // No Nagle: state and viz are a stream of small messages that must leave at once.
+        let listener = listener.tap_io(|tcp| {
+            let _ = tcp.set_nodelay(true);
+        });
         let serve = axum::serve(listener, server::router(app.clone())).with_graceful_shutdown(signalled);
         let deadline = {
             let stop = stop.clone();

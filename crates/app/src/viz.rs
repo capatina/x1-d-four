@@ -1,4 +1,4 @@
-//! The 60 Hz feed for the Explore view: a spectrum of what the decks send, band
+//! The 120 Hz feed for the Explore view: a spectrum of what the decks send, band
 //! levels, kick onsets and the beat phase from the mixer's MIDI clock. Only does
 //! work while someone is looking at the tunnel.
 
@@ -14,7 +14,7 @@ use crate::app::App;
 
 const N: usize = 2048;
 const BINS: usize = 64;
-const FRAME: Duration = Duration::from_micros(16_667);
+const FRAME: Duration = Duration::from_micros(8_333);
 
 /// RMS of a music signal sits well below 1; this maps typical levels onto 0..1.
 fn level(rms: f32) -> f32 {

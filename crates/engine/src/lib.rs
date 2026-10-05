@@ -285,14 +285,25 @@ impl Rt {
                 }
             }
             Command::Shift { deck, frames } => {
+                let master = self.sync.master;
+                let following = |n: usize, d: &Deck| d.sync && d.playing && d.grid().is_some() && master.is_some_and(|m| m != n);
+                let followers: Vec<usize> = (0..DECKS).filter(|&n| following(n, &self.decks[n])).collect();
                 let d = &mut self.decks[deck];
-                let following = d.sync && d.playing && self.sync.master.is_some_and(|m| m != deck);
                 match d.grid() {
                     // A synced deck keeps the shift: move where it sits against the
                     // master's beat and let the phase lock glide it there.
-                    Some(g) if following => {
+                    Some(g) if following(deck, d) => {
                         d.phase_offset += frames / g.beat_frames();
                         self.sync.shift_until[deck] = self.sync.packets + 60;
+                    }
+                    // The master sets the beat the others follow, so moving it would drag
+                    // them along: move every deck following it the other way instead.
+                    Some(g) if master == Some(deck) && d.playing && !followers.is_empty() => {
+                        let beats = frames / g.beat_frames();
+                        for n in followers {
+                            self.decks[n].phase_offset -= beats;
+                            self.sync.shift_until[n] = self.sync.packets + 60;
+                        }
                     }
                     _ => d.shift_pending += frames,
                 }
@@ -325,7 +336,7 @@ impl Rt {
 
     fn publish(&self) {
         for (deck, state) in self.decks.iter().zip(&self.shared.decks) {
-            store(&state.position, deck.position);
+            store(&state.position, deck.heading());
             store(&state.length, deck.len());
             store(&state.rate, deck.rate);
             store(&state.cue, deck.cue);
@@ -371,6 +382,7 @@ impl Rt {
         self.decks[m].rate = self.decks[m].base_rate;
         let master_bpm = mg.bpm * self.decks[m].rate;
         let master_phase = mg.phase_at(self.decks[m].position);
+        let master_looping = self.decks[m].looping.is_some();
         for n in 0..DECKS {
             let d = &mut self.decks[n];
             if n == m || !d.sync {
@@ -378,14 +390,20 @@ impl Rt {
             }
             let Some(g) = d.grid() else { continue };
             let target = master_bpm / g.bpm;
-            if !d.playing {
+            // A loop moves the beat on purpose (a half-beat loop shifts it every pass), so
+            // while the master or this deck loops, keep the tempo and leave the phase be.
+            if !d.playing || master_looping || d.looping.is_some() {
                 d.rate = target;
                 continue;
             }
             let err = (master_phase + d.phase_offset - g.phase_at(d.position) + 0.5).rem_euclid(1.0) - 0.5;
             if s.packets < s.shift_until[n] {
-                // Being shifted by hand: glide there quickly (up to 8 %), no jumps.
+                // Being shifted by hand: glide there quickly (up to 8 %) and keep gliding
+                // until it lands, never jump.
                 d.rate = target * (1.0 + (4.0 * err).clamp(-0.08, 0.08));
+                if err.abs() > 0.005 {
+                    s.shift_until[n] = s.shift_until[n].max(s.packets + 2);
+                }
             } else if err.abs() > SNAP_BEATS && s.packets >= s.snap_hold[n] {
                 // Jump onto the beat; the fade-out/in hides it. Both decks already run
                 // at the same tempo, so the phase holds while the fade plays out.
@@ -726,5 +744,69 @@ mod tests {
             sent.extend(rt.midi_out());
         }
         assert_eq!(sent, vec![0x9F, 38, 127]);
+    }
+
+    /// Two synced decks playing in phase: deck 1 (index 0) is the master.
+    fn two_synced(bpm_b: f64) -> (Control, Rt, Grid, Grid) {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        let (ga, gb) = (Grid { bpm: 125.0, first_beat: 1_000.0 }, Grid { bpm: bpm_b, first_beat: 7_000.0 });
+        control.send(Command::Load { deck: 0, track: Some(grid_track(ga.bpm, ga.first_beat)) }).ok();
+        control.send(Command::Load { deck: 1, track: Some(grid_track(gb.bpm, gb.first_beat)) }).ok();
+        control.send(Command::Play { deck: 0 }).ok();
+        for _ in 0..100 {
+            rt.render(&mut frames);
+        }
+        control.send(Command::Play { deck: 1 }).ok();
+        for _ in 0..1200 {
+            rt.render(&mut frames);
+        }
+        (control, rt, ga, gb)
+    }
+
+    #[test]
+    fn a_half_beat_loop_traps_only_its_own_deck() {
+        for looper in [0, 1] {
+            let (mut control, mut rt, _, _) = two_synced(128.0);
+            let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+            control.send(Command::LoopLength { deck: looper, steps: -6 }).ok();
+            control.send(Command::Loop { deck: looper }).ok();
+            rt.render(&mut frames);
+            let range = control.shared.deck(looper).loop_range.unwrap();
+            let other = 1 - looper;
+            let mut last = control.shared.deck(other).position;
+            for _ in 0..3000 {
+                rt.render(&mut frames);
+                let p = control.shared.deck(other).position;
+                assert!(p > last, "deck {} pulled back by deck {looper}'s loop", other + 1);
+                last = p;
+                let lp = control.shared.deck(looper).position;
+                assert!(lp >= range.0 - 1.0 && lp < range.1 + 1.0, "the loop holds: {lp} in {range:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn shifting_the_master_moves_the_others_instead() {
+        let (mut control, mut rt, ga, gb) = two_synced(124.0);
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        assert!(control.shared.deck(0).master);
+        assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01);
+        // A fast turn: a fifth of a beat in big ticks, then let it settle.
+        for _ in 0..4 {
+            control.send(Command::Shift { deck: 0, frames: ga.beat_frames() / 20.0 }).ok();
+            for _ in 0..24 {
+                rt.render(&mut frames);
+            }
+        }
+        let mut was = control.shared.deck(1).position;
+        for _ in 0..1500 {
+            rt.render(&mut frames);
+            let p = control.shared.deck(1).position;
+            assert!(p - was < 2.0 * FRAMES_PER_PACKET as f64, "glides, no jump forward");
+            was = p;
+        }
+        let err = phase_error(&control, 0, 1, ga, gb);
+        assert!((err - 0.2).abs() < 0.01, "deck 1 now a fifth of a beat ahead of deck 2: {err}");
     }
 }

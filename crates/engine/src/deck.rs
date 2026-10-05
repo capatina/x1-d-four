@@ -116,6 +116,12 @@ impl Deck {
         }
     }
 
+    /// Where the deck is, or where it's jumping to while a jump fades out:
+    /// what the screen should show.
+    pub fn heading(&self) -> f64 {
+        self.pending_seek.unwrap_or(self.position)
+    }
+
     pub fn loop_beats(&self) -> f64 {
         LOOP_BEATS[self.loop_len]
     }

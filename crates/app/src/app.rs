@@ -148,6 +148,8 @@ pub struct App {
     pub out_urbs: usize,
     pub runtime: tokio::runtime::Handle,
     pub(crate) explore: crate::exploring::ExploreState,
+    /// Wakes the state loop early after a deck command, so the screen follows at once.
+    pub state_kick: tokio::sync::Notify,
 }
 
 impl App {
@@ -189,6 +191,7 @@ impl App {
             out_urbs,
             runtime,
             explore: Default::default(),
+            state_kick: tokio::sync::Notify::new(),
         });
         app.reload_config();
         // The tunnel is the main view; the decks are one button away.
@@ -201,6 +204,9 @@ impl App {
     }
 
     fn send(&self, cmd: Command) {
+        if !matches!(cmd, Command::MidiOut { .. }) {
+            self.state_kick.notify_one();
+        }
         if self.control.lock().unwrap().send(cmd).is_err() {
             tracing::warn!("engine command queue full");
         }
@@ -785,7 +791,7 @@ impl App {
         })
     }
 
-    /// Runs ~30 times a second: state broadcast and LED sync.
+    /// Runs 60 times a second, and just after every deck command: state broadcast and LED sync.
     pub fn tick(&self) {
         self.sync_leds();
         self.explore_crossfader_settle();
