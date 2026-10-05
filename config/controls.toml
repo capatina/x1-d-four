@@ -1,0 +1,468 @@
+# Xone:4D MIDI controls -> names used in mappings.toml.
+#
+# Source: Allen & Heath Xone:4D User Guide AP7265 iss. 3, pp. 38-41 ("Map 2",
+# the Ableton default, chosen in the mixer's power-on setup). The mixer sends on
+# `base_channel`; the shift layer sends the same messages one channel lower and
+# those resolve to the same names prefixed with "shift.".
+#
+# kind: button (note on/off), absolute (CC 0-127), relative (CC two's complement:
+#       1 = +1, 127 = -1). led = true marks red rings the host can toggle.
+# Jog-switch directions are read off the guide's diagram and still unconfirmed.
+
+base_channel = 16
+
+# ---- left pod ----
+
+[[control]]
+name = "left.encoder1"
+cc = 32
+kind = "relative"
+
+[[control]]
+name = "left.encoder1.push"
+note = 28
+
+[[control]]
+name = "left.encoder2"
+cc = 33
+kind = "relative"
+
+[[control]]
+name = "left.encoder2.push"
+note = 14
+
+[[control]]
+name = "left.encoder3"
+cc = 34
+kind = "relative"
+
+[[control]]
+name = "left.encoder3.push"
+note = 16
+
+[[control]]
+name = "left.encoder4"
+cc = 35
+kind = "relative"
+
+[[control]]
+name = "left.encoder4.push"
+note = 26
+
+[[control]]
+name = "left.upper1"
+cc = 9
+
+[[control]]
+name = "left.upper2"
+cc = 11
+
+[[control]]
+name = "left.upper3"
+cc = 13
+
+[[control]]
+name = "left.upper4"
+cc = 15
+
+[[control]]
+name = "left.lower1"
+cc = 8
+
+[[control]]
+name = "left.lower2"
+cc = 10
+
+[[control]]
+name = "left.lower3"
+cc = 12
+
+[[control]]
+name = "left.lower4"
+cc = 14
+
+[[control]]
+name = "left.fader1"
+cc = 19
+
+[[control]]
+name = "left.fader2"
+cc = 18
+
+[[control]]
+name = "left.fader3"
+cc = 17
+
+[[control]]
+name = "left.fader4"
+cc = 16
+
+[[control]]
+name = "left.button.A"
+note = 29
+
+[[control]]
+name = "left.button.B"
+note = 15
+
+[[control]]
+name = "left.button.C"
+note = 17
+
+[[control]]
+name = "left.button.D"
+note = 27
+
+[[control]]
+name = "left.button.E"
+note = 36
+
+[[control]]
+name = "left.button.F"
+note = 21
+
+[[control]]
+name = "left.button.G"
+note = 18
+
+[[control]]
+name = "left.button.H"
+note = 32
+
+[[control]]
+name = "left.button.I"
+note = 37
+
+[[control]]
+name = "left.button.J"
+note = 22
+
+[[control]]
+name = "left.button.K"
+note = 19
+
+[[control]]
+name = "left.button.L"
+note = 33
+
+[[control]]
+name = "left.browse"
+cc = 36
+kind = "relative"
+
+[[control]]
+name = "left.browse.push"
+note = 24
+
+[[control]]
+name = "left.jog"
+cc = 37
+kind = "relative"
+
+[[control]]
+name = "left.jog.up"
+note = 10
+
+[[control]]
+name = "left.jog.left"
+note = 11
+
+[[control]]
+name = "left.jog.right"
+note = 9
+
+[[control]]
+name = "left.jog.down"
+note = 13
+
+[[control]]
+name = "left.lit1"
+note = 38
+led = true
+
+[[control]]
+name = "left.lit2"
+note = 23
+led = true
+
+[[control]]
+name = "left.lit3"
+note = 20
+led = true
+
+[[control]]
+name = "left.lit4"
+note = 34
+led = true
+
+# ---- right pod ----
+
+[[control]]
+name = "right.encoder1"
+cc = 40
+kind = "relative"
+
+[[control]]
+name = "right.encoder1.push"
+note = 60
+
+[[control]]
+name = "right.encoder2"
+cc = 41
+kind = "relative"
+
+[[control]]
+name = "right.encoder2.push"
+note = 46
+
+[[control]]
+name = "right.encoder3"
+cc = 42
+kind = "relative"
+
+[[control]]
+name = "right.encoder3.push"
+note = 48
+
+[[control]]
+name = "right.encoder4"
+cc = 43
+kind = "relative"
+
+[[control]]
+name = "right.encoder4.push"
+note = 58
+
+[[control]]
+name = "right.upper1"
+cc = 21
+
+[[control]]
+name = "right.upper2"
+cc = 23
+
+[[control]]
+name = "right.upper3"
+cc = 25
+
+[[control]]
+name = "right.upper4"
+cc = 27
+
+[[control]]
+name = "right.lower1"
+cc = 20
+
+[[control]]
+name = "right.lower2"
+cc = 22
+
+[[control]]
+name = "right.lower3"
+cc = 24
+
+[[control]]
+name = "right.lower4"
+cc = 26
+
+[[control]]
+name = "right.fader1"
+cc = 31
+
+[[control]]
+name = "right.fader2"
+cc = 30
+
+[[control]]
+name = "right.fader3"
+cc = 29
+
+[[control]]
+name = "right.fader4"
+cc = 28
+
+[[control]]
+name = "right.button.M"
+note = 61
+
+[[control]]
+name = "right.button.N"
+note = 47
+
+[[control]]
+name = "right.button.O"
+note = 49
+
+[[control]]
+name = "right.button.P"
+note = 59
+
+[[control]]
+name = "right.button.Q"
+note = 68
+
+[[control]]
+name = "right.button.R"
+note = 53
+
+[[control]]
+name = "right.button.S"
+note = 50
+
+[[control]]
+name = "right.button.T"
+note = 64
+
+[[control]]
+name = "right.button.U"
+note = 69
+
+[[control]]
+name = "right.button.V"
+note = 54
+
+[[control]]
+name = "right.button.W"
+note = 51
+
+[[control]]
+name = "right.button.X"
+note = 65
+
+[[control]]
+name = "right.browse"
+cc = 44
+kind = "relative"
+
+[[control]]
+name = "right.browse.push"
+note = 56
+
+[[control]]
+name = "right.jog"
+cc = 45
+kind = "relative"
+
+[[control]]
+name = "right.jog.up"
+note = 42
+
+[[control]]
+name = "right.jog.left"
+note = 43
+
+[[control]]
+name = "right.jog.right"
+note = 41
+
+[[control]]
+name = "right.jog.down"
+note = 45
+
+[[control]]
+name = "right.lit1"
+note = 70
+led = true
+
+[[control]]
+name = "right.lit2"
+note = 55
+led = true
+
+[[control]]
+name = "right.lit3"
+note = 52
+led = true
+
+[[control]]
+name = "right.lit4"
+note = 66
+led = true
+
+# ---- mixer section ----
+
+[[control]]
+name = "xfader"
+cc = 5
+
+[[control]]
+name = "filter1.freq"
+cc = 6
+
+[[control]]
+name = "filter2.freq"
+cc = 7
+
+[[control]]
+name = "filter1.hpf"
+note = 84
+
+[[control]]
+name = "filter1.bpf"
+note = 83
+
+[[control]]
+name = "filter1.lpf"
+note = 82
+
+[[control]]
+name = "filter1.on"
+note = 80
+led = true
+
+[[control]]
+name = "filter2.hpf"
+note = 87
+
+[[control]]
+name = "filter2.bpf"
+note = 86
+
+[[control]]
+name = "filter2.lpf"
+note = 85
+
+[[control]]
+name = "filter2.on"
+note = 81
+led = true
+
+[[control]]
+name = "ch1.cue"
+note = 72
+led = true
+
+[[control]]
+name = "ch2.cue"
+note = 73
+led = true
+
+[[control]]
+name = "ch3.cue"
+note = 74
+led = true
+
+[[control]]
+name = "ch4.cue"
+note = 75
+led = true
+
+[[control]]
+name = "joystick.x"
+cc = 3
+
+[[control]]
+name = "joystick.y"
+cc = 1
+
+[[control]]
+name = "joystick.finger"
+note = 1
+
+[[control]]
+name = "joystick.thumb"
+note = 2
+
+[[control]]
+name = "footswitch"
+cc = 4

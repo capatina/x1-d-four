@@ -1,0 +1,74 @@
+# Xone Deck mappings: Xone:4D control (names in controls.toml) -> action.
+# Saving this file applies it immediately; GET /api/mappings shows any error.
+#
+# Actions (deck = 1-4; leave it out to act on the focused deck):
+#   deck.play_pause, deck.play, deck.pause   on press
+#   deck.cue                                 press and release (CDJ-style cue)
+#   deck.load_selected                       on press: load the library selection
+#   deck.eject, deck.rate_reset              on press
+#   deck.focus                               on press (needs deck)
+#   deck.nudge     amount = seconds per press or per encoder step (default 0.01)
+#   deck.rate      encoder: amount per step (default 0.0005 = 0.05 %)
+#                  pot/fader: +/- range around 1.0 (default 0.08 = 8 %)
+#                  button: amount per press (default 0.01)
+#   deck.trim      pot/fader: 0..2x gain; encoder: amount per step (default 0.02)
+#   library.scroll encoder: rows per step; button: amount rows per press (default 1)
+#
+# led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused".
+# The rings toggle on each message, so they need the mixer's host-driven ring mode
+# (third illuminated button unlit in the power-on map setup).
+
+# Left pod lit buttons: play/pause decks 1-4, ring lit while playing.
+[[map]]
+control = "left.lit1"
+action = "deck.play_pause"
+deck = 1
+led = "deck.playing"
+
+[[map]]
+control = "left.lit2"
+action = "deck.play_pause"
+deck = 2
+led = "deck.playing"
+
+[[map]]
+control = "left.lit3"
+action = "deck.play_pause"
+deck = 3
+led = "deck.playing"
+
+[[map]]
+control = "left.lit4"
+action = "deck.play_pause"
+deck = 4
+led = "deck.playing"
+
+# Right pod lit buttons: cue decks 1-4.
+[[map]]
+control = "right.lit1"
+action = "deck.cue"
+deck = 1
+
+[[map]]
+control = "right.lit2"
+action = "deck.cue"
+deck = 2
+
+[[map]]
+control = "right.lit3"
+action = "deck.cue"
+deck = 3
+
+[[map]]
+control = "right.lit4"
+action = "deck.cue"
+deck = 4
+
+# Left encoder above the jog wheel: browse the library, push to load to the focused deck.
+[[map]]
+control = "left.browse"
+action = "library.scroll"
+
+[[map]]
+control = "left.browse.push"
+action = "deck.load_selected"

@@ -1,0 +1,31 @@
+[package]
+name = "xone-deck"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Browser-controlled 4-deck player for the Allen & Heath Xone:4D"
+
+[[bin]]
+name = "xone-deck"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+audio_thread_priority = "0.38.0"
+axum = { version = "0.8.9", features = ["ws"] }
+clap = { version = "4.6.7", features = ["derive"] }
+engine = { version = "0.1.0", path = "../engine" }
+futures-util = "0.3.34"
+lofty = "0.25.4"
+mime_guess = "2.0.5"
+notify = "8"
+ploytec = { version = "0.1.0", path = "../ploytec" }
+rust-embed = "8.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.2", features = ["full"] }
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+walkdir = "2.5.0"

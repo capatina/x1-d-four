@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/ploytec", "crates/engine", "crates/app"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[profile.release]
+debug = 1

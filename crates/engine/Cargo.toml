@@ -1,0 +1,17 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Four-deck playback engine rendering straight into Xone:4D USB packets"
+
+[dependencies]
+anyhow = "1.0.104"
+ploytec = { version = "0.1.0", path = "../ploytec" }
+rtrb = "0.4.0"
+rubato = "5.0.1"
+serde = { version = "1.0.229", features = ["derive"] }
+symphonia = { version = "0.6.1", features = ["all"] }
+thiserror = "2.0.21"
+tracing = "0.1.44"

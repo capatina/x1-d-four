@@ -1,0 +1,12 @@
+#!/bin/sh
+# Install the udev rule that gives the logged-in user access to the Xone:4D.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+if [ "$(id -u)" -ne 0 ]; then
+  exec pkexec "$here/install"
+fi
+install -m 0644 "$here/70-xone-4d.rules" /etc/udev/rules.d/70-xone-4d.rules
+udevadm control --reload
+udevadm trigger --action=change --subsystem-match=usb --attr-match=idVendor=0a4a --attr-match=idProduct=ff4d
+udevadm settle
+echo "Installed /etc/udev/rules.d/70-xone-4d.rules"

@@ -1,0 +1,15 @@
+[package]
+name = "ploytec"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Userspace usbfs driver for the Allen & Heath Xone:4D (Ploytec chipset, firmware 1.4.1)"
+
+[dependencies]
+libc = "0.2"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tracing-subscriber = "0.3.23"
