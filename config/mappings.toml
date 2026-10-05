@@ -37,7 +37,7 @@
 # jog             scroll the library                  aim between portals
 # SELECT          turn: page library, push: fly from  turn: dive/back, push: dive
 #                 the library selection
-# buttons         A cycle band, B/C/D low/mid/high,   M decks <-> tunnel
+# buttons         A low, B mid, C high band,          M decks <-> tunnel
 #                 E follow the playing deck
 # encoders 1-4    nudge deck 1-4, push = cue          skip deck 1-4 by 2 s, push = sync
 # faders 1-4      pitch deck 1-4 (+/-8 %)
@@ -82,20 +82,16 @@ action = "explore.root"
 
 [[map]]
 control = "left.button.A"
-action = "explore.cycle_band"
-
-[[map]]
-control = "left.button.B"
 action = "explore.band"
 amount = 0
 
 [[map]]
-control = "left.button.C"
+control = "left.button.B"
 action = "explore.band"
 amount = 1
 
 [[map]]
-control = "left.button.D"
+control = "left.button.C"
 action = "explore.band"
 amount = 2
 
