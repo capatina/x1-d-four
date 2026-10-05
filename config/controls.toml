@@ -391,6 +391,8 @@ led = true
 
 # ---- mixer section ----
 
+# Measured 2026-10-05: CC5 reads 0 at BOTH ends and peaks in the middle (XFADE on or
+# off), so it can't tell left from right; it settles back to 0 after most moves.
 [[control]]
 name = "xfader"
 cc = 5

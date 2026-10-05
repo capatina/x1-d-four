@@ -24,6 +24,9 @@
   let failed = $state<string | null>(null);
   let stats = $state.raw<EngineStats | null>(null);
   const showStats = new URLSearchParams(location.search).has('stats');
+  /** Height of the top bar (brand, chips, "now at"), and the footer's distance from the bottom edge. */
+  const TOP_BAR = 76;
+  const BOTTOM_GAP = 14;
 
   const ex = $derived(client.explore);
   const band = $derived<Band>(ex?.band ?? 'low');
@@ -129,6 +132,12 @@
     const root = document.documentElement.style;
     if (bottomH > 0) root.setProperty('--explore-bottom', `${bottomH}px`);
     return () => root.removeProperty('--explore-bottom');
+  });
+
+  // Centre the tunnel in the space between the top bar and the bottom HUD
+  // (waveforms, legend, decks), so the aimed label clears the waveforms.
+  $effect(() => {
+    engine?.setViewShift(bottomH > 0 ? (bottomH + BOTTOM_GAP - TOP_BAR) / 2 : 0);
   });
 
   function setBand(b: Band) {
