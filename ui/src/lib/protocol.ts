@@ -31,6 +31,12 @@ export type DeckState = {
   cue: number;
   /** Linear gain, 1.0 = unity. */
   trim: number;
+  /** Beat sync on: tempo and phase follow the master deck. */
+  sync?: boolean;
+  /** The deck synced decks follow. */
+  master?: boolean;
+  /** Playing tempo (beat-grid tempo × rate); null without a grid. */
+  bpm?: number | null;
 };
 
 export type DeviceStateName = 'connecting' | 'running' | 'stalled' | 'missing' | 'error';
@@ -240,6 +246,7 @@ export type Command =
   /** Move the selection within the filtered list. */
   | { cmd: 'scroll'; delta: number }
   | { cmd: 'rescan' }
+  | { cmd: 'sync'; deck: number; on?: boolean }
   /** 1-3 raw bytes to the mixer (LED tests). */
   | { cmd: 'midi_out'; bytes: number[] }
   | { cmd: 'view'; view: View }

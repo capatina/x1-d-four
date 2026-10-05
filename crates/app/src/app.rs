@@ -51,6 +51,8 @@ pub enum ClientCommand {
     ExploreFollow { follow: bool },
     ExploreRoot { id: String },
     ExploreRootSelected,
+    /// Turn beat sync on or off; leave `on` out to toggle.
+    Sync { deck: usize, on: Option<bool> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -320,6 +322,7 @@ impl App {
             ClientCommand::ExploreFollow { follow } => self.explore_follow(Some(follow)),
             ClientCommand::ExploreRoot { id } => self.explore_root(&id)?,
             ClientCommand::ExploreRootSelected => self.explore_root_selected()?,
+            ClientCommand::Sync { deck, on } => self.send(Command::Sync { deck: deck_ok(deck)?, on }),
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
@@ -365,6 +368,7 @@ impl App {
             Intent::ExploreBack => Ok(self.explore_back()),
             Intent::ExploreFollow => Ok(self.explore_follow(None)),
             Intent::ExploreRootSelected => self.explore_root_selected(),
+            Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
             Intent::ToggleView => Ok(self.set_view(self.view_name() == "decks")),
         };
         if let Err(e) = result {
@@ -398,13 +402,16 @@ impl App {
         let app = self.clone();
         self.runtime.spawn_blocking(move || {
             let started = Instant::now();
-            let result = engine::track::load(&track.path);
+            let result = engine::track::load(&track.path).map(|mut decoded| {
+                decoded.grid = app.beat_grid(&track, &decoded);
+                decoded
+            });
             if app.load_gen[deck].load(Ordering::Relaxed) != generation {
                 return; // superseded by a newer load on this deck
             }
             match result {
                 Ok(decoded) => {
-                    tracing::info!(deck, id = %track.id, secs = decoded.seconds(), took = ?started.elapsed(), "loaded");
+                    tracing::info!(deck, id = %track.id, secs = decoded.seconds(), grid = ?decoded.grid, took = ?started.elapsed(), "loaded");
                     let length = decoded.seconds();
                     let peaks = decoded.peaks.clone();
                     app.send(Command::Load { deck, track: Some(Arc::new(decoded)) });
@@ -608,6 +615,7 @@ impl App {
                     LedRule::DeckPlaying => self.shared.deck(deck).playing,
                     LedRule::DeckLoaded => loaded[deck],
                     LedRule::DeckFocused => focused == deck,
+                    LedRule::DeckSynced => self.shared.deck(deck).sync,
                 };
                 wanted.push((note, on));
             }
@@ -679,6 +687,9 @@ impl App {
                     "rate": s.rate,
                     "cue": s.cue / sr,
                     "trim": meta.trim,
+                    "sync": s.sync,
+                    "master": s.master,
+                    "bpm": s.bpm.map(|b| (b * s.rate * 100.0).round() / 100.0),
                 })
             })
             .collect();

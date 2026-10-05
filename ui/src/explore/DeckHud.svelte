@@ -36,6 +36,9 @@
         loading: ds?.loading ?? false,
         progress: length > 0 ? Math.min(1, Math.max(0, (ds?.position ?? 0) / length)) : 0,
         pitch: id != null && Math.abs(rate - 1) >= PITCH_SHOWN ? fmtRatePct(rate) : null,
+        bpm: id != null && ds?.bpm != null ? ds.bpm.toFixed(1) : null,
+        sync: ds?.sync ?? false,
+        master: ds?.master ?? false,
       };
     }),
   );
@@ -61,10 +64,12 @@
           {#if d.pitch}<span class="pitch" title="Pitch {d.pitch}">{d.pitch}</span>{/if}
         </span>
         <span class="artist">
+          {#if d.master}<em class="sync">master</em>{:else if d.sync}<em class="sync">sync</em>{/if}
           {#if rootDeck === d.i}<em>root</em>{/if}
           {d.artist ?? (d.id ? 'Unknown artist' : loadHints[d.i])}
         </span>
       </span>
+      {#if d.bpm}<span class="bpm" title="Playing tempo">{d.bpm}</span>{/if}
       <span class="state" aria-label={d.playing ? 'Playing' : 'Paused'}>
         {#if d.playing}
           <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5v9l8-4.5z" /></svg>
@@ -86,7 +91,7 @@
   .deck {
     position: relative;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 10px;
     min-width: 0;
@@ -171,6 +176,18 @@
     text-transform: uppercase;
     color: var(--band);
     vertical-align: 1px;
+  }
+  .bpm {
+    font: 650 13px/1 var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
+  }
+  .playing .bpm {
+    color: var(--text);
+  }
+  em.sync {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent);
   }
   .state svg {
     display: block;

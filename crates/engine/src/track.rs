@@ -25,6 +25,26 @@ pub struct Track {
     pub samples: Vec<f32>,
     /// Max |sample| per bucket, 0..=255, for the overview waveform.
     pub peaks: Vec<u8>,
+    /// Beat grid, if known: needed for sync.
+    pub grid: Option<Grid>,
+}
+
+/// Tempo and first beat of a track, in its own 48 kHz frames.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grid {
+    pub bpm: f64,
+    pub first_beat: f64,
+}
+
+impl Grid {
+    pub fn beat_frames(&self) -> f64 {
+        60.0 * SAMPLE_RATE as f64 / self.bpm
+    }
+
+    /// Phase within the beat (0..1) at a frame position.
+    pub fn phase_at(&self, frame: f64) -> f64 {
+        ((frame - self.first_beat) / self.beat_frames()).rem_euclid(1.0)
+    }
 }
 
 impl Track {
@@ -39,7 +59,7 @@ impl Track {
     /// Build a track from 48 kHz interleaved stereo samples.
     pub fn from_samples(path: PathBuf, samples: Vec<f32>) -> Self {
         let peaks = peaks(&samples);
-        Self { path, samples, peaks }
+        Self { path, samples, peaks, grid: None }
     }
 }
 

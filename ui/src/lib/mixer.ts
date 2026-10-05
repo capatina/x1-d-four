@@ -28,16 +28,17 @@ export type LegendSlot =
   | 'play'
   | 'cue'
   | 'pitch'
+  | 'sync'
   | 'scroll'
   | 'root'
   | 'follow'
   | 'view';
 
 /** Explore legend, in teaching order. */
-export const EXPLORE_LEGEND: readonly LegendSlot[] = ['aim', 'dive', 'band', 'load', 'play', 'cue', 'pitch', 'root', 'follow', 'view'];
+export const EXPLORE_LEGEND: readonly LegendSlot[] = ['aim', 'dive', 'band', 'load', 'play', 'cue', 'pitch', 'sync', 'root', 'follow', 'view'];
 
 /** Deck view legend: browse, load, play. */
-export const DECKS_LEGEND: readonly LegendSlot[] = ['scroll', 'load', 'play', 'cue', 'pitch', 'view'];
+export const DECKS_LEGEND: readonly LegendSlot[] = ['scroll', 'load', 'play', 'cue', 'pitch', 'sync', 'view'];
 
 type Parsed = {
   shift: boolean;
@@ -186,7 +187,7 @@ export function backKey(maps: readonly Mapping[]): { key: MixerKey; turn: boolea
   return step ? { key: step, turn: true } : null;
 }
 
-const decksText = (e: Entry, focused = 'focused deck') => (e.decks ? `deck ${e.decks}` : focused);
+const decksText = (e: Entry, focused = 'focused deck') => (e.decks ? e.decks : focused);
 
 /** Legend entries for `slots`, skipping anything that isn't mapped. */
 export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], view: View): LegendItem[] {
@@ -224,6 +225,9 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
         break;
       case 'pitch':
         add(slot, 'deck.rate', (e) => `pitch ${decksText(e)}`);
+        break;
+      case 'sync':
+        add(slot, 'deck.sync', (e) => `sync ${decksText(e)}`);
         break;
       case 'scroll':
         add(slot, 'library.scroll', (e) => (e.amount != null && e.amount !== 1 ? `scroll ×${e.amount}` : 'scroll'));

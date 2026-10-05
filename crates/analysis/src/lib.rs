@@ -1,6 +1,7 @@
 //! Library analysis for the explorer: per-track low/mid/high features, a
 //! persistent cache, and band similarity.
 
+pub mod beats;
 pub mod features;
 pub mod index;
 
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+pub use beats::{BeatGrid, beat_grid};
 pub use features::{Features, analyse_file};
 pub use index::{Band, Index};
 

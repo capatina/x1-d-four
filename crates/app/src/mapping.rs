@@ -50,6 +50,7 @@ pub enum Action {
     ExploreFollow,
     ExploreRoot,
     ViewExplore,
+    Sync,
 }
 
 impl Action {
@@ -76,6 +77,7 @@ impl Action {
             "explore.follow" => Self::ExploreFollow,
             "explore.root" => Self::ExploreRoot,
             "view.explore" => Self::ViewExplore,
+            "deck.sync" => Self::Sync,
             other => bail!("unknown action {other:?}"),
         })
     }
@@ -87,6 +89,7 @@ pub enum LedRule {
     DeckPlaying,
     DeckLoaded,
     DeckFocused,
+    DeckSynced,
 }
 
 /// What a mapping asks the app to do. `deck: None` means the focused deck.
@@ -116,6 +119,7 @@ pub enum Intent {
     /// Start the tree at the library selection.
     ExploreRootSelected,
     ToggleView,
+    Sync(Option<usize>),
 }
 
 pub struct Rule {
@@ -174,6 +178,7 @@ impl Rule {
             (Action::ExploreFollow, Press) => Intent::ExploreFollow,
             (Action::ExploreRoot, Press) => Intent::ExploreRootSelected,
             (Action::ViewExplore, Press) => Intent::ToggleView,
+            (Action::Sync, Press) => Intent::Sync(d),
             _ => return None,
         })
     }
@@ -223,6 +228,7 @@ impl Mappings {
                         "deck.playing" => LedRule::DeckPlaying,
                         "deck.loaded" => LedRule::DeckLoaded,
                         "deck.focused" => LedRule::DeckFocused,
+                        "deck.synced" => LedRule::DeckSynced,
                         other => bail!("{}: unknown led rule {other:?}", at()),
                     };
                     Some((rule, note))

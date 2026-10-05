@@ -108,6 +108,18 @@ impl App {
         json!({ "type": "analysis", "done": st.done, "total": st.total, "running": st.running, "error": st.error })
     }
 
+    /// Beat grid for a freshly decoded track: the analysed tempo (or the tag) as a
+    /// starting point, refined with the first beat on the samples the deck plays.
+    pub fn beat_grid(&self, track: &crate::library::LibTrack, decoded: &engine::Track) -> Option<engine::Grid> {
+        let hint = self
+            .data()
+            .and_then(|d| d.cache.features(&track.id).map(|f| f.tempo as f64))
+            .or(track.bpm)?;
+        let mono: Vec<f32> = decoded.samples.chunks_exact(2).map(|f| 0.5 * (f[0] + f[1])).collect();
+        let grid = analysis::beat_grid(&mono, SAMPLE_RATE, hint)?;
+        Some(engine::Grid { bpm: grid.bpm, first_beat: grid.first_beat * SAMPLE_RATE as f64 })
+    }
+
     // ---- view -----------------------------------------------------------------
 
     pub fn view_name(&self) -> &'static str {

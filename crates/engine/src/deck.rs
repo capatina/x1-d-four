@@ -12,7 +12,12 @@ pub struct Deck {
     pub track: Option<Arc<Track>>,
     pub position: f64,
     pub playing: bool,
+    /// Speed actually used: `base_rate`, or the sync engine's choice while synced.
     pub rate: f64,
+    /// Speed the user set (pitch fader).
+    pub base_rate: f64,
+    /// Lock tempo and phase to the master deck. Survives loads.
+    pub sync: bool,
     pub trim: f32,
     pub cue: f64,
     /// Playing only while the cue button is held.
@@ -33,7 +38,11 @@ pub struct RenderOutcome {
 
 impl Deck {
     pub fn new() -> Self {
-        Self { rate: 1.0, trim: 1.0, ..Default::default() }
+        Self { rate: 1.0, base_rate: 1.0, trim: 1.0, ..Default::default() }
+    }
+
+    pub fn grid(&self) -> Option<crate::track::Grid> {
+        self.track.as_ref().and_then(|t| t.grid)
     }
 
     pub fn len(&self) -> f64 {

@@ -37,7 +37,9 @@
 
   const title = $derived(track?.title ?? (trackId ? idToName(trackId) : null));
   const artist = $derived(track?.artist ?? null);
-  const bpm = $derived(track?.bpm ? fmtBpm(track.bpm * rate) : '');
+  /** The beat grid's playing tempo when the server has one, else the tag × pitch. */
+  const bpm = $derived(ds?.bpm != null ? fmtBpm(ds.bpm) : track?.bpm ? fmtBpm(track.bpm * rate) : '');
+  const syncBadge = $derived(ds?.master ? 'MASTER' : ds?.sync ? 'SYNC' : '');
 
   /** "L lit 2", the mixer control that loads the selection onto this deck. */
   const loadKey = $derived(deckKey(client.mixer, 'deck.load_selected', index));
@@ -110,8 +112,10 @@
     </span>
     {#if bpm}
       <span class="bpm" title={track?.bpm ? `Tagged ${fmtBpm(track.bpm)} BPM` : undefined}>
-        <b>{bpm}</b><small>BPM</small>
+        <b>{bpm}</b><small>{#if syncBadge}<span class="sync">{syncBadge}</span>{:else}BPM{/if}</small>
       </span>
+    {:else if syncBadge}
+      <span class="bpm"><small><span class="sync">{syncBadge}</span></small></span>
     {/if}
   </button>
 
@@ -297,6 +301,10 @@
     font: 700 20px/1.1 var(--font-mono);
     font-variant-numeric: tabular-nums;
     color: var(--text);
+  }
+  .bpm .sync {
+    color: var(--accent);
+    letter-spacing: 0.1em;
   }
   .bpm small {
     font-size: 10px;

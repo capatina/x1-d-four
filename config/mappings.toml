@@ -6,6 +6,7 @@
 #   deck.cue                                 press and release (CDJ-style cue)
 #   deck.load_selected                       on press: load the library selection
 #   deck.eject, deck.rate_reset              on press
+#   deck.sync                                on press: beat sync on/off (locks to the master deck)
 #   deck.focus                               on press (needs deck)
 #   deck.nudge     amount = seconds per press or per encoder step (default 0.01)
 #   deck.rate      encoder: amount per step (default 0.0005 = 0.05 %)
@@ -25,7 +26,7 @@
 #   explore.root         on press: start the tunnel at the library selection
 #   view.explore         on press: switch between the decks and the tunnel
 #
-# led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused".
+# led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused", "deck.synced".
 # The rings toggle on each message, so they need the mixer's host-driven ring mode
 # (third illuminated button unlit in the power-on map setup).
 
@@ -38,7 +39,7 @@
 #                 the library selection
 # buttons         A cycle band, B/C/D low/mid/high,   M decks <-> tunnel
 #                 E follow the playing deck
-# encoders 1-4    nudge deck 1-4, push = cue          skip deck 1-4 by 2 s
+# encoders 1-4    nudge deck 1-4, push = cue          skip deck 1-4 by 2 s, push = sync
 # faders 1-4      pitch deck 1-4 (+/-8 %)
 
 # ---- Left pod ----
@@ -222,6 +223,26 @@ control = "right.encoder4"
 action = "deck.nudge"
 deck = 4
 amount = 2.0
+
+[[map]]
+control = "right.encoder1.push"
+action = "deck.sync"
+deck = 1
+
+[[map]]
+control = "right.encoder2.push"
+action = "deck.sync"
+deck = 2
+
+[[map]]
+control = "right.encoder3.push"
+action = "deck.sync"
+deck = 3
+
+[[map]]
+control = "right.encoder4.push"
+action = "deck.sync"
+deck = 4
 
 [[map]]
 control = "right.button.M"

@@ -43,6 +43,9 @@ type Track = {
     rate: number,          // 1.0 = normal speed (varispeed: pitch follows)
     cue: number,           // seconds
     trim: number,          // linear gain, 1.0 = unity
+    sync: boolean,         // beat sync on: tempo and phase follow the master deck
+    master: boolean,       // the deck synced decks follow
+    bpm: number | null,    // playing tempo (beat grid tempo x rate), null without a grid
   }>,
   focused: number,         // deck that "load selected" targets
   device: {
@@ -114,6 +117,7 @@ type Track = {
 { cmd: "select", track_id: string }
 { cmd: "scroll", delta: number }                  // move the selection within the filtered list
 { cmd: "rescan" }
+{ cmd: "sync", deck: number, on?: boolean }      // beat sync on/off (toggle if on is left out)
 { cmd: "midi_out", bytes: number[] }              // 1-3 raw bytes to the mixer (LED tests)
 ```
 
