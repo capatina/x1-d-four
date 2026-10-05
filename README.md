@@ -34,8 +34,7 @@ It's played entirely from the mixer:
 | JOG/SELECT | focus deck 1–4 (the tunnel grows from it); push to start from the search selection | dive / back; push to dive |
 | Buttons | A low, B mid, C high band; E follow the focused deck on/off | |
 | Encoders 1–4 | nudge; push = cue | skip ±2 s |
-| Faders 1–4 | pitch ±8 % | |
-| Crossfader | left = low, middle = mid, right = high band (keep XFADE off) | |
+| Faders 1–4 | pitch ±8 % | fader 1: band, bottom low / middle mid / top high |
 
 ## Map controls by talking to your agent
 
