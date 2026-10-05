@@ -18,51 +18,51 @@
 # The rings toggle on each message, so they need the mixer's host-driven ring mode
 # (third illuminated button unlit in the power-on map setup).
 
-# Left pod lit buttons: play/pause decks 1-4, ring lit while playing.
+# Left pod lit buttons: load the library selection onto decks 1-4.
 [[map]]
 control = "left.lit1"
-action = "deck.play_pause"
+action = "deck.load_selected"
 deck = 1
-led = "deck.playing"
 
 [[map]]
 control = "left.lit2"
-action = "deck.play_pause"
+action = "deck.load_selected"
 deck = 2
-led = "deck.playing"
 
 [[map]]
 control = "left.lit3"
-action = "deck.play_pause"
+action = "deck.load_selected"
 deck = 3
-led = "deck.playing"
 
 [[map]]
 control = "left.lit4"
-action = "deck.play_pause"
+action = "deck.load_selected"
 deck = 4
-led = "deck.playing"
 
-# Right pod lit buttons: load the library selection onto decks 1-4.
+# Right pod lit buttons: play/pause decks 1-4, ring lit while playing.
 [[map]]
 control = "right.lit1"
-action = "deck.load_selected"
+action = "deck.play_pause"
 deck = 1
+led = "deck.playing"
 
 [[map]]
 control = "right.lit2"
-action = "deck.load_selected"
+action = "deck.play_pause"
 deck = 2
+led = "deck.playing"
 
 [[map]]
 control = "right.lit3"
-action = "deck.load_selected"
+action = "deck.play_pause"
 deck = 3
+led = "deck.playing"
 
 [[map]]
 control = "right.lit4"
-action = "deck.load_selected"
+action = "deck.play_pause"
 deck = 4
+led = "deck.playing"
 
 # Left encoder above the jog wheel: browse the library, push to load to the focused deck.
 [[map]]

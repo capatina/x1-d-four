@@ -559,6 +559,10 @@ impl App {
             }
         }
         let mut leds = self.leds.lock().unwrap();
+        // Rings left lit by a rule that was remapped away get switched off.
+        let orphans: Vec<u8> =
+            leds.lit.iter().filter(|(n, on)| **on && !wanted.iter().any(|(w, _)| w == *n)).map(|(n, _)| *n).collect();
+        wanted.extend(orphans.into_iter().map(|n| (n, false)));
         for (note, on) in wanted {
             let lit = leds.lit.entry(note).or_insert(false);
             if *lit != on {
