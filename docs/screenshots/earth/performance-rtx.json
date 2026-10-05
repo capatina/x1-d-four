@@ -1,0 +1,88 @@
+{
+  "checks": [
+    "Synced deck bar ticks align within one CSS pixel",
+    "Six readable candidate labels clear each other and the waveform",
+    "Aim control changes the selected path",
+    "Load-selected loads the aimed track on deck 4",
+    "Dive exposes the upstream route and breadcrumb",
+    "Band switch changes the place",
+    "Back returns to the root",
+    "Six readable candidate labels clear each other and the waveform",
+    "Loop and its length remain visible on deck 2",
+    "Typing anywhere opens search",
+    "A search result can be dragged onto deck 4",
+    "Search keeps its typed filter after a drop and re-root",
+    "Six readable candidate labels clear each other and the waveform",
+    "Reduced motion switches on without reloading",
+    "Six readable candidate labels clear each other and the waveform",
+    "No browser errors or external network requests"
+  ],
+  "measurements": [
+    {
+      "label": "1920\u00d71080 / four decks / low",
+      "frames": 900,
+      "fps": 60.00240009600384,
+      "p50": 16.69999999999891,
+      "p95": 16.700000000000728,
+      "p99": 16.80000000000109,
+      "over25": 0,
+      "stats": "60 fps \u00b7 10 calls \u00b7 237k tris \u00b7 dpr 1.00 \u00b7 world 0.09 ms \u00b7 wave 0.26 ms\ngrowth 14% \u00b7 evening 0%"
+    },
+    {
+      "label": "World GPU time (ms)",
+      "gpuMs": {
+        "samples": 59,
+        "mean": 1.2568124745762712,
+        "p50": 0.933888,
+        "p95": 2.284544,
+        "max": 2.300928
+      }
+    },
+    {
+      "label": "1280\u00d7800 / four decks / loop / mid",
+      "frames": 900,
+      "fps": 60.002400096003804,
+      "p50": 16.69999999999709,
+      "p95": 16.79999999998836,
+      "p99": 16.80000000000291,
+      "over25": 0,
+      "stats": "60 fps \u00b7 10 calls \u00b7 237k tris \u00b7 dpr 1.00 \u00b7 world 0.08 ms \u00b7 wave 0.21 ms\ngrowth 34% \u00b7 evening 2%"
+    },
+    {
+      "label": "1920\u00d71080 / mature landscape / high",
+      "frames": 900,
+      "fps": 60.00240009600387,
+      "p50": 16.69999999999709,
+      "p95": 16.70000000001164,
+      "p99": 16.80000000000291,
+      "over25": 0,
+      "stats": "60 fps \u00b7 10 calls \u00b7 237k tris \u00b7 dpr 1.00 \u00b7 world 0.07 ms \u00b7 wave 0.27 ms\ngrowth 44% \u00b7 evening 3%"
+    },
+    {
+      "label": "3840\u00d72160 / RTX 4090 / four decks",
+      "frames": 900,
+      "fps": 60.00240009600387,
+      "p50": 16.699999999982538,
+      "p95": 16.79999999998836,
+      "p99": 16.800000000017462,
+      "over25": 0,
+      "stats": "60 fps \u00b7 10 calls \u00b7 237k tris \u00b7 dpr 1.00 \u00b7 world 0.08 ms \u00b7 wave 0.50 ms\ngrowth 54% \u00b7 evening 6%"
+    },
+    {
+      "label": "3840\u00d72160 world GPU time (ms)",
+      "gpuMs": {
+        "samples": 59,
+        "mean": 3.8710150508474577,
+        "p50": 3.876864,
+        "p95": 3.924992,
+        "max": 3.934208
+      }
+    }
+  ],
+  "progress": [],
+  "errors": [],
+  "gpu": "ANGLE (NVIDIA, Vulkan 1.4.341 (NVIDIA NVIDIA GeForce RTX 4090 (0x00002684)), NVIDIA-610.57.4.0)",
+  "notes": [
+    "RTX functional rerun after the search filter fix; progress duration set to zero. The AMD run covers the full three-minute soak."
+  ]
+}

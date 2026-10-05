@@ -4,7 +4,7 @@
 
 *Unofficial: not affiliated with or endorsed by Allen & Heath.*
 
-![X1 D. Four UI](docs/screenshot.png)
+![X1 D. Four Explore](docs/screenshots/earth/01-lowlands-1080.webp)
 
 The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. Four talks to its Ploytec USB chip directly through Linux usbfs. It renders each deck straight into the USB packets on a real-time thread, and the mixer's own knobs and buttons drive the decks.
 

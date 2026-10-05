@@ -24,4 +24,6 @@ line patterns provide identity without relying on hue alone. Controls remain
 readable on dark earth surfaces, above the landscape.
 
 Everything is generated locally from geometry and shaders. No external assets,
-runtime network requests or backend/protocol changes are needed.
+runtime asset downloads or backend/protocol changes are needed.
+
+See [verification and reproduction](explore-visuals-qa.md) for measurements and screenshots.
