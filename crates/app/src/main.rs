@@ -75,6 +75,9 @@ struct ServeArgs {
     /// Run without the mixer (renders on a timer).
     #[arg(long)]
     no_device: bool,
+    /// Open the UI as a full-screen app window once the server is up.
+    #[arg(long)]
+    open: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -183,6 +186,9 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
         let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("bind {addr}"))?;
         tracing::info!("x1-d-four on http://{addr}");
+        if args.open {
+            open_window(&format!("http://{addr}/"));
+        }
         // Stop audio as soon as a signal arrives, so the mixer is handed back
         // cleanly even if a web client keeps its connection open.
         let signalled = {
@@ -219,6 +225,20 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let _ = audio.join();
     runtime.shutdown_timeout(Duration::from_millis(500));
     Ok(())
+}
+
+/// Show the UI full-screen in an app window (Omarchy's web-app launcher, else Chromium).
+fn open_window(url: &str) {
+    use std::process::{Command, Stdio};
+    let launch = |cmd: &str, args: &[&str]| {
+        Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+    };
+    let app = format!("--app={url}");
+    let result = launch("omarchy-launch-webapp", &[url, "--start-fullscreen"])
+        .or_else(|_| launch("chromium", &[&app, "--start-fullscreen"]));
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "couldn't open a browser window; open {url} yourself");
+    }
 }
 
 fn analyse(query: &str, music: Option<PathBuf>, top: usize) -> anyhow::Result<()> {

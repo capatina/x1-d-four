@@ -22,34 +22,147 @@
 #   explore.back         on press: climb back up
 #   explore.step         encoder: turn right = dive, turn left = back
 #   explore.follow       on press: toggle following the playing track
+#   explore.root         on press: start the tunnel at the library selection
 #   view.explore         on press: switch between the decks and the tunnel
 #
 # led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused".
 # The rings toggle on each message, so they need the mixer's host-driven ring mode
 # (third illuminated button unlit in the power-on map setup).
 
-# Left pod lit buttons: load the library selection onto decks 1-4.
+# Everything is played from the mixer; the screen only shows it.
+#
+#                 LEFT POD                            RIGHT POD
+# lit 1-4         load aimed track -> deck 1-4        play/pause deck 1-4
+# jog             scroll the library                  aim between portals
+# SELECT          turn: page library, push: fly from  turn: dive/back, push: dive
+#                 the library selection
+# buttons         A cycle band, B/C/D low/mid/high,   M decks <-> tunnel
+#                 E follow the playing deck
+# encoders 1-4    nudge deck 1-4, push = cue          skip deck 1-4 by 2 s
+# faders 1-4      pitch deck 1-4 (+/-8 %)
+
+# ---- Left pod ----
 [[map]]
 control = "left.lit1"
 action = "deck.load_selected"
 deck = 1
+led = "deck.loaded"
 
 [[map]]
 control = "left.lit2"
 action = "deck.load_selected"
 deck = 2
+led = "deck.loaded"
 
 [[map]]
 control = "left.lit3"
 action = "deck.load_selected"
 deck = 3
+led = "deck.loaded"
 
 [[map]]
 control = "left.lit4"
 action = "deck.load_selected"
 deck = 4
+led = "deck.loaded"
 
-# Right pod lit buttons: play/pause decks 1-4, ring lit while playing.
+[[map]]
+control = "left.jog"
+action = "library.scroll"
+
+[[map]]
+control = "left.browse"
+action = "library.scroll"
+amount = 10
+
+[[map]]
+control = "left.browse.push"
+action = "explore.root"
+
+[[map]]
+control = "left.button.A"
+action = "explore.cycle_band"
+
+[[map]]
+control = "left.button.B"
+action = "explore.band"
+amount = 0
+
+[[map]]
+control = "left.button.C"
+action = "explore.band"
+amount = 1
+
+[[map]]
+control = "left.button.D"
+action = "explore.band"
+amount = 2
+
+[[map]]
+control = "left.button.E"
+action = "explore.follow"
+
+[[map]]
+control = "left.encoder1"
+action = "deck.nudge"
+deck = 1
+
+[[map]]
+control = "left.encoder2"
+action = "deck.nudge"
+deck = 2
+
+[[map]]
+control = "left.encoder3"
+action = "deck.nudge"
+deck = 3
+
+[[map]]
+control = "left.encoder4"
+action = "deck.nudge"
+deck = 4
+
+[[map]]
+control = "left.encoder1.push"
+action = "deck.cue"
+deck = 1
+
+[[map]]
+control = "left.encoder2.push"
+action = "deck.cue"
+deck = 2
+
+[[map]]
+control = "left.encoder3.push"
+action = "deck.cue"
+deck = 3
+
+[[map]]
+control = "left.encoder4.push"
+action = "deck.cue"
+deck = 4
+
+[[map]]
+control = "left.fader1"
+action = "deck.rate"
+deck = 1
+
+[[map]]
+control = "left.fader2"
+action = "deck.rate"
+deck = 2
+
+[[map]]
+control = "left.fader3"
+action = "deck.rate"
+deck = 3
+
+[[map]]
+control = "left.fader4"
+action = "deck.rate"
+deck = 4
+
+# ---- Right pod ----
 [[map]]
 control = "right.lit1"
 action = "deck.play_pause"
@@ -74,55 +187,42 @@ action = "deck.play_pause"
 deck = 4
 led = "deck.playing"
 
-# Left encoder above the jog wheel: browse the library, push to load to the focused deck.
-[[map]]
-control = "left.browse"
-action = "library.scroll"
-
-[[map]]
-control = "left.browse.push"
-action = "deck.load_selected"
-
-# Left jog wheel: scroll the library one row per tick.
-[[map]]
-control = "left.jog"
-action = "library.scroll"
-
-# ---- Explore ----
-# Left pod A: cycle the similarity band; B/C/D: low/mid/high directly.
-[[map]]
-control = "left.button.A"
-action = "explore.cycle_band"
-
-[[map]]
-control = "left.button.B"
-action = "explore.band"
-amount = 0
-
-[[map]]
-control = "left.button.C"
-action = "explore.band"
-amount = 1
-
-[[map]]
-control = "left.button.D"
-action = "explore.band"
-amount = 2
-
-# Right jog: aim between portals. Right JOG/SELECT: push = dive, turn = dive/back.
 [[map]]
 control = "right.jog"
 action = "explore.aim"
+
+[[map]]
+control = "right.browse"
+action = "explore.step"
 
 [[map]]
 control = "right.browse.push"
 action = "explore.dive"
 
 [[map]]
-control = "right.browse"
-action = "explore.step"
+control = "right.encoder1"
+action = "deck.nudge"
+deck = 1
+amount = 2.0
 
-# Right pod M: switch between the decks and the tunnel.
+[[map]]
+control = "right.encoder2"
+action = "deck.nudge"
+deck = 2
+amount = 2.0
+
+[[map]]
+control = "right.encoder3"
+action = "deck.nudge"
+deck = 3
+amount = 2.0
+
+[[map]]
+control = "right.encoder4"
+action = "deck.nudge"
+deck = 4
+amount = 2.0
+
 [[map]]
 control = "right.button.M"
 action = "view.explore"

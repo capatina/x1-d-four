@@ -50,6 +50,7 @@ pub enum ClientCommand {
     ExploreBack,
     ExploreFollow { follow: bool },
     ExploreRoot { id: String },
+    ExploreRootSelected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -176,6 +177,8 @@ impl App {
             explore: Default::default(),
         });
         app.reload_config();
+        // The tunnel is the main view; the decks are one button away.
+        app.set_view(true);
         app
     }
 
@@ -316,6 +319,7 @@ impl App {
             ClientCommand::ExploreBack => self.explore_back(),
             ClientCommand::ExploreFollow { follow } => self.explore_follow(Some(follow)),
             ClientCommand::ExploreRoot { id } => self.explore_root(&id)?,
+            ClientCommand::ExploreRootSelected => self.explore_root_selected()?,
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
@@ -360,6 +364,7 @@ impl App {
             Intent::ExploreDive => Ok(self.explore_dive(None)),
             Intent::ExploreBack => Ok(self.explore_back()),
             Intent::ExploreFollow => Ok(self.explore_follow(None)),
+            Intent::ExploreRootSelected => self.explore_root_selected(),
             Intent::ToggleView => Ok(self.set_view(self.view_name() == "decks")),
         };
         if let Err(e) = result {

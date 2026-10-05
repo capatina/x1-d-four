@@ -48,6 +48,7 @@ pub enum Action {
     ExploreBack,
     ExploreStep,
     ExploreFollow,
+    ExploreRoot,
     ViewExplore,
 }
 
@@ -73,6 +74,7 @@ impl Action {
             "explore.back" => Self::ExploreBack,
             "explore.step" => Self::ExploreStep,
             "explore.follow" => Self::ExploreFollow,
+            "explore.root" => Self::ExploreRoot,
             "view.explore" => Self::ViewExplore,
             other => bail!("unknown action {other:?}"),
         })
@@ -111,6 +113,8 @@ pub enum Intent {
     ExploreDive,
     ExploreBack,
     ExploreFollow,
+    /// Start the tree at the library selection.
+    ExploreRootSelected,
     ToggleView,
 }
 
@@ -168,6 +172,7 @@ impl Rule {
             (Action::ExploreStep, Delta(n)) if n > 0 => Intent::ExploreDive,
             (Action::ExploreStep, Delta(n)) if n < 0 => Intent::ExploreBack,
             (Action::ExploreFollow, Press) => Intent::ExploreFollow,
+            (Action::ExploreRoot, Press) => Intent::ExploreRootSelected,
             (Action::ViewExplore, Press) => Intent::ToggleView,
             _ => return None,
         })

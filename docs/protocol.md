@@ -171,7 +171,7 @@ The **aimed** child of `current` is also the library selection, so every "load s
 }
 ```
 
-`state` gains `view: "decks" | "explore"`. The mixer can switch views, so the UI must follow it.
+`state` gains `view: "decks" | "explore"`. The server starts in `"explore"`, the main view. The mixer can switch views, so the UI must follow it.
 
 ### Client → server
 
@@ -185,4 +185,5 @@ The **aimed** child of `current` is also the library selection, so every "load s
 { cmd: "explore_back" }                           // climb one step back up the path
 { cmd: "explore_follow", follow: boolean }
 { cmd: "explore_root", id: string }               // re-root on any library track (follow turns off)
+{ cmd: "explore_root_selected" }                  // re-root on the library selection (follow turns off)
 ```

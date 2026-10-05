@@ -308,6 +308,12 @@ impl App {
         Ok(())
     }
 
+    /// Start the tree at whatever the library selection is (the left jog scrolls it).
+    pub fn explore_root_selected(&self) -> Result<(), String> {
+        let selected = self.ui.lock().unwrap().selected.clone().ok_or("nothing selected in the library")?;
+        self.explore_root(&selected)
+    }
+
     fn with_tree(&self, reason: &str, f: impl FnOnce(&App, &AnalysisData, &mut Explorer, &HashSet<usize>) -> bool) {
         let Some(data) = self.data() else { return };
         let exclude = self.exclusions(&data);
