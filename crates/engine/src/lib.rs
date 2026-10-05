@@ -226,6 +226,10 @@ impl Rt {
     fn apply(&mut self, cmd: Command) {
         match cmd {
             Command::Load { deck, track } => {
+                // Every loaded track starts synced; the deck's sync button turns it off.
+                if track.is_some() {
+                    self.decks[deck].sync = true;
+                }
                 if let Some(old) = self.decks[deck].load(track) {
                     // If the queue is full the drop happens here; it never is in practice.
                     let _ = self.garbage.push(old);
@@ -504,12 +508,29 @@ mod tests {
     }
 
     #[test]
+    fn loads_switch_sync_on() {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        control.send(Command::Load { deck: 2, track: Some(grid_track(126.0, 0.0)) }).ok();
+        rt.render(&mut frames);
+        assert!(control.shared.deck(2).sync);
+        control.send(Command::Sync { deck: 2, on: Some(false) }).ok();
+        rt.render(&mut frames);
+        assert!(!control.shared.deck(2).sync);
+        control.send(Command::Load { deck: 2, track: Some(grid_track(128.0, 0.0)) }).ok();
+        rt.render(&mut frames);
+        assert!(control.shared.deck(2).sync, "the next load syncs again");
+    }
+
+    #[test]
     fn master_is_the_longest_playing_unsynced_deck() {
         let (mut control, mut rt) = new();
         for d in 0..3 {
             control.send(Command::Load { deck: d, track: Some(grid_track(124.0, 0.0)) }).ok();
         }
-        control.send(Command::Sync { deck: 0, on: Some(true) }).ok();
+        // Loads sync every deck; take decks 1 and 2 back off sync for this test.
+        control.send(Command::Sync { deck: 1, on: Some(false) }).ok();
+        control.send(Command::Sync { deck: 2, on: Some(false) }).ok();
         let mut frames = [[0; 8]; FRAMES_PER_PACKET];
         control.send(Command::Play { deck: 0 }).ok();
         rt.render(&mut frames);
