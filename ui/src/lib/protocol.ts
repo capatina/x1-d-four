@@ -1,4 +1,4 @@
-// Wire types for the ginkodeck server. Mirrors docs/protocol.md exactly;
+// Wire types for the X1 D. Four server. Mirrors docs/protocol.md exactly;
 // decks are 0..3 on the wire and shown to people as 1–4.
 
 export const DECK_COUNT = 4;

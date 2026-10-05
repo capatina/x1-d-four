@@ -1,5 +1,5 @@
 /**
- * Fake ginkodeck server for UI development: speaks docs/protocol.md on
+ * Fake X1 D. Four server for UI development: speaks docs/protocol.md on
  * http://127.0.0.1:7878 with made-up tracks, decks and MIDI, and serves
  * ui/dist when it exists. Not part of the production bundle.
  *
@@ -577,4 +577,4 @@ setInterval(() => {
   broadcast(stateMsg());
 }, 1000 / TICK_HZ);
 
-console.log(`ginkodeck mock on http://127.0.0.1:${server.port} (${tracks.length} tracks, device ${device.state})`);
+console.log(`X1 D. Four mock on http://127.0.0.1:${server.port} (${tracks.length} tracks, device ${device.state})`);

@@ -8,7 +8,7 @@
   import { DECK_COUNT } from './lib/protocol';
 
   const DECKS = Array.from({ length: DECK_COUNT }, (_, i) => i);
-  const MIDI_KEY = 'ginkodeck:midi-collapsed';
+  const MIDI_KEY = 'x1-d-four:midi-collapsed';
 
   let midiCollapsed = $state(readFlag(MIDI_KEY));
   $effect(() => writeFlag(MIDI_KEY, midiCollapsed));
@@ -109,7 +109,7 @@
     <div class="banner" role="alert">
       <span class="pip"></span>
       <span>
-        <b>{client.everConnected ? 'Lost connection to the ginkodeck server.' : "Can't reach the ginkodeck server."}</b>
+        <b>{client.everConnected ? 'Lost connection to the X1 D. Four server.' : "Can't reach the X1 D. Four server."}</b>
         {client.ws === 'connecting' ? 'Connecting…' : `Retrying in ${retryIn} s.`}
       </span>
       <button type="button" onclick={() => client.connect()}>Retry now</button>

@@ -27,7 +27,7 @@ const CONNECT_TIMEOUT_MS = 5000;
 const emptyDecks = (): (DeckInfo | null)[] => Array.from({ length: DECK_COUNT }, () => null);
 
 /**
- * Single connection to the ginkodeck server plus everything the UI renders.
+ * Single connection to the X1 D. Four server plus everything the UI renders.
  *
  * The 30 Hz `state` stream is coalesced to one update per animation frame and
  * lives in its own signal, so components that don't read it (the library

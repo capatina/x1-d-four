@@ -34,7 +34,7 @@
 </script>
 
 <header class="status" class:stale={client.ws !== 'open'}>
-  <span class="brand">GINKO<span>·</span>DECK</span>
+  <span class="brand">X1 D<span>·</span>FOUR</span>
 
   <span class="item device {tone}" title={device?.message ?? ''}>
     <span class="dot"></span>

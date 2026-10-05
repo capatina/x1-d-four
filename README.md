@@ -1,10 +1,12 @@
-# ginkodeck
+# X1 D. Four
 
 **Bare-metal decks for the Allen & Heath Xone:4D.** A userspace USB driver written in Rust, plus a browser UI: four decks playing into the mixer's four channels at 5 ms latency. No kernel module, no ALSA, no PipeWire, no libusb.
 
-![ginkodeck UI](docs/screenshot.png)
+*Unofficial: not affiliated with or endorsed by Allen & Heath.*
 
-The Xone:4D's built-in soundcard only has drivers for Windows and macOS. ginkodeck talks to its Ploytec USB chip directly through Linux usbfs. It renders each deck straight into the USB packets on a real-time thread, and the mixer's own knobs and buttons drive the decks.
+![X1 D. Four UI](docs/screenshot.png)
+
+The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. Four talks to its Ploytec USB chip directly through Linux usbfs. It renders each deck straight into the USB packets on a real-time thread, and the mixer's own knobs and buttons drive the decks.
 
 ## What you get
 
@@ -39,11 +41,11 @@ The repo ships a [`CLAUDE.md`](CLAUDE.md), so you can ask an AI coding agent for
 ## Quick start
 
 ```sh
-git clone https://github.com/capatina/ginkodeck && cd ginkodeck
+git clone https://github.com/capatina/x1-d-four && cd x1-d-four
 setup/install                              # udev rule: lets your user open the mixer (asks for your password once)
 (cd ui && bun install && bun run build)
 cargo build --release
-target/release/ginkodeck                    # then open http://127.0.0.1:7878
+target/release/x1-d-four                    # then open http://127.0.0.1:7878
 ```
 
 Set each channel's source switch on the mixer to **SC**. Load tracks from the library with the 1–4 buttons, or from the mixer. The default mapping is:
@@ -52,9 +54,9 @@ Set each channel's source switch on the mixer to **SC**. Load tracks from the li
 - the right lit buttons play/pause decks 1–4.
 
 Other commands:
-- `ginkodeck probe --pair 2`: plays a test tone into USB pair 2.
-- `ginkodeck serve --no-device`: runs the UI without hardware.
-- `ginkodeck release`: hands the mixer back to the kernel driver after a crash.
+- `x1-d-four probe --pair 2`: plays a test tone into USB pair 2.
+- `x1-d-four serve --no-device`: runs the UI without hardware.
+- `x1-d-four release`: hands the mixer back to the kernel driver after a crash.
 
 ### Rings that follow the decks
 
@@ -68,7 +70,7 @@ A long press on the left JOG/SELECT toggles the shift layer (**SFT** on the disp
 
 ## With the Ozzy kernel driver
 
-You don't need a kernel driver at all. If you also use [Ozzy](https://github.com/mischa85/Ozzy) (`snd-usb-ozzy`) for desktop audio, ginkodeck takes the mixer from it on start and gives it back on exit. Use a build with the unbind drain fix from [capatina/Ozzy@ginkomarchy](https://github.com/capatina/Ozzy/commits/ginkomarchy); an older build cuts its stream mid-packet when it lets go, and the 4D then needs a power cycle.
+You don't need a kernel driver at all. If you also use [Ozzy](https://github.com/mischa85/Ozzy) (`snd-usb-ozzy`) for desktop audio, X1 D. Four takes the mixer from it on start and gives it back on exit. Use a build with the unbind drain fix from [capatina/Ozzy@ginkomarchy](https://github.com/capatina/Ozzy/commits/ginkomarchy); an older build cuts its stream mid-packet when it lets go, and the 4D then needs a power cycle.
 
 ## How it works
 
@@ -91,7 +93,7 @@ Everything runs on one real-time thread and one file descriptor, with no event l
 |---|---|
 | `crates/ploytec` | the driver: usbfs ioctls, bring-up, packet codec, MIDI |
 | `crates/engine` | decks, track decoding (symphonia + rubato), the real-time renderer |
-| `crates/app` | the `ginkodeck` binary: server, library, control catalog, mappings |
+| `crates/app` | the `x1-d-four` binary: server, library, control catalog, mappings |
 | `ui/` | Svelte 5 + Vite, embedded in the binary |
 
 ## Credits
