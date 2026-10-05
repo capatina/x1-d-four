@@ -1,27 +1,26 @@
-/* Booth-dark theme: near-black base, raised cards a few steps lighter,
-   one neutral text ramp. Colour is reserved for decks and status. */
+/* Dark earth surfaces with warm, readable limestone text. */
 :root {
   color-scheme: dark;
 
-  --bg-0: #08090b;
-  --bg: #0b0d10;
-  --bg-1: #101317;
-  --bg-2: #14181d;
-  --bg-3: #1b2026;
-  --bg-4: #262c34;
-  --line: #222830;
-  --line-2: #2f3640;
+  --bg-0: #14211b;
+  --bg: #18271f;
+  --bg-1: #1d2e25;
+  --bg-2: #223329;
+  --bg-3: #2b3c30;
+  --bg-4: #39483a;
+  --line: #3c4c3a;
+  --line-2: #526049;
 
-  --text: #eef1f5;
-  --text-2: #aeb6c1;
-  --text-3: #727b87;
-  --text-4: #4a515b;
+  --text: #f1efdf;
+  --text-2: #d0d3bf;
+  --text-3: #aeb7a0;
+  --text-4: #75816b;
 
-  --ok: #3ddc84;
-  --warn: #ffb020;
-  --bad: #ff4d5e;
+  --ok: #b3c994;
+  --warn: #dfb975;
+  --bad: #e79e87;
   /* Keyboard focus + library selection: neutral cool white-blue, distinct from deck accents. */
-  --focus: #8fb4ff;
+  --focus: #e8d8a8;
 
   --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'JetBrains Mono', 'JetBrainsMono Nerd Font', 'SF Mono', 'Cascadia Mono', ui-monospace, Menlo,

@@ -1,562 +1,332 @@
 import * as THREE from 'three';
-import { BEND_GLSL } from './bend';
 
-/**
- * Scene pieces for the similarity tunnel. Every piece is a single draw call
- * (instanced where it repeats) and shares one uniform set, so a frame is about
- * six scene draws plus bloom.
- */
-
-export const TUNNEL_RADIUS = 10;
-export const TUNNEL_NEAR = -4;
-export const TUNNEL_FAR = 240;
-export const SPECTRUM_BINS = 64;
-
+/** Shared, mutable uniforms: every blade, tree and bank grows from the same ground. */
+export function makeShared() {
+  return {
+    uTime: { value: 0 }, uWind: { value: 0 }, uGrowth: { value: 0 },
+    uDay: { value: 0 }, uPlace: { value: 0 }, uBand: { value: 0 },
+    uLife: { value: 0 }, uMotion: { value: 1 },
+    uSpectrum: { value: new Float32Array(64) },
+    uDecks: { value: new THREE.Vector4() },
+  };
+}
 export type Shared = ReturnType<typeof makeShared>;
 
-export function makeShared(spectrum: THREE.DataTexture) {
-  return {
-    uTime: { value: 0 },
-    uTravel: { value: 0 },
-    uSeg: { value: 5 },
-    uBeatPulse: { value: 0 },
-    uFlow: { value: 0 },
-    uLow: { value: 0 },
-    uMid: { value: 0 },
-    uHigh: { value: 0 },
-    uKick: { value: 0 },
-    uFlash: { value: 1 },
-    uWarp: { value: 0 },
-    uHue: { value: 0 },
-    uFog: { value: 0.03 },
-    uRadius: { value: TUNNEL_RADIUS },
-    uColA: { value: new THREE.Color() },
-    uColB: { value: new THREE.Color() },
-    uHot: { value: new THREE.Color() },
-    uWaves: { value: [-1, -1, -1, -1] },
-    uBendS: { value: new THREE.Vector4() },
-    uBendC: { value: new THREE.Vector4() },
-    uBendAmt: { value: 1 },
-    uSpec: { value: spectrum },
-  };
-}
-
-const NOISE_GLSL = /* glsl */ `
-float hash12(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-float vnoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
-             mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
-}
+const common = /* glsl */`
+  uniform float uTime, uWind, uGrowth, uDay, uPlace, uBand, uLife, uMotion;
+  uniform float uSpectrum[64];
+  uniform vec4 uDecks;
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p) {
+    vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);
+  }
+  float river(float z) { return sin(z*.037+uPlace*.11)*7. + sin(z*.016-uPlace*.06)*9.; }
+  float widthAt(float z) { return 3.6+13.*smoothstep(-45.,32.,z); }
+  float ground(vec2 p) {
+    float d=abs(p.x-river(p.y));
+    vec2 q=p*.025+vec2(uPlace*.17, uPlace*.08);
+    float n=noise(q)*.65+noise(q*2.07)*.25+noise(q*4.1)*.1;
+    float banks=smoothstep(widthAt(p.y)-1.,widthAt(p.y)+8.,d);
+    float hills=smoothstep(14.,95.,d)*18.;
+    return -.48+banks*(.65+n*3.2)+n*hills;
+  }
+  vec3 haze() { return mix(vec3(.70,.75,.67),vec3(.76,.59,.41),uDay); }
+  vec3 earth(vec3 color, vec3 p) {
+    float fog=1.-exp(-max(0.,length(p-cameraPosition)-22.)*.007);
+    return mix(color*(1.-uDay*.18), haze(),fog);
+  }
 `;
 
-function additive(params: THREE.ShaderMaterialParameters): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    blending: THREE.AdditiveBlending,
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    ...params,
-  });
+function material(s: Shared, vertexShader: string, fragmentShader: string, extra: THREE.ShaderMaterialParameters = {}) {
+  return new THREE.ShaderMaterial({ uniforms: s, vertexShader: common + vertexShader,
+    fragmentShader: common + fragmentShader, ...extra });
 }
 
-// ---------------------------------------------------------------------------
-// Tunnel wall
+/** One seeded random stream at construction; animation never creates geometry. */
+export function random(seed: number) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
-export function makeTunnel(shared: Shared): THREE.Mesh {
-  const RS = 144; // around
-  const LS = 260; // along
-  const pos = new Float32Array((RS + 1) * (LS + 1) * 3);
-  let k = 0;
-  for (let j = 0; j <= LS; j++) {
-    for (let i = 0; i <= RS; i++) {
-      pos[k++] = i / RS;
-      pos[k++] = j / LS;
-      pos[k++] = 0;
+export function makeSky(s: Shared) {
+  return new THREE.Mesh(new THREE.SphereGeometry(370, 32, 16), material(s, /* glsl */`
+    varying vec3 vDir;
+    void main() { vDir=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }
+  `, /* glsl */`
+    varying vec3 vDir;
+    void main() {
+      vec3 d=normalize(vDir);
+      float y=max(0.,d.y);
+      vec3 zenith=mix(vec3(.24,.43,.51),vec3(.34,.37,.43),uDay);
+      vec3 col=mix(haze(),zenith,pow(y,.55));
+      vec3 sun=normalize(vec3(-.48,.32-uDay*.12,-.84));
+      float sd=distance(d,sun);
+      col+=vec3(.21,.16,.075)*exp(-sd*sd*16.);
+      col=mix(col,vec3(1.,.91,.66),1.-smoothstep(.018,.023,sd));
+      vec2 cp=d.xz/max(.12,d.y)*2.2+vec2(uTime*.002*uMotion,0.);
+      float clouds=noise(cp)*.65+noise(cp*2.8)*.35;
+      float cover=smoothstep(.52,.78,clouds)*smoothstep(.03,.25,y)*.38;
+      col=mix(col,vec3(.89,.87,.75),cover);
+      gl_FragColor=vec4(col,1.);
+    }
+  `, { side: THREE.BackSide, depthWrite: false }));
+}
+
+export function makeLand(s: Shared) {
+  const geo = new THREE.PlaneGeometry(560, 430, 180, 150);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, 0, -155);
+  return new THREE.Mesh(geo, material(s, /* glsl */`
+    varying vec3 vP, vN;
+    void main() {
+      vec3 p=position; p.y=ground(p.xz);
+      float dx=ground(p.xz+vec2(.4,0))-p.y;
+      float dz=ground(p.xz+vec2(0,.4))-p.y;
+      vN=normalize(vec3(-dx,.4,-dz)); vP=p;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+    }
+  `, /* glsl */`
+    varying vec3 vP, vN;
+    void main() {
+      float n=noise(vP.xz*.9)*.3+noise(vP.xz*.14)*.7;
+      vec3 dry=mix(vec3(.22,.255,.115),vec3(.48,.43,.22),n);
+      vec3 grove=mix(vec3(.12,.23,.135),vec3(.37,.43,.21),n);
+      vec3 wet=mix(vec3(.19,.28,.24),vec3(.43,.47,.31),n);
+      vec3 c=mix(mix(dry,grove,clamp(uBand,0.,1.)),wet,max(0.,uBand-1.));
+      float shore=1.-smoothstep(widthAt(vP.z),widthAt(vP.z)+2.,abs(vP.x-river(vP.z)));
+      c=mix(c,vec3(.38,.35,.24),shore*.6);
+      float light=.60+.40*max(0.,dot(vN,normalize(vec3(-.6,.7,.3))));
+      gl_FragColor=vec4(earth(c*light,vP),1.);
+    }
+  `));
+}
+
+export function makeWater(s: Shared) {
+  const geo = new THREE.PlaneGeometry(560, 430);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, -.05, -155);
+  return new THREE.Mesh(geo, material(s, /* glsl */`
+    varying vec3 vP;
+    void main() { vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }
+  `, /* glsl */`
+    varying vec3 vP;
+    void main() {
+      float t=uTime*uMotion;
+      float ripple=sin(vP.z*3.+sin(vP.x*1.7+t*.3)*1.4-t*.7)*.5+.5;
+      float fine=sin(vP.z*14.+sin(vP.x*2.1+t)*2.)*.5+.5;
+      vec3 c=mix(vec3(.14,.25,.24),haze()*.77,.3+ripple*.08);
+      float sun=exp(-pow((vP.x+12.)/(8.+max(0.,-vP.z)*.1),2.));
+      c+=vec3(.28,.21,.1)*pow(ripple*fine,5.)*sun;
+      gl_FragColor=vec4(earth(c,vP),1.);
+    }
+  `));
+}
+
+export function makeGrass(s: Shared, count = 44000) {
+  const r = random(43);
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([-.07,0,0, .07,0,0, -.04,.55,0, .04,.55,0, .03,1,0],3));
+  geo.setIndex([0,1,2, 1,3,2, 2,3,4]);
+  const offset = new Float32Array(count*4);
+  for (let i=0;i<count;i++) {
+    offset[i*4]=(r()-.5)*150;
+    offset[i*4+1]=30-r()*160;
+    offset[i*4+2]=.35+r()*.85;
+    offset[i*4+3]=r()*Math.PI*2;
+  }
+  geo.setAttribute('aBlade',new THREE.InstancedBufferAttribute(offset,4));
+  geo.instanceCount=count;
+  const mesh=new THREE.Mesh(geo,material(s, /* glsl */`
+    attribute vec4 aBlade;
+    varying vec3 vP;
+    varying float vY, vSeed;
+    void main() {
+      vec3 p=position;
+      float dist=abs(aBlade.x-river(aBlade.y));
+      float land=smoothstep(widthAt(aBlade.y)+.5,widthAt(aBlade.y)+2.8,dist);
+      float growth=.45+uGrowth*.75;
+      int bin=int(mod(aBlade.w*10.,64.));
+      float wind=sin(aBlade.x*.13+aBlade.y*.18+uTime*1.4)*.5+sin(aBlade.y*.4+uTime*2.)*.2;
+      float sway=wind*(.13+uWind*.55+uSpectrum[bin]*.10+uDecks[int(mod(aBlade.w,4.))]*.12)*uMotion;
+      p.x=position.x*cos(aBlade.w)+sway*position.y*position.y;
+      p.z=position.x*sin(aBlade.w)+sway*.3*position.y;
+      p.y*=aBlade.z*growth*land;
+      p+=vec3(aBlade.x,ground(aBlade.xy),aBlade.y);
+      vP=p; vY=position.y; vSeed=fract(aBlade.w*5.);
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+    }
+  `, /* glsl */`
+    varying vec3 vP;
+    varying float vY, vSeed;
+    void main() {
+      vec3 base=mix(vec3(.19,.26,.105),vec3(.45,.43,.19),vSeed);
+      base=mix(base,base*vec3(.7,1.04,.85),clamp(uBand,0.,1.));
+      base=mix(base,vec3(.34,.43,.28),max(0.,uBand-1.)*.5);
+      vec3 tip=mix(vec3(.65,.59,.32),vec3(.56,.63,.38),clamp(uBand,0.,1.));
+      gl_FragColor=vec4(earth(mix(base*.65,tip,vY*.7),vP),1.);
+    }
+  `,{side:THREE.DoubleSide}));
+  mesh.frustumCulled=false;
+  return mesh;
+}
+
+/** Small overlapping leaf sprays make porous, irregular crowns instead of solid blobs. */
+export function makeTrees(s: Shared) {
+  const r=random(711);
+  const trunks: number[]=[];
+  const leaves: number[]=[];
+  for (let i=0;i<105;i++) {
+    const z=10-r()*235, x=(i%2 ? 1 : -1)*(18+r()*95), h=3+r()*6;
+    trunks.push(x,z,h,r());
+    for(let j=0;j<180;j++) {
+      const angle=r()*Math.PI*2, vertical=r()*2-1, radius=Math.cbrt(r());
+      const spread=Math.sqrt(1-vertical*vertical)*radius;
+      leaves.push(x+Math.cos(angle)*spread*h*.43,z+Math.sin(angle)*spread*h*.35,h*(.78+vertical*radius*.36),.25+r()*.5);
     }
   }
-  const idx = new Uint32Array(RS * LS * 6);
-  k = 0;
-  for (let j = 0; j < LS; j++) {
-    for (let i = 0; i < RS; i++) {
-      const a = j * (RS + 1) + i;
-      const b = a + RS + 1;
-      idx.set([a, b, a + 1, a + 1, b, b + 1], k);
-      k += 6;
+  function mesh(base: THREE.BufferGeometry, values: number[], leaf: boolean) {
+    const geo=new THREE.InstancedBufferGeometry().copy(base as THREE.InstancedBufferGeometry);
+    base.dispose();
+    geo.setAttribute('aTree',new THREE.InstancedBufferAttribute(new Float32Array(values),4));
+    geo.instanceCount=values.length/4;
+    const m=new THREE.Mesh(geo,material(s, /* glsl */`
+      attribute vec4 aTree;
+      varying vec3 vP, vN;
+      varying float vSeed;
+      varying vec2 vUv;
+      void main() {
+        vec3 p=position; vUv=uv;
+        float growth=.85+uGrowth*.18;
+        vSeed=hash(aTree.xy);
+        ${leaf ? `
+          p*=aTree.w*growth;
+          p.xz=mat2(cos(vSeed*6.28),-sin(vSeed*6.28),sin(vSeed*6.28),cos(vSeed*6.28))*p.xz;
+          p.y+=aTree.z*growth;
+        ` : 'p.xz*=.10+aTree.z*.018; p.y=(p.y+.5)*aTree.z*growth;'}
+        p.x+=sin(uTime*.65+aTree.x)*.09*position.y*uWind*uMotion;
+        p+=vec3(aTree.x,ground(aTree.xy),aTree.y);
+        vP=p; vN=normal;
+        gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+      }
+    `, /* glsl */`
+      varying vec3 vP, vN;
+      varying float vSeed;
+      varying vec2 vUv;
+      void main() {
+        ${leaf ? `
+          vec2 uv=vUv*2.-1.;
+          if(dot(uv,uv)>.82+noise(uv*9.)*.18) discard;
+          vec3 c=mix(vec3(.13,.22,.11),vec3(.41,.44,.22),vSeed);
+          c=mix(c,c*vec3(.76,1.04,.87),clamp(uBand,0.,1.));
+          c=mix(c,vec3(.33,.41,.31),max(0.,uBand-1.)*.35);
+          c*=.75+.25*noise(vP.xz*3.);
+        ` : 'vec3 c=vec3(.24,.20,.14);'}
+        float light=.74+.26*max(0.,dot(vN,normalize(vec3(-.5,.8,.3))));
+        gl_FragColor=vec4(earth(c*light,vP),1.);
+      }
+    `,{side:leaf?THREE.DoubleSide:THREE.FrontSide}));
+    m.frustumCulled=false;
+    return m;
+  }
+  return [mesh(new THREE.CylinderGeometry(.7,1.3,1,7),trunks,false),mesh(new THREE.PlaneGeometry(2,1.8),leaves,true)];
+}
+
+/** Swallows and small meadow butterflies: articulated triangles, one draw per species. */
+export function makeLife(s: Shared, butterfly: boolean) {
+  const r=random(butterfly ? 82 : 29);
+  const n=butterfly ? 65 : 24;
+  const geo=new THREE.InstancedBufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute([
+    0,0,.25, -.9,0,-.1, -.35,0,.25, 0,0,.25, .35,0,.25, .9,0,-.1,
+  ],3));
+  const a=new Float32Array(n*4);
+  for(let i=0;i<n;i++) { a[i*4]=(r()-.5)*95; a[i*4+1]=-r()*110; a[i*4+2]=r(); a[i*4+3]=i/n; }
+  geo.setAttribute('aLife',new THREE.InstancedBufferAttribute(a,4));
+  geo.instanceCount=n;
+  const m=new THREE.Mesh(geo,material(s, /* glsl */`
+    attribute vec4 aLife;
+    varying vec3 vP;
+    varying float vSeed;
+    void main() {
+      float t=uTime*uMotion;
+      float visible=smoothstep(aLife.w,aLife.w+.16,uLife);
+      vec3 p=position*${butterfly ? '.15' : '.48'}*visible;
+      p.y+=sin(t*${butterfly ? '14.' : '5.'}+aLife.z*40.)*abs(p.x)*.7;
+      float angle=t*${butterfly ? '.18' : '.05'}+aLife.z*6.28;
+      p.xz=mat2(cos(angle),-sin(angle),sin(angle),cos(angle))*p.xz;
+      p.x+=aLife.x+sin(angle)*${butterfly ? '2.' : '14.'};
+      p.z+=aLife.y+cos(angle)*${butterfly ? '2.' : '10.'};
+      p.y+=${butterfly ? 'ground(p.xz)+1.5+sin(t*.7+aLife.z*9.)*.5' : '12.+aLife.z*14.+sin(angle)*2.'};
+      vP=p; vSeed=aLife.z;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
     }
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
-
-  const mat = new THREE.ShaderMaterial({
-    side: THREE.DoubleSide,
-    depthTest: false,
-    depthWrite: false,
-    uniforms: {
-      ...shared,
-      uNear: { value: TUNNEL_NEAR },
-      uFar: { value: TUNNEL_FAR },
-    },
-    vertexShader: /* glsl */ `
-      ${BEND_GLSL}
-      uniform float uRadius;
-      uniform float uNear;
-      uniform float uFar;
-      uniform float uLow;
-      uniform float uKick;
-      uniform float uFlash;
-      uniform float uWaves[4];
-      varying float vAng;
-      varying float vD;
-      void main() {
-        float ang = position.x * 6.2831853;
-        float d = mix(uNear, uFar, pow(position.y, 1.7));
-        float nearW = exp(-max(d, 0.0) * 0.045);
-        // Low band squeezes the tube: pressure on the kick.
-        float r = uRadius * (1.0 - (uLow * 0.085 + uKick * 0.05 * uFlash) * nearW);
-        for (int i = 0; i < 4; i++) {
-          float w = uWaves[i];
-          if (w >= 0.0) r += 0.45 * exp(-pow((d - w) * 0.35, 2.0)) * exp(-w * 0.015);
-        }
-        vec2 off = bend(d);
-        vec3 p = vec3(cos(ang) * r + off.x, sin(ang) * r + off.y, -d);
-        vAng = position.x;
-        vD = d;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${NOISE_GLSL}
-      uniform float uTime;
-      uniform float uTravel;
-      uniform float uSeg;
-      uniform float uBeatPulse;
-      uniform float uLow;
-      uniform float uMid;
-      uniform float uHigh;
-      uniform float uKick;
-      uniform float uFlash;
-      uniform float uWarp;
-      uniform float uHue;
-      uniform float uFog;
-      uniform float uWaves[4];
-      uniform vec3 uColA;
-      uniform vec3 uColB;
-      uniform vec3 uHot;
-      varying float vAng;
-      varying float vD;
-
-      float lineW(float x, float fw, float px) {
-        float f = abs(fract(x + 0.5) - 0.5);
-        return 1.0 - smoothstep(0.0, max(fw, 1e-4) * px, f);
-      }
-
-      void main() {
-        float d = max(vD, 0.0);
-        float s = d + uTravel;
-        // One ring per beat; every fourth (the bar) burns brighter.
-        float beatPos = s / uSeg;
-        float ringId = floor(beatPos + 0.5);
-        float bar = 1.0 - step(0.5, mod(ringId, 4.0));
-        float ring = lineW(beatPos, fwidth(beatPos), 1.4);
-        float halo = exp(-abs(fract(beatPos + 0.5) - 0.5) * uSeg * 1.4);
-
-        // Ribs along the tube (seam-safe derivative).
-        float ra = vAng * 36.0;
-        float rfw = min(fwidth(ra), fwidth(fract(vAng + 0.5) * 36.0));
-        float rib = lineW(ra, rfw, 0.9);
-
-        float a = vAng * 6.2831853;
-        // Mid band: hue drifts around the tube.
-        float m = 0.5 + 0.5 * sin(a * 2.0 + uHue + s * 0.011);
-        vec3 col = mix(uColA, uColB, m);
-
-        float neb = vnoise(vec2(cos(a) * 3.2 + s * 0.035, sin(a) * 3.2 - s * 0.021));
-        neb *= neb;
-
-        float fog = exp(-d * uFog);
-        float nearFade = smoothstep(1.5, 11.0, d);
-        float energy = 0.35 + 0.65 * uLow;
-
-        // Mostly black: thin lines carry the light, haze stays faint.
-        vec3 c = col * ring * (0.22 + 0.8 * bar) * (energy + 0.6 * uBeatPulse);
-        c += col * halo * 0.010 * (1.0 + 2.0 * bar) * (0.5 + uLow);
-        c += col * rib * 0.04 * (0.45 + 0.8 * uMid);
-        c += col * neb * 0.03 * (0.3 + 0.9 * uMid);
-
-        // Onsets send a ring of light down the tube.
-        for (int i = 0; i < 4; i++) {
-          float w = uWaves[i];
-          if (w >= 0.0) {
-            float x = (d - w) * 1.1;
-            c += mix(col, uHot, 0.4) * exp(-x * x) * 0.4 * exp(-(w - 18.0) * 0.02) * (0.35 + 0.65 * uFlash);
-          }
-        }
-
-        // High band: sparkle grain on the walls.
-        vec2 g = vec2(vAng * 300.0, s * 2.2);
-        float h = hash12(floor(g) + floor(uTime * 18.0) * vec2(7.0, 3.0));
-        float sp = smoothstep(1.0 - (0.0015 + 0.03 * uHigh * uHigh), 1.0, h);
-        // Round glints (cells are ~0.21 x 0.45 units), only once they're small on screen.
-        vec2 f = (fract(g) - 0.5) * vec2(0.21, 0.45);
-        sp *= (1.0 - smoothstep(0.02, 0.09, length(f))) * smoothstep(16.0, 34.0, d);
-        c += uHot * sp * (0.2 + 2.2 * uHigh);
-
-        c *= 1.0 + uKick * uFlash * 0.35 + uWarp * 1.2;
-        c *= fog * nearFade;
-        gl_FragColor = vec4(c, 1.0);
-      }
-    `,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 0;
-  return mesh;
+  `, /* glsl */`
+    varying vec3 vP; varying float vSeed;
+    void main() { gl_FragColor=vec4(earth(${butterfly ? 'mix(vec3(.81,.62,.3),vec3(.91,.84,.61),vSeed)' : 'vec3(.12,.16,.14)'},vP),1.); }
+  `,{side:THREE.DoubleSide}));
+  m.frustumCulled=false;
+  return m;
 }
 
-// ---------------------------------------------------------------------------
-// Sparks: instanced streaks riding the walls, lit by the high band
-
-export function makeSparks(shared: Shared, count: number): THREE.Mesh {
-  const base = new THREE.PlaneGeometry(2, 2);
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.index = base.index;
-  geo.setAttribute('position', base.getAttribute('position'));
-  const seeds = new Float32Array(count * 4);
-  let r = 0x9e3779b9;
-  const rnd = () => {
-    r ^= r << 13;
-    r ^= r >>> 17;
-    r ^= r << 5;
-    return (r >>> 0) / 4294967296;
-  };
-  for (let i = 0; i < count; i++) seeds.set([rnd(), Math.sqrt(rnd()), rnd(), 0.4 + rnd() * 0.9], i * 4);
-  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 4));
-  geo.instanceCount = count;
-
-  const mat = additive({
-    uniforms: shared,
-    vertexShader: /* glsl */ `
-      ${BEND_GLSL}
-      attribute vec4 aSeed;
-      uniform float uTravel;
-      uniform float uTime;
-      uniform float uRadius;
-      uniform float uWarp;
-      uniform float uHigh;
-      varying vec2 vUv;
-      varying float vI;
-      void main() {
-        float L = 150.0;
-        float d = mod(aSeed.z * L - uTravel * (0.5 + aSeed.w), L) - 3.0;
-        float ang = aSeed.x * 6.2831853 + uTime * 0.025 * (aSeed.w - 0.9);
-        float r = uRadius * mix(0.5, 0.94, aSeed.y);
-        vec2 off = bend(d);
-        vec2 dir = vec2(cos(ang), sin(ang));
-        vec2 tang = vec2(-dir.y, dir.x);
-        float len = 0.5 + 0.9 * aSeed.w + abs(uWarp) * 9.0;
-        float wid = 0.012 + 0.012 * aSeed.y;
-        vec3 p = vec3(dir * r + off + tang * position.x * wid, -d + position.y * len);
-        vUv = position.xy;
-        float tw = 0.5 + 0.5 * sin(uTime * (2.5 + aSeed.w * 6.0) + aSeed.x * 40.0);
-        vI = (0.04 + uHigh * 1.1 * tw + abs(uWarp) * 0.7) * exp(-max(d, 0.0) * 0.03) * smoothstep(4.0, 16.0, d);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uColB;
-      uniform vec3 uHot;
-      varying vec2 vUv;
-      varying float vI;
-      void main() {
-        float a = exp(-vUv.x * vUv.x * 6.0) * (1.0 - abs(vUv.y));
-        gl_FragColor = vec4(mix(uColB, uHot, 0.65) * a * vI, 1.0);
-      }
-    `,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 1;
-  return mesh;
+/** The tree's edges are pale worn paths, its nodes river-stone cairns. */
+export function makePlaces(s: Shared, capacity: number) {
+  const stones=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1,1),material(s, /* glsl */`
+    varying vec3 vP, vN;
+    void main() {
+      vec3 p=(instanceMatrix*vec4(position,1.)).xyz;
+      p.y+=ground(p.xz)+.12; vP=p; vN=normal;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+    }
+  `, /* glsl */`
+    varying vec3 vP,vN;
+    void main() {
+      vec3 c=vec3(.56,.52,.38)*(.72+.28*max(0.,dot(vN,normalize(vec3(-.5,.8,.3)))));
+      gl_FragColor=vec4(earth(c,vP),1.);
+    }
+  `),capacity*3);
+  stones.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  stones.frustumCulled=false; stones.count=0;
+  const pathGeo=new THREE.BufferGeometry();
+  const positions=new Float32Array(capacity*24*6*3);
+  const strengths=new Float32Array(capacity*24*6);
+  pathGeo.setAttribute('position',new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
+  pathGeo.setAttribute('aStrength',new THREE.BufferAttribute(strengths,1).setUsage(THREE.DynamicDrawUsage));
+  const paths=new THREE.Mesh(pathGeo,material(s, /* glsl */`
+    attribute float aStrength; varying vec3 vP; varying float vStrength;
+    void main() {
+      vec3 p=position; p.y=ground(p.xz)+.035; vP=p; vStrength=aStrength;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+    }
+  `, /* glsl */`
+    varying vec3 vP; varying float vStrength;
+    void main() {
+      float n=noise(vP.xz*3.);
+      vec3 c=mix(vec3(.36,.36,.23),vec3(.73,.64,.39),vStrength)*(.85+n*.15);
+      gl_FragColor=vec4(earth(c,vP),1.);
+    }
+  `,{side:THREE.DoubleSide}));
+  paths.frustumCulled=false; pathGeo.setDrawRange(0,0);
+  return { stones, paths, positions, strengths };
 }
 
-// ---------------------------------------------------------------------------
-// Spectrum ring at the tunnel mouth: 64 bins mirrored, bass at the bottom
-
-export const MOUTH_DEPTH = 19;
-
-export function makeSpectrumRing(shared: Shared): THREE.Mesh {
-  const base = new THREE.PlaneGeometry(2, 2);
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.index = base.index;
-  geo.setAttribute('position', base.getAttribute('position'));
-  const bars = new Float32Array(SPECTRUM_BINS * 2 * 2);
-  for (let i = 0; i < SPECTRUM_BINS; i++) {
-    bars.set([i, 1], i * 4);
-    bars.set([i, -1], i * 4 + 2);
-  }
-  geo.setAttribute('aBar', new THREE.InstancedBufferAttribute(bars, 2));
-  geo.instanceCount = SPECTRUM_BINS * 2;
-
-  const mat = additive({
-    uniforms: { ...shared, uMouth: { value: MOUTH_DEPTH }, uBarLen: { value: 2.3 } },
-    vertexShader: /* glsl */ `
-      ${BEND_GLSL}
-      attribute vec2 aBar;
-      uniform sampler2D uSpec;
-      uniform float uRadius;
-      uniform float uMouth;
-      uniform float uBarLen;
-      varying vec2 vUv;
-      varying float vLevel;
-      void main() {
-        float bin = aBar.x;
-        float level = texture2D(uSpec, vec2((bin + 0.5) / 64.0, 0.5)).r;
-        float ang = -1.5707963 + aBar.y * 3.14159265 * (bin + 0.5) / 64.0;
-        vec2 dir = vec2(cos(ang), sin(ang));
-        vec2 tang = vec2(-dir.y, dir.x);
-        float outer = uRadius * 0.9;
-        float len = 0.05 + level * uBarLen;
-        float t = position.y * 0.5 + 0.5;
-        float wid = 3.14159265 * outer / 64.0 * 0.3;
-        vec2 xy = dir * (outer - t * len) + tang * position.x * wid;
-        vUv = vec2(position.x, t);
-        vLevel = level;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(xy + bend(uMouth), -uMouth, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uColA;
-      uniform vec3 uColB;
-      uniform vec3 uHot;
-      varying vec2 vUv;
-      varying float vLevel;
-      void main() {
-        float side = exp(-vUv.x * vUv.x * 2.5);
-        vec3 col = mix(mix(uColA, uColB, vUv.y), uHot, vUv.y * vLevel * 0.7);
-        float I = side * (0.12 + 1.25 * vLevel) * (0.3 + 0.7 * vUv.y);
-        gl_FragColor = vec4(col * I, 1.0);
-      }
-    `,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 2;
-  return mesh;
+// CPU counterpart only used for label placement (a handful of points, at 20 Hz).
+function fract(v: number) { return v-Math.floor(v); }
+function groundHash(a: number,b: number) { return fract(Math.sin(a*127.1+b*311.7)*43758.5453); }
+function groundNoise(a: number,b: number) {
+  const i=Math.floor(a),j=Math.floor(b); let f=fract(a),g=fract(b);
+  f=f*f*(3-2*f);g=g*g*(3-2*g);
+  return (groundHash(i,j)*(1-f)+groundHash(i+1,j)*f)*(1-g)+(groundHash(i,j+1)*(1-f)+groundHash(i+1,j+1)*f)*g;
 }
-
-// ---------------------------------------------------------------------------
-// Trails: camera-facing ribbons along quadratic curves, one instance each
-
-export const TRAIL_SEGMENTS = 36;
-
-export type Trails = {
-  mesh: THREE.Mesh;
-  geo: THREE.InstancedBufferGeometry;
-  a: THREE.InstancedBufferAttribute;
-  b: THREE.InstancedBufferAttribute;
-  c: THREE.InstancedBufferAttribute;
-  style: THREE.InstancedBufferAttribute;
-  capacity: number;
-};
-
-export function makeTrails(shared: Shared, capacity: number): Trails {
-  const n = TRAIL_SEGMENTS;
-  const seg = new Float32Array((n + 1) * 2 * 2);
-  for (let i = 0; i <= n; i++) {
-    seg.set([i / n, -1, i / n, 1], i * 4);
-  }
-  const idx: number[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = i * 2;
-    idx.push(a, a + 1, a + 2, a + 2, a + 1, a + 3);
-  }
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.setIndex(idx);
-  // three needs a `position` attribute to size the draw; the shader ignores it.
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((n + 1) * 2 * 3), 3));
-  geo.setAttribute('aSeg', new THREE.BufferAttribute(seg, 2));
-  const dyn = (size: number) => {
-    const attr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * size), size);
-    attr.setUsage(THREE.DynamicDrawUsage);
-    return attr;
-  };
-  const a = dyn(3);
-  const b = dyn(3);
-  const c = dyn(3);
-  const style = dyn(4);
-  geo.setAttribute('aA', a);
-  geo.setAttribute('aB', b);
-  geo.setAttribute('aC', c);
-  geo.setAttribute('aStyle', style);
-  geo.instanceCount = 0;
-
-  const mat = additive({
-    uniforms: shared,
-    vertexShader: /* glsl */ `
-      attribute vec2 aSeg;
-      attribute vec3 aA;
-      attribute vec3 aB;
-      attribute vec3 aC;
-      attribute vec4 aStyle;
-      varying float vT;
-      varying float vSide;
-      varying vec4 vStyle;
-      varying float vD;
-      void main() {
-        float t = aSeg.x;
-        vec3 p = mix(mix(aA, aB, t), mix(aB, aC, t), t);
-        vec3 tg = 2.0 * (1.0 - t) * (aB - aA) + 2.0 * t * (aC - aB);
-        vec3 toCam = cameraPosition - p;
-        vec3 n = cross(tg, toCam);
-        n = n / max(length(n), 1e-5);
-        float w = aStyle.x * smoothstep(0.0, 0.15, t) * mix(1.0, 0.8, t);
-        p += n * w * aSeg.y;
-        vT = t;
-        vSide = aSeg.y;
-        vStyle = aStyle;
-        vD = -p.z;
-        gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform float uFlow;
-      uniform vec3 uColA;
-      uniform vec3 uColB;
-      uniform vec3 uHot;
-      varying float vT;
-      varying float vSide;
-      varying vec4 vStyle;
-      varying float vD;
-      void main() {
-        float edge = 1.0 - abs(vSide);
-        edge *= edge;
-        // A pulse runs out along every branch on each beat.
-        float flow = pow(fract(vT * 1.5 - uFlow + vStyle.z), 8.0);
-        float ends = smoothstep(0.0, 0.12, vT) * (1.0 - smoothstep(0.86, 1.0, vT));
-        float fog = exp(-max(vD - 12.0, 0.0) * 0.03);
-        vec3 col = mix(uColA, uColB, 0.25 + 0.5 * vStyle.z);
-        vec3 c = mix(col, uHot, 0.15 + flow * 0.6) * edge * (0.45 + 1.8 * flow) * ends * vStyle.y * fog;
-        gl_FragColor = vec4(c, 1.0);
-      }
-    `,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 3;
-  return { mesh, geo, a, b, c, style, capacity };
-}
-
-// ---------------------------------------------------------------------------
-// Portals: instanced, camera-facing glowing gates (and soft glow blobs)
-
-export type Portals = {
-  mesh: THREE.Mesh;
-  geo: THREE.InstancedBufferGeometry;
-  pos: THREE.InstancedBufferAttribute;
-  style: THREE.InstancedBufferAttribute;
-  tint: THREE.InstancedBufferAttribute;
-  capacity: number;
-};
-
-export function makePortals(shared: Shared, capacity: number): Portals {
-  const base = new THREE.PlaneGeometry(2, 2);
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.index = base.index;
-  geo.setAttribute('position', base.getAttribute('position'));
-  const dyn = (size: number) => {
-    const attr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * size), size);
-    attr.setUsage(THREE.DynamicDrawUsage);
-    return attr;
-  };
-  const pos = dyn(3);
-  const style = dyn(4);
-  const tint = dyn(4);
-  geo.setAttribute('aPos', pos);
-  geo.setAttribute('aStyle', style);
-  geo.setAttribute('aTint', tint);
-  geo.instanceCount = 0;
-
-  const mat = additive({
-    uniforms: shared,
-    vertexShader: /* glsl */ `
-      attribute vec3 aPos;
-      attribute vec4 aStyle;
-      attribute vec4 aTint;
-      varying vec2 vUv;
-      varying vec4 vStyle;
-      varying vec4 vTint;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(aPos, 1.0);
-        mv.xy += position.xy * aStyle.x;
-        vUv = position.xy;
-        vStyle = aStyle;
-        vTint = aTint;
-        gl_Position = projectionMatrix * mv;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform float uTime;
-      uniform float uBeatPulse;
-      uniform vec3 uColA;
-      uniform vec3 uColB;
-      uniform vec3 uHot;
-      uniform sampler2D uSpec;
-      varying vec2 vUv;
-      varying vec4 vStyle;
-      varying vec4 vTint;
-      void main() {
-        float r = length(vUv);
-        float opacity = vStyle.y;
-        float aimed = vStyle.z;
-        float hover = vStyle.w;
-        float sim = vTint.x;
-        vec3 col = mix(uColA, uColB, vTint.z);
-        if (vTint.y > 0.5) {
-          // Soft glow blob (light at the end of the tunnel).
-          float g = max(0.0, 1.0 - r * r);
-          gl_FragColor = vec4(col * g * g * g * opacity, 1.0);
-          return;
-        }
-        float ang = atan(vUv.y, vUv.x);
-        // Spectrum around the rim, mirrored, bass at the bottom.
-        float u = abs(ang + 1.5707963);
-        if (u > 3.14159265) u = 6.2831853 - u;
-        u /= 3.14159265;
-        float spec = texture2D(uSpec, vec2(0.02 + u * 0.96, 0.5)).r;
-        float R = 0.62 + aimed * (0.015 * uBeatPulse + spec * 0.075);
-        float dr = abs(r - R);
-        float aa = fwidth(r) * 1.25;
-        float thick = mix(0.010, 0.016, aimed) + 0.006 * sim;
-        float core = 1.0 - smoothstep(thick, thick + aa, dr);
-        float glow = exp(-dr * mix(15.0, 8.5, aimed));
-        float inner = 1.0 - smoothstep(0.003, 0.003 + aa, abs(r - (R - 0.085)));
-        float veil = (1.0 - smoothstep(0.0, R, r)) * (0.55 + 0.45 * sin(r * 34.0 - uTime * 2.2 + vTint.w * 6.0));
-        float tickR = R + 0.12;
-        float dash = step(0.45, fract(ang / 6.2831853 * 48.0 + uTime * 0.035));
-        float tick = (1.0 - smoothstep(0.006, 0.006 + aa, abs(r - tickR))) * dash * aimed;
-
-        float bright = (0.5 + 0.55 * sim) * (1.0 + 0.45 * aimed + 0.45 * hover);
-        vec3 hot = mix(col, uHot, 0.22 + 0.3 * aimed + 0.25 * hover);
-        vec3 c = hot * core * 1.15 * bright;
-        c += col * glow * 0.13 * bright;
-        c += col * inner * 0.32 * bright * (1.0 - 0.6 * aimed);
-        c += col * veil * (0.006 + 0.012 * aimed + 0.03 * hover);
-        c += hot * tick * 0.9;
-        c *= 1.0 - smoothstep(0.82, 1.0, r);
-        gl_FragColor = vec4(c * opacity, 1.0);
-      }
-    `,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 4;
-  return { mesh, geo, pos, style, tint, capacity };
+function smooth(a: number,b: number,v: number) {const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);}
+export function groundHeight(x: number,z: number,place: number) {
+  const river=Math.sin(z*.037+place*.11)*7+Math.sin(z*.016-place*.06)*9;
+  const d=Math.abs(x-river),w=3.6+13*smooth(-45,32,z);
+  const qx=x*.025+place*.17,qz=z*.025+place*.08;
+  const n=groundNoise(qx,qz)*.65+groundNoise(qx*2.07,qz*2.07)*.25+groundNoise(qx*4.1,qz*4.1)*.1;
+  return -.48+smooth(w-1,w+8,d)*(.65+n*3.2)+n*smooth(14,95,d)*18;
 }

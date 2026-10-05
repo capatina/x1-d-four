@@ -138,13 +138,13 @@
     padding: 8px 8px 6px;
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: var(--radius);
-    background: rgba(6, 7, 10, 0.55);
+    background: rgba(25, 40, 31, 0.70);
     backdrop-filter: blur(6px);
   }
   svg {
     display: block;
-    width: 184px;
-    height: 184px;
+    width: 132px;
+    height: 132px;
     overflow: visible;
   }
   .guide {

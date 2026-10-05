@@ -26,15 +26,6 @@
   let stats = $state.raw<EngineStats | null>(null);
   let waveMs = $state(0);
   const showStats = new URLSearchParams(location.search).has('stats');
-  /**
-   * The tunnel is centred between this top inset and the bottom HUD. Less than
-   * the top bar's height: the bar hugs the left edge, the tunnel's top label
-   * sits in the middle.
-   */
-  const TOP_INSET = 40;
-  /** The footer's distance from the bottom edge (.bottom). */
-  const BOTTOM_GAP = 14;
-
   const ex = $derived(client.explore);
   const band = $derived<Band>(ex?.band ?? 'low');
   const pal = $derived(bandPalette(band));
@@ -141,11 +132,7 @@
     return () => root.removeProperty('--explore-bottom');
   });
 
-  // Centre the tunnel in the space between the top bar and the bottom HUD
-  // (waveforms, legend, decks), so the aimed label clears the waveforms.
-  $effect(() => {
-    engine?.setViewShift(bottomH > 0 ? (bottomH + BOTTOM_GAP - TOP_INSET) / 2 : 0);
-  });
+  $effect(() => { engine?.setBottomInset(bottomH + 14); });
 
   function setBand(b: Band) {
     client.send({ cmd: 'explore_band', band: b });
@@ -158,7 +145,7 @@
   style:--band-a={pal.a}
   style:--band-b={pal.b}
   role="application"
-  aria-label="Explore: similarity tunnel"
+  aria-label="Explore: living river valley"
 >
   <div class="stage">
     <canvas bind:this={canvas} aria-hidden="true"></canvas>
@@ -199,7 +186,7 @@
         <b>{fmtBpm(bpm) || '—'}</b><small>BPM</small>
       </span>
       {#if analysis?.running}
-        <span class="chip analysis" title="Analysing the library: portals appear as tracks are analysed">
+        <span class="chip analysis" title="Analysing the library: paths appear as tracks are analysed">
           <span class="k">Analysing</span>
           <b>{analysis.done}<small>/{analysis.total}</small></b>
           <span class="meter"><span style:transform="scaleX({analysis.total ? analysis.done / analysis.total : 0})"></span></span>
@@ -230,6 +217,17 @@
     {/if}
   </header>
 
+  {#if hasRoot}
+    <div class="place-name" aria-live="polite">
+      <span>EXPLORE / {pal.detail}</span>
+      <h1>{pal.place}</h1>
+      <p>{children.length} paths from here <i>·</i> let the music lead</p>
+      {#if (ex?.path.length ?? 0) > 1}
+        <button type="button" class="upstream" onclick={() => client.send({ cmd: 'explore_back' })}>← Upstream</button>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Top-right: tree + way out -->
   <aside class="side">
     <div
@@ -245,9 +243,8 @@
     {/if}
     {#if showStats && stats}
       <div class="stats">
-        {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr}{stats.bloom
-          ? ' · bloom'
-          : ''} · wave {waveMs.toFixed(2)} ms
+        {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr.toFixed(2)} · world {stats.frameMs.toFixed(2)} ms · wave {waveMs.toFixed(2)} ms
+        <span class="growth">growth {Math.round(stats.growth * 100)}% · evening {Math.round(stats.day * 100)}%</span>
       </div>
     {/if}
   </aside>
@@ -258,7 +255,7 @@
   <!-- Empty / waiting states -->
   {#if failed}
     <div class="center">
-      <p class="big">The tunnel needs WebGL</p>
+      <p class="big">The landscape needs WebGL</p>
       <p class="sub">{failed}</p>
       {#if children.length}
         <ul class="fallback">
@@ -277,7 +274,7 @@
   {:else if !hasRoot}
     <div class="center">
       <p class="big">Load a track onto the focused deck</p>
-      <p class="sub">The tunnel grows from the focused deck's track, in the {pal.label.toLowerCase()} band.</p>
+      <p class="sub">The valley grows from the focused deck's track, in the {pal.label.toLowerCase()} band.</p>
       <div class="actions">
         {#if selected}
           <button type="button" class="primary" onclick={() => client.send({ cmd: 'explore_root', id: selected })}>
@@ -293,7 +290,7 @@
   {:else if children.length === 0}
     <div class="center">
       {#if analysis?.running}
-        <p class="sub">Analysing the library… portals appear as tracks are analysed.</p>
+        <p class="sub">Analysing the library… paths appear as tracks are analysed.</p>
       {:else}
         <p class="sub">
           No similar tracks here yet.
@@ -317,7 +314,7 @@
     inset: 0;
     z-index: 15;
     overflow: hidden;
-    background: #000;
+    background: #25392e;
     color: var(--text);
     user-select: none;
     -webkit-user-select: none;
@@ -342,137 +339,44 @@
   .vignette {
     pointer-events: none;
     background:
-      radial-gradient(ellipse 75% 70% at 50% 48%, transparent 55%, rgba(0, 0, 0, 0.55) 100%),
-      linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent 150px);
+      linear-gradient(to bottom, #14291fd9, #172b1c00 130px),
+      linear-gradient(to top, #14251ef5, #1b3028b0 140px, transparent 32%);
   }
 
-  /* Labels are created by the engine, so they're styled globally under .labels. */
+  .place-name { position: absolute; top: 18%; left: 3.4%; pointer-events: none; color: #f0edda; text-shadow: 0 2px 18px #26393070; }
+  .place-name > span { font-size: 10px; letter-spacing: .19em; text-transform: uppercase; }
+  .place-name h1 { margin: 8px 0; font: 400 clamp(32px, 3.2vw, 58px)/1.08 Georgia, serif; letter-spacing: -.04em; }
+  .place-name p { margin: 10px 0; font-size: 12px; color: #e3e4cc; }
+  .place-name i { margin: 0 8px; font-style: normal; }
+  .upstream { pointer-events: auto; margin-top: 12px; padding: 6px 10px; border: 1px solid #dedbb966; background: #1b3028cc; color: #eee9d3; font-size: 12px; cursor: pointer; }
+  .growth { display: block; opacity: .8; }
   .labels :global(.xl) {
-    position: absolute;
-    left: 0;
-    top: 0;
-    max-width: 240px;
-    pointer-events: auto;
-    cursor: pointer;
-    will-change: transform, opacity;
-    text-shadow:
-      0 1px 2px rgba(0, 0, 0, 0.9),
-      0 0 12px rgba(0, 0, 0, 0.8);
+    position: absolute; left: 0; top: 0; padding: 10px 12px 12px;
+    border: 0; border-top: 1px solid #e9ddaf45; border-radius: 0;
+    color: #f3efdc; background: linear-gradient(#1f2c25c9, #1f2c259c);
+    text-align: center; pointer-events: auto; cursor: pointer;
+    box-shadow: 0 5px 20px #1b281c14;
   }
-  .labels :global(.xl[data-align='left']) {
-    text-align: left;
+  .labels :global(.xl)::after {
+    content: ''; position: absolute; height: 19px; width: 1px;
+    top: 100%; left: 50%; background: #e6d8a788;
   }
-  .labels :global(.xl[data-align='right']) {
-    text-align: right;
-  }
-  .labels :global(.xl[data-align='center']) {
-    text-align: center;
-  }
-  .labels :global(.xl-t),
-  .labels :global(.xl-a) {
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-  .labels :global(.xl-t) {
-    font: 620 14px/1.25 var(--font-ui);
-    color: var(--text);
-  }
-  .labels :global(.xl-a) {
-    font-size: 12px;
-    line-height: 1.3;
-    color: var(--text-2);
-  }
-  .labels :global(.xl-m) {
-    display: flex;
-    gap: 8px;
-    margin-top: 3px;
-    font: 600 11px/1.4 var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    color: var(--text-2);
-  }
-  .labels :global(.xl[data-align='right'] .xl-m) {
-    justify-content: flex-end;
-  }
-  .labels :global(.xl[data-align='center'] .xl-m) {
-    justify-content: center;
-  }
-  .labels :global(.xl-sim) {
-    color: var(--band);
-  }
-  .labels :global(.xl-k) {
-    display: none;
-  }
-  .labels :global(.xl.hover .xl-t) {
-    color: #fff;
-  }
-
-  /* Aimed: the one you read from across the booth. */
-  .labels :global(.xl[data-kind='aimed']) {
-    /* Narrow enough to clear the lower ring labels on either side. */
-    width: max-content;
-    max-width: clamp(300px, 33vw, 520px);
-    padding: 6px 18px 8px;
-    border-radius: 14px;
-    background: radial-gradient(closest-side, rgba(2, 2, 6, 0.62), rgba(2, 2, 6, 0));
-  }
-  .labels :global(.xl[data-kind='aimed'] .xl-t) {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    white-space: normal;
-    text-wrap: balance;
-    font: 680 clamp(22px, 2.1vw, 34px) / 1.12 var(--font-ui);
-    letter-spacing: -0.012em;
-    color: #fff;
-  }
-  .labels :global(.xl[data-kind='aimed'] .xl-a) {
-    margin-top: 2px;
-    font-size: clamp(14px, 1.05vw, 18px);
-    color: var(--text-2);
-  }
-  .labels :global(.xl[data-kind='aimed'] .xl-m) {
-    gap: 10px;
-    margin-top: 8px;
-    font-size: 12.5px;
-    color: var(--text-2);
-  }
-  .labels :global(.xl[data-kind='aimed'] .xl-sim) {
-    padding: 1px 7px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--band) 20%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--band) 45%, transparent);
-  }
-  .labels :global(.xl[data-kind='aimed'] .xl-k:not(:empty)) {
-    display: block;
-    margin-top: 6px;
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: var(--text-3);
-  }
-
-  /* Aimed grandchildren: a whisper of what's behind the gate. */
-  .labels :global(.xl[data-kind='grand']) {
-    max-width: 112px;
-    pointer-events: none;
-  }
-  .labels :global(.xl[data-kind='grand'] .xl-t) {
-    font-size: 11px;
-    font-weight: 560;
-    color: var(--text-2);
-    opacity: 0.85;
-  }
-  .labels :global(.xl[data-kind='grand'] .xl-a),
-  .labels :global(.xl[data-kind='grand'] .xl-m) {
-    display: none;
-  }
+  .labels :global(.xl:hover), .labels :global(.xl:focus-visible) { background: #233228ec; }
+  .labels :global(.xl-t), .labels :global(.xl-a), .labels :global(.xl-m) { display: block; }
+  .labels :global(.xl-t) { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; font: 550 clamp(12px, .86vw, 15px)/1.3 var(--font-ui); text-wrap: balance; }
+  .labels :global(.xl-a) { font-size: 11px; color: #c9cdb8; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .labels :global(.xl-m) { margin-top: 8px; font: 500 10px/1.4 var(--font-mono); color: #dfd7b7; white-space: pre; }
+  .labels :global(.xl[data-kind='aimed']) { padding: 18px 20px; border-top: 2px solid var(--band); background: linear-gradient(#213329ed,#1c3025ce); }
+  .labels :global(.xl[data-kind='aimed'])::before { content: 'AIMED · NEXT PATH'; display: block; color: var(--band); font-size: 9px; letter-spacing: .22em; margin-bottom: 10px; }
+  .labels :global(.xl[data-kind='aimed'] .xl-t) { font: 400 clamp(21px, 1.85vw, 32px)/1.08 Georgia, serif; letter-spacing: -.02em; }
+  .labels :global(.xl[data-kind='aimed'] .xl-a) { font-size: 13px; margin-top: 8px; }
+  .labels :global(.xl[data-kind='aimed'] .xl-m) { color: var(--band); font-size: 11px; }
 
   /* Info strip */
   .info {
     position: absolute;
-    top: 14px;
-    left: 16px;
+    top: 22px;
+    left: 24px;
     display: grid;
     gap: 8px;
     max-width: calc(100vw - 260px);
@@ -490,14 +394,14 @@
     color: var(--text);
   }
   .brand span {
-    color: var(--text-3);
+    color: #c0c5b0;
   }
   .bands {
     display: inline-flex;
     padding: 2px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
-    background: rgba(6, 7, 10, 0.55);
+    background: rgba(26, 40, 32, 0.78);
   }
   .band {
     height: 26px;
@@ -507,7 +411,7 @@
     background: transparent;
     font: 750 11.5px/1 var(--font-ui);
     letter-spacing: 0.12em;
-    color: var(--text-3);
+    color: #c0c5b0;
     cursor: pointer;
   }
   .band:hover {
@@ -517,7 +421,7 @@
     background: color-mix(in srgb, var(--c) 22%, transparent);
     box-shadow:
       inset 0 0 0 1px color-mix(in srgb, var(--c) 65%, transparent),
-      0 0 16px -4px var(--c);
+      0 1px 4px #18251b33;
     color: var(--c);
   }
   .chip {
@@ -528,7 +432,7 @@
     padding: 0 10px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
-    background: rgba(6, 7, 10, 0.55);
+    background: rgba(26, 40, 32, 0.78);
     font-size: 12px;
     font-weight: 600;
     color: var(--text-2);
@@ -557,14 +461,14 @@
   }
   .chip small {
     font-size: 10px;
-    color: var(--text-3);
+    color: #c0c5b0;
   }
   .k {
     font-size: 10.5px;
     font-weight: 650;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--text-3);
+    color: #c0c5b0;
   }
   .meter {
     width: 70px;
@@ -601,7 +505,7 @@
   .where .artist {
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--text-3);
+    color: #c0c5b0;
   }
   .tag {
     padding: 0 5px;
@@ -620,7 +524,7 @@
     padding: 0 0 0 2px;
     list-style: none;
     font-size: 11.5px;
-    color: var(--text-3);
+    color: #c0c5b0;
   }
   .crumbs li {
     max-width: 180px;
@@ -640,8 +544,8 @@
   /* Side: close + minimap */
   .side {
     position: absolute;
-    top: 14px;
-    right: 16px;
+    top: 22px;
+    right: 24px;
     display: grid;
     justify-items: end;
     gap: 10px;
@@ -655,7 +559,7 @@
     padding: 0 12px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
-    background: rgba(6, 7, 10, 0.55);
+    background: rgba(26, 40, 32, 0.78);
     font: 600 12.5px/1 var(--font-ui);
     color: var(--text-2);
     white-space: nowrap;
@@ -685,7 +589,7 @@
   .hint {
     align-self: center;
     font-size: 13px;
-    color: var(--text-3);
+    color: #c0c5b0;
   }
   .stats {
     padding: 3px 8px;
@@ -774,8 +678,8 @@
   /* Bottom */
   .bottom {
     position: absolute;
-    left: 16px;
-    right: 16px;
+    left: 24px;
+    right: 24px;
     bottom: 14px;
     display: grid;
     gap: 10px;

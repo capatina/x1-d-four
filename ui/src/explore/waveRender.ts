@@ -1,17 +1,9 @@
-// Overlaid deck waveforms: every loaded deck's three-band waveform scrolling
-// past a fixed centre playhead, all on one time axis (seconds from now), so
-// decks synced to one tempo show their beats lined up.
-//
-// One 2D canvas. The lead deck (the focused one) is filled: its stacked bands
-// are painted outside in (painter's order, so no seams between bands), dimmed
-// through its colours when paused. The other decks are luminous outlines
-// on top, their glows screen-blended so where decks cross the colours mix
-// instead of hiding each other. (Faint screened fills for the other decks
-// were tried too: with three or more, complementary hues mix to a grey-brown
-// mud, so the outlines carry them alone.)
+// The river's banks carry four deck envelopes on one linear time axis.
+// The focused deck is filled; the others have numbered, patterned contours.
+// A quiet reflected contour keeps the waveform attached to the water.
 
 import { client } from '../lib/client.svelte';
-import { DECK_SHADES, hexToRgb, rgba } from '../lib/decks';
+import { DECK_DASHES, DECK_SHADES, hexToRgb, rgba } from '../lib/decks';
 import { DECK_COUNT, type BeatGrid, type DeckState, type StateMsg } from '../lib/protocol';
 import { waves, type DeckWave } from '../lib/waves';
 
@@ -19,7 +11,7 @@ import { waves, type DeckWave } from '../lib/waves';
 export const WINDOW_S = 4;
 
 /** Envelope sample spacing, CSS px (blocks are ~2.4 px apart at 1920 px). */
-const STEP = 1.5;
+const STEP = 2;
 
 /** Position error (track seconds) above which we jump instead of easing. */
 const SNAP_S = 0.3;
@@ -50,7 +42,11 @@ export class WaveRenderer {
   readonly #shown: Shown[] = Array.from({ length: DECK_COUNT }, () => ({ pos: 0, trackId: null, live: false }));
   readonly #resize: ResizeObserver;
   readonly #mono: string;
-  #reduced: boolean;
+  readonly #order = new Int8Array(DECK_COUNT);
+  readonly #loopGradients: CanvasGradient[] = [];
+  #leftFade!: CanvasGradient;
+  #rightFade!: CanvasGradient;
+  #headGlow!: CanvasGradient;
   #dpr = 1;
   #w = 0;
   #h = 0;
@@ -61,7 +57,7 @@ export class WaveRenderer {
   /** Average draw time (ms), for ?stats. */
   drawMs = 0;
 
-  constructor(canvas: HTMLCanvasElement, reducedMotion: boolean) {
+  constructor(canvas: HTMLCanvasElement, _reducedMotion: boolean) {
     this.#canvas = canvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas unavailable');
@@ -69,7 +65,7 @@ export class WaveRenderer {
     for (let i = 0; i < DECK_COUNT; i++) {
       this.#env.push({ n: 0, xs: new Float32Array(0), yl: new Float32Array(0), ym: new Float32Array(0), yh: new Float32Array(0) });
     }
-    this.#reduced = reducedMotion;
+
     this.#mono = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() || 'monospace';
     this.#resize = new ResizeObserver(() => this.#onResize());
     this.#resize.observe(canvas);
@@ -78,9 +74,8 @@ export class WaveRenderer {
     if (!document.hidden) this.#start();
   }
 
-  setReducedMotion(reduced: boolean): void {
-    this.#reduced = reduced;
-  }
+  // Timeline motion is functional; decorative beat pulsing is deliberately absent.
+  setReducedMotion(_reduced: boolean): void {}
 
   dispose(): void {
     this.#disposed = true;
@@ -121,6 +116,24 @@ export class WaveRenderer {
     const ph = Math.max(1, Math.round(h * dpr));
     this.#canvas.width = pw;
     this.#canvas.height = ph;
+    // Gradients are rebuilt on resize only, never in the animation loop.
+    {
+      const ctx = this.#ctx;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const fade = Math.min(80, w * .05);
+      this.#leftFade = ctx.createLinearGradient(0,0,fade,0);
+      this.#leftFade.addColorStop(0,'#000'); this.#leftFade.addColorStop(1,'#0000');
+      this.#rightFade = ctx.createLinearGradient(w-fade*1.6,0,w,0);
+      this.#rightFade.addColorStop(0,'#0000'); this.#rightFade.addColorStop(1,'#000');
+      this.#headGlow = ctx.createLinearGradient(w/2-12,0,w/2+12,0);
+      this.#headGlow.addColorStop(0,'#ede4b900');this.#headGlow.addColorStop(.5,'#ede4b928');this.#headGlow.addColorStop(1,'#ede4b900');
+      this.#loopGradients.length=0;
+      for(let i=0;i<DECK_COUNT;i++) {
+        const g=ctx.createLinearGradient(0,0,0,h);
+        g.addColorStop(0,rgba(DECK_SHADES[i].mid,.25));g.addColorStop(.4,rgba(DECK_SHADES[i].mid,.04));g.addColorStop(1,rgba(DECK_SHADES[i].mid,.18));
+        this.#loopGradients.push(g);
+      }
+    }
     const cols = Math.ceil(w / STEP) + 2;
     for (const e of this.#env) {
       e.xs = new Float32Array(cols);
@@ -206,20 +219,21 @@ export class WaveRenderer {
     if (!st || w < 10 || h < 10) return;
 
     const cx = w / 2;
-    const cy = h / 2;
+    const cy = h * .64;
     const pps = w / (2 * WINDOW_S);
     // Beat-grid ruler along both edges: one lane per deck, deck 1 outermost.
     const lane = clamp(h * 0.04, 4, 6);
     const ruler = 2 + DECK_COUNT * lane;
-    const half = Math.max(8, cy - ruler - 2);
+    const half = Math.max(8, cy - ruler - 7);
     // The lead deck is drawn filled, the rest as outlines: the focused deck,
     // or while it's empty (about to be loaded) the master or a playing one.
     const lead = this.#lead(st);
 
     // Others first, lead last.
-    const order: number[] = [];
-    for (let i = 0; i < DECK_COUNT; i++) if (i !== lead) order.push(i);
-    if (lead >= 0) order.push(lead);
+    const order = this.#order;
+    let ordered = 0;
+    for (let i = 0; i < DECK_COUNT; i++) if (i !== lead) order[ordered++] = i;
+    if (lead >= 0) order[ordered] = lead;
 
     // Behind the waveforms: loop regions, and the lead deck's bar lines.
     for (const i of order) {
@@ -256,20 +270,17 @@ export class WaveRenderer {
         if (env.n < 2 || i === lead) continue;
         const a = st.decks[i]?.playing ? OTHER_LINE.playing : OTHER_LINE.paused;
         this.#outline(env, cy);
-        ctx.globalCompositeOperation = 'screen';
-        ctx.strokeStyle = DECK_SHADES[i].mid;
-        ctx.globalAlpha = a * 0.28;
-        ctx.lineWidth = 6;
-        ctx.stroke();
+        ctx.setLineDash(DECK_DASHES[i]);
         ctx.globalCompositeOperation = 'source-over';
-        ctx.strokeStyle = '#05060a';
-        ctx.globalAlpha = a * 0.4;
-        ctx.lineWidth = 2.8;
+        ctx.strokeStyle = '#18291f';
+        ctx.globalAlpha = a * .65;
+        ctx.lineWidth = 3.5;
         ctx.stroke();
         ctx.strokeStyle = DECK_SHADES[i].line;
         ctx.globalAlpha = a;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.6;
         ctx.stroke();
+        ctx.setLineDash(DECK_DASHES[0]);
       }
       ctx.globalAlpha = 1;
     }
@@ -288,19 +299,13 @@ export class WaveRenderer {
     ctx.fillStyle = `rgba(0, 0, 0, ${PAST_DIM})`;
     ctx.fillRect(0, 0, cx - 1, h);
     const fade = Math.min(80, w * 0.05);
-    let g = ctx.createLinearGradient(0, 0, fade, 0);
-    g.addColorStop(0, 'rgba(0, 0, 0, 1)');
-    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = g;
+    ctx.fillStyle = this.#leftFade;
     ctx.fillRect(0, 0, fade, h);
-    g = ctx.createLinearGradient(w - fade * 1.6, 0, w, 0);
-    g.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    g.addColorStop(1, 'rgba(0, 0, 0, 1)');
-    ctx.fillStyle = g;
+    ctx.fillStyle = this.#rightFade;
     ctx.fillRect(w - fade * 1.6, 0, fade * 1.6, h);
     ctx.globalCompositeOperation = 'source-over';
 
-    this.#playhead(st, cx, h, lead);
+    this.#playhead(cx, h);
     this.#markers(st, w, cy);
   }
 
@@ -373,12 +378,11 @@ export class WaveRenderer {
   #outline(env: Envelope, cy: number): void {
     const ctx = this.#ctx;
     const { n, xs, yh } = env;
-    const at = (k: number) => (yh[Math.max(0, k - 1)] + 2 * yh[k] + yh[Math.min(n - 1, k + 1)]) / 4;
     ctx.beginPath();
-    ctx.moveTo(xs[0], cy - at(0));
-    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - at(k));
-    ctx.moveTo(xs[0], cy + at(0));
-    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy + at(k));
+    ctx.moveTo(xs[0], cy - smoothAt(yh, n, 0));
+    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - smoothAt(yh, n, k));
+    ctx.moveTo(xs[0], cy + smoothAt(yh, n, 0) * .32);
+    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy + smoothAt(yh, n, k) * .32);
   }
 
   /** An active loop: a tint in the deck colour, bracketed at both ends. */
@@ -391,21 +395,15 @@ export class WaveRenderer {
     if (x1 < 0 || x0 > this.#w) return;
     // Strongest along the ruler, nearly clear over the waveform.
     const c = DECK_SHADES[i].mid;
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, rgba(c, 0.34));
-    g.addColorStop(0.3, rgba(c, 0.08));
-    g.addColorStop(0.7, rgba(c, 0.08));
-    g.addColorStop(1, rgba(c, 0.34));
-    ctx.fillStyle = g;
+    ctx.fillStyle = this.#loopGradients[i];
     ctx.globalAlpha = isLead ? 1 : 0.65;
     ctx.fillRect(x0, 0, x1 - x0, h);
     ctx.fillStyle = c;
     ctx.globalAlpha = isLead ? 0.95 : 0.7;
     const arm = Math.min(10, (x1 - x0) / 3);
-    for (const [x, dir] of [
-      [x0, 1],
-      [x1, -1],
-    ] as const) {
+    for (let side = 0; side < 2; side++) {
+      const x = side === 0 ? x0 : x1;
+      const dir = side === 0 ? 1 : -1;
       ctx.fillRect(x - 0.75, 0, 1.5, h);
       // Brackets: short arms pointing into the loop, top and bottom, just inside the ruler.
       ctx.fillRect(dir > 0 ? x : x - arm, ruler - 1.5, arm, 1.5);
@@ -471,48 +469,26 @@ export class WaveRenderer {
 
   /** Deck to draw filled (-1: none has a waveform). */
   #lead(st: StateMsg): number {
-    const drawable = (i: number) => {
-      const ds = st.decks[i];
-      const wave = waves.decks[i];
-      return !!ds?.track_id && this.#shown[i].live && wave?.trackId === ds.track_id;
-    };
-    if (st.focused >= 0 && st.focused < DECK_COUNT && drawable(st.focused)) return st.focused;
-    const decks = [...Array(DECK_COUNT).keys()].filter(drawable);
-    return decks.find((i) => st.decks[i].master) ?? decks.find((i) => st.decks[i].playing) ?? decks[0] ?? -1;
+    let first = -1, playing = -1, master = -1;
+    for(let i=0;i<DECK_COUNT;i++) {
+      const ds=st.decks[i], wave=waves.decks[i];
+      if(!ds?.track_id || !this.#shown[i].live || wave?.trackId!==ds.track_id) continue;
+      if(i===st.focused) return i;
+      if(first<0) first=i;
+      if(ds.playing && playing<0) playing=i;
+      if(ds.master) master=i;
+    }
+    return master>=0 ? master : playing>=0 ? playing : first;
   }
 
-  #playhead(st: StateMsg, cx: number, h: number, lead: number): void {
+  #playhead(cx: number, h: number): void {
     const ctx = this.#ctx;
-    const dpr = this.#dpr;
-    const x = Math.round(cx * dpr) / dpr;
-    // A soft glow that kicks on the lead deck's beats (steady with reduced motion).
-    let glow = 0.18;
-    const ds = st.decks[lead];
-    const grid = ds ? gridFor(lead, ds) : null;
-    if (!this.#reduced && ds?.playing && grid && this.#shown[lead]?.live) {
-      const beats = ((this.#shown[lead].pos - grid.first_beat) * grid.bpm) / 60;
-      const phase = beats - Math.floor(beats);
-      glow = 0.12 + 0.3 * (1 - phase) ** 4;
-    }
-    const g = ctx.createLinearGradient(x - 14, 0, x + 14, 0);
-    g.addColorStop(0, 'rgba(255, 255, 255, 0)');
-    g.addColorStop(0.5, `rgba(255, 255, 255, ${glow})`);
-    g.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(x - 14, 0, 28, h);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    ctx.fillRect(x - 0.75, 0, 1.5, h);
-    // Notches top and bottom.
-    ctx.beginPath();
-    ctx.moveTo(x - 5, 0);
-    ctx.lineTo(x + 5, 0);
-    ctx.lineTo(x, 5);
-    ctx.closePath();
-    ctx.moveTo(x - 5, h);
-    ctx.lineTo(x + 5, h);
-    ctx.lineTo(x, h - 5);
-    ctx.closePath();
-    ctx.fill();
+    const x = Math.round(cx * this.#dpr) / this.#dpr;
+    ctx.fillStyle=this.#headGlow;
+    ctx.fillRect(x-12,0,24,h);
+    ctx.fillStyle='#eee6c9';
+    ctx.fillRect(x-.75,0,1.5,h);
+    ctx.beginPath();ctx.moveTo(x-4,0);ctx.lineTo(x+4,0);ctx.lineTo(x,5);ctx.closePath();ctx.fill();
   }
 
   /** Deck numbers down the right edge, in their colours; the focused one filled. */
@@ -566,7 +542,7 @@ function mirrored(ctx: CanvasRenderingContext2D, env: Envelope, ys: Float32Array
   ctx.beginPath();
   ctx.moveTo(xs[0], cy - ys[0]);
   for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - ys[k]);
-  for (let k = n - 1; k >= 0; k--) ctx.lineTo(xs[k], cy + ys[k]);
+  for (let k = n - 1; k >= 0; k--) ctx.lineTo(xs[k], cy + ys[k] * .32);
   ctx.closePath();
 }
 
@@ -579,7 +555,7 @@ function gridFor(deck: number, ds: DeckState): BeatGrid | null {
 function activeLoop(ds: DeckState): Loop | null {
   const l = ds.loop;
   if (!l?.active || l.start == null || l.end == null || !(l.end > l.start)) return null;
-  return { start: l.start, end: l.end };
+  return l as Loop;
 }
 
 function wrapLoop(t: number, loop: Loop): number {
@@ -599,4 +575,8 @@ function rate(ds: DeckState): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function smoothAt(ys: Float32Array, n: number, k: number): number {
+  return (ys[Math.max(0,k-1)] + 2*ys[k] + ys[Math.min(n-1,k+1)]) / 4;
 }

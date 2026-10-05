@@ -26,24 +26,14 @@
   });
 </script>
 
-<div class="strip" role="img" aria-label="Deck waveforms around the playhead">
+<div class="strip" role="img" aria-label="Riverbank waveforms: four decks, four seconds before and after the playhead">
+  <div class="caption"><span>THE CURRENT</span><span>−4 s <b>NOW</b> +4 s</span><span>FOUR DECKS / ONE RIVER</span></div>
   <canvas bind:this={canvas}></canvas>
 </div>
 
 <style>
-  .strip {
-    position: relative;
-    height: clamp(80px, 11vh, 150px);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: var(--radius);
-    background: linear-gradient(to bottom, rgba(6, 7, 10, 0.5), rgba(6, 7, 10, 0.66) 50%, rgba(6, 7, 10, 0.5));
-    backdrop-filter: blur(10px) saturate(1.15);
-    overflow: hidden;
-    pointer-events: none;
-  }
-  canvas {
-    display: block;
-    width: 100%;
-    height: 100%;
-  }
+  .strip { position: relative; height: clamp(140px, 19vh, 215px); pointer-events: none; }
+  .caption { position: absolute; top: 0; left: 16px; right: 16px; display: flex; justify-content: space-between; font: 500 9px var(--font-mono); letter-spacing: .16em; color: #d6dbc2; }
+  .caption b { margin: 0 28px; font-weight: 500; color: #f4edd4; }
+  canvas { display: block; width: 100%; height: calc(100% - 24px); position: absolute; bottom: 0; }
 </style>

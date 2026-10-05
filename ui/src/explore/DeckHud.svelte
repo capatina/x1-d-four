@@ -142,7 +142,7 @@
     padding: 0 12px 0 8px;
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: var(--radius);
-    background: rgba(8, 9, 12, 0.62);
+    background: rgba(22, 36, 28, 0.86);
     backdrop-filter: blur(8px);
     color: var(--text);
     text-align: left;
@@ -150,7 +150,7 @@
     overflow: hidden;
   }
   .deck:hover {
-    background: rgba(18, 20, 26, 0.75);
+    background: rgba(34, 49, 38, 0.90);
   }
   .deck.drop {
     border-color: var(--accent);
