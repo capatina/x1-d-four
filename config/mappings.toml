@@ -43,25 +43,25 @@ action = "deck.play_pause"
 deck = 4
 led = "deck.playing"
 
-# Right pod lit buttons: cue decks 1-4.
+# Right pod lit buttons: load the library selection onto decks 1-4.
 [[map]]
 control = "right.lit1"
-action = "deck.cue"
+action = "deck.load_selected"
 deck = 1
 
 [[map]]
 control = "right.lit2"
-action = "deck.cue"
+action = "deck.load_selected"
 deck = 2
 
 [[map]]
 control = "right.lit3"
-action = "deck.cue"
+action = "deck.load_selected"
 deck = 3
 
 [[map]]
 control = "right.lit4"
-action = "deck.cue"
+action = "deck.load_selected"
 deck = 4
 
 # Left encoder above the jog wheel: browse the library, push to load to the focused deck.
@@ -72,3 +72,8 @@ action = "library.scroll"
 [[map]]
 control = "left.browse.push"
 action = "deck.load_selected"
+
+# Left jog wheel: scroll the library one row per tick.
+[[map]]
+control = "left.jog"
+action = "library.scroll"
