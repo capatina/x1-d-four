@@ -53,6 +53,10 @@ pub enum ClientCommand {
     ExploreRootSelected,
     /// Turn beat sync on or off; leave `on` out to toggle.
     Sync { deck: usize, on: Option<bool> },
+    /// Start a loop at the nearest beat, or leave the active one.
+    Loop { deck: usize },
+    /// Halve (negative) or double (positive) the loop length.
+    LoopLength { deck: usize, steps: i32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -324,6 +328,8 @@ impl App {
             ClientCommand::ExploreRoot { id } => self.explore_root(&id)?,
             ClientCommand::ExploreRootSelected => self.explore_root_selected()?,
             ClientCommand::Sync { deck, on } => self.send(Command::Sync { deck: deck_ok(deck)?, on }),
+            ClientCommand::Loop { deck } => self.toggle_loop(deck_ok(deck)?)?,
+            ClientCommand::LoopLength { deck, steps } => self.send(Command::LoopLength { deck: deck_ok(deck)?, steps }),
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
@@ -370,10 +376,24 @@ impl App {
             Intent::ExploreFollow => Ok(self.explore_follow(None)),
             Intent::ExploreRootSelected => self.explore_root_selected(),
             Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
+            Intent::Loop(d) => self.toggle_loop(self.deck_or_focused(d)),
+            Intent::LoopLength(d, steps) => Ok(self.send(Command::LoopLength { deck: self.deck_or_focused(d), steps })),
         };
         if let Err(e) = result {
             self.broadcast(json!({ "type": "error", "message": e }));
         }
+    }
+
+    fn toggle_loop(&self, deck: usize) -> Result<(), String> {
+        let s = self.shared.deck(deck);
+        if s.length == 0.0 {
+            return Err(format!("Deck {} is empty", deck + 1));
+        }
+        if s.bpm.is_none() && !s.looping {
+            return Err(format!("Deck {} has no beat grid, so it can't loop", deck + 1));
+        }
+        self.send(Command::Loop { deck });
+        Ok(())
     }
 
     fn set_trim(&self, deck: usize, gain: f64) {
@@ -692,6 +712,7 @@ impl App {
                     "trim": meta.trim,
                     "sync": s.sync,
                     "master": s.master,
+                    "loop": { "active": s.looping, "beats": s.loop_beats },
                     "bpm": s.bpm.map(|b| (b * s.rate * 100.0).round() / 100.0),
                 })
             })

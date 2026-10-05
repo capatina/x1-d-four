@@ -29,13 +29,14 @@ export type LegendSlot =
   | 'cue'
   | 'pitch'
   | 'sync'
+  | 'loop'
   | 'scroll'
   | 'root'
   | 'follow'
   | 'view';
 
 /** Explore legend, in teaching order. */
-export const EXPLORE_LEGEND: readonly LegendSlot[] = ['aim', 'dive', 'band', 'load', 'play', 'cue', 'pitch', 'sync', 'root', 'follow', 'view'];
+export const EXPLORE_LEGEND: readonly LegendSlot[] = ['aim', 'dive', 'band', 'load', 'play', 'loop', 'cue', 'pitch', 'sync', 'root', 'follow', 'view'];
 
 /** Deck view legend: browse, load, play. */
 export const DECKS_LEGEND: readonly LegendSlot[] = ['scroll', 'load', 'play', 'cue', 'pitch', 'sync', 'view'];
@@ -228,6 +229,10 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
         break;
       case 'sync':
         add(slot, 'deck.sync', (e) => `sync ${decksText(e)}`);
+        break;
+      case 'loop':
+        add(slot, 'deck.loop', (e) => `loop ${decksText(e)}`);
+        add(slot, 'deck.loop_length', () => 'loop length');
         break;
       case 'scroll':
         add(slot, 'library.scroll', (e) => (e.amount != null && e.amount !== 1 ? `scroll ×${e.amount}` : 'scroll'));

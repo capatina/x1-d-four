@@ -7,6 +7,8 @@
 #   deck.load_selected                       on press: load the library selection
 #   deck.eject, deck.rate_reset              on press
 #   deck.sync                                on press: beat sync on/off (locks to the master deck)
+#   deck.loop                                on press: loop from the nearest beat (8 bars by default), press again to leave
+#   deck.loop_length                         encoder: halve/double the loop (1/8 bar .. 32 bars), live while looping
 #   deck.focus                               on press (needs deck)
 #   deck.nudge     amount = seconds per press or per encoder step (default 0.01)
 #   deck.rate      encoder: amount per step (default 0.0005 = 0.05 %)
@@ -38,7 +40,7 @@
 #                 the library selection
 # buttons         A low, B mid, C high band,
 #                 E follow the playing deck
-# encoders 1-4    nudge deck 1-4, push = cue          skip deck 1-4 by 2 s, push = sync
+# encoders 1-4    loop length, push = loop deck 1-4   skip deck 1-4 by 2 s, push = sync
 # faders 1-4      pitch deck 1-4 (+/-8 %)
 
 # ---- Left pod ----
@@ -100,42 +102,42 @@ action = "explore.follow"
 
 [[map]]
 control = "left.encoder1"
-action = "deck.nudge"
+action = "deck.loop_length"
 deck = 1
 
 [[map]]
 control = "left.encoder2"
-action = "deck.nudge"
+action = "deck.loop_length"
 deck = 2
 
 [[map]]
 control = "left.encoder3"
-action = "deck.nudge"
+action = "deck.loop_length"
 deck = 3
 
 [[map]]
 control = "left.encoder4"
-action = "deck.nudge"
+action = "deck.loop_length"
 deck = 4
 
 [[map]]
 control = "left.encoder1.push"
-action = "deck.cue"
+action = "deck.loop"
 deck = 1
 
 [[map]]
 control = "left.encoder2.push"
-action = "deck.cue"
+action = "deck.loop"
 deck = 2
 
 [[map]]
 control = "left.encoder3.push"
-action = "deck.cue"
+action = "deck.loop"
 deck = 3
 
 [[map]]
 control = "left.encoder4.push"
-action = "deck.cue"
+action = "deck.loop"
 deck = 4
 
 [[map]]

@@ -29,6 +29,10 @@ pub enum Command {
     Rate { deck: usize, rate: f64 },
     /// Turn sync on/off; `None` toggles.
     Sync { deck: usize, on: Option<bool> },
+    /// Start a loop at the nearest beat, or leave the active one.
+    Loop { deck: usize },
+    /// Halve (negative) or double (positive) the loop length.
+    LoopLength { deck: usize, steps: i32 },
     Trim { deck: usize, gain: f32 },
     /// Raw MIDI to the mixer (LED rings), sent one byte per packet.
     MidiOut { bytes: [u8; 3], len: u8 },
@@ -53,6 +57,8 @@ pub struct DeckState {
     master: AtomicBool,
     /// Track tempo (BPM) from the beat grid, 0 if none.
     bpm: AtomicU64,
+    looping: AtomicBool,
+    loop_beats: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -67,6 +73,9 @@ pub struct DeckSnapshot {
     pub master: bool,
     /// Track tempo from the beat grid; playing tempo is `bpm * rate`.
     pub bpm: Option<f64>,
+    pub looping: bool,
+    /// Loop length in beats (the next loop's, when not looping).
+    pub loop_beats: f64,
 }
 
 /// Lock-free state shared between the RT thread and the control side.
@@ -106,6 +115,8 @@ impl Shared {
             sync: d.sync.load(Ordering::Relaxed),
             master: d.master.load(Ordering::Relaxed),
             bpm: Some(load(&d.bpm)).filter(|b| *b > 0.0),
+            looping: d.looping.load(Ordering::Relaxed),
+            loop_beats: load(&d.loop_beats),
         }
     }
 }
@@ -233,6 +244,10 @@ impl Rt {
                     d.rate = d.base_rate;
                 }
             }
+            Command::Loop { deck } => {
+                self.decks[deck].toggle_loop();
+            }
+            Command::LoopLength { deck, steps } => self.decks[deck].change_loop_length(steps),
             Command::Sync { deck, on } => {
                 let d = &mut self.decks[deck];
                 d.sync = on.unwrap_or(!d.sync);
@@ -265,6 +280,8 @@ impl Rt {
             state.playing.store(deck.playing, Ordering::Relaxed);
             state.sync.store(deck.sync, Ordering::Relaxed);
             store(&state.bpm, deck.grid().map_or(0.0, |g| g.bpm));
+            state.looping.store(deck.looping.is_some(), Ordering::Relaxed);
+            store(&state.loop_beats, deck.loop_beats());
         }
         for (n, state) in self.shared.decks.iter().enumerate() {
             state.master.store(self.sync.master == Some(n), Ordering::Relaxed);
@@ -313,7 +330,7 @@ impl Rt {
             if err.abs() > SNAP_BEATS && s.packets >= s.snap_hold[n] {
                 // Jump onto the beat; the fade-out/in hides it. Both decks already run
                 // at the same tempo, so the phase holds while the fade plays out.
-                d.seek(d.position + err * g.beat_frames());
+                d.snap(d.position + err * g.beat_frames());
                 d.rate = target;
                 s.snap_hold[n] = s.packets + 300; // ~0.5 s
             } else {

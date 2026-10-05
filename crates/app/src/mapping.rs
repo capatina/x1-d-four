@@ -50,6 +50,8 @@ pub enum Action {
     ExploreFollow,
     ExploreRoot,
     Sync,
+    Loop,
+    LoopLength,
 }
 
 impl Action {
@@ -76,6 +78,8 @@ impl Action {
             "explore.follow" => Self::ExploreFollow,
             "explore.root" => Self::ExploreRoot,
             "deck.sync" => Self::Sync,
+            "deck.loop" => Self::Loop,
+            "deck.loop_length" => Self::LoopLength,
             other => bail!("unknown action {other:?}"),
         })
     }
@@ -117,6 +121,9 @@ pub enum Intent {
     /// Start the tree at the library selection.
     ExploreRootSelected,
     Sync(Option<usize>),
+    Loop(Option<usize>),
+    /// Halve (negative) or double (positive) the loop length this many times.
+    LoopLength(Option<usize>, i32),
 }
 
 pub struct Rule {
@@ -175,6 +182,10 @@ impl Rule {
             (Action::ExploreFollow, Press) => Intent::ExploreFollow,
             (Action::ExploreRoot, Press) => Intent::ExploreRootSelected,
             (Action::Sync, Press) => Intent::Sync(d),
+            (Action::Loop, Press) => Intent::Loop(d),
+            // One halving/doubling per click, however fast the encoder spins.
+            (Action::LoopLength, Delta(n)) if n != 0 => Intent::LoopLength(d, n.signum() as i32),
+            (Action::LoopLength, Press) => Intent::LoopLength(d, a.unwrap_or(1.0) as i32),
             _ => return None,
         })
     }
@@ -204,7 +215,7 @@ impl Mappings {
             let fits = match action {
                 Action::Rate | Action::Scroll | Action::Nudge => true,
                 Action::Trim => kind != Kind::Button,
-                Action::ExploreAim => kind != Kind::Absolute,
+                Action::ExploreAim | Action::LoopLength => kind != Kind::Absolute,
                 Action::ExploreStep => kind == Kind::Relative,
                 _ => kind == Kind::Button,
             };

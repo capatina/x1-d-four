@@ -34,6 +34,13 @@ export function fmtBpm(bpm: number | null | undefined): string {
 }
 
 /** Rate (1.0 = normal) → signed percentage, e.g. "+1.25%". */
+/** Loop length for people: "8 bars", "1 bar", "1/2 bar", "1/8 bar". */
+export function fmtLoop(beats: number): string {
+  const bars = beats / 4;
+  if (bars >= 1) return `${bars} ${bars === 1 ? 'bar' : 'bars'}`;
+  return `1/${Math.round(1 / bars)} bar`;
+}
+
 export function fmtRatePct(rate: number): string {
   const pct = (rate - 1) * 100;
   const rounded = Math.round(pct * 100) / 100;

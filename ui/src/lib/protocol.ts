@@ -37,6 +37,8 @@ export type DeckState = {
   master?: boolean;
   /** Playing tempo (beat-grid tempo × rate); null without a grid. */
   bpm?: number | null;
+  /** Loop state; `beats` is the length (the next loop's when not active). */
+  loop?: { active: boolean; beats: number };
 };
 
 export type DeviceStateName = 'connecting' | 'running' | 'stalled' | 'missing' | 'error';
@@ -247,6 +249,8 @@ export type Command =
   | { cmd: 'scroll'; delta: number }
   | { cmd: 'rescan' }
   | { cmd: 'sync'; deck: number; on?: boolean }
+  | { cmd: 'loop'; deck: number }
+  | { cmd: 'loop_length'; deck: number; steps: number }
   /** 1-3 raw bytes to the mixer (LED tests). */
   | { cmd: 'midi_out'; bytes: number[] }
   | { cmd: 'view'; view: View }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { client } from '../lib/client.svelte';
   import { deckColor } from '../lib/decks';
-  import { fmtRatePct, idToName } from '../lib/format';
+  import { fmtLoop, fmtRatePct, idToName } from '../lib/format';
   import { deckKey, keyText } from '../lib/mixer';
   import { DECK_COUNT } from '../lib/protocol';
 
@@ -39,9 +39,27 @@
         bpm: id != null && ds?.bpm != null ? ds.bpm.toFixed(1) : null,
         sync: ds?.sync ?? false,
         master: ds?.master ?? false,
+        looping: ds?.loop?.active ?? false,
+        loopText: ds?.loop ? fmtLoop(ds.loop.beats) : '',
       };
     }),
   );
+  // Turning a loop encoder while not looping: show the new length briefly.
+  let lengthShown = $state(DECKS.map(() => false));
+  const lastBeats: (number | null)[] = DECKS.map(() => null);
+  const hideTimers: (ReturnType<typeof setTimeout> | undefined)[] = DECKS.map(() => undefined);
+  $effect(() => {
+    for (const i of DECKS) {
+      const beats = client.state?.decks[i]?.loop?.beats ?? null;
+      if (beats == null) continue;
+      if (lastBeats[i] != null && beats !== lastBeats[i]) {
+        lengthShown[i] = true;
+        clearTimeout(hideTimers[i]);
+        hideTimers[i] = setTimeout(() => (lengthShown[i] = false), 2000);
+      }
+      lastBeats[i] = beats;
+    }
+  });
 </script>
 
 <div class="hud" role="group" aria-label="Decks">
@@ -64,6 +82,7 @@
           {#if d.pitch}<span class="pitch" title="Pitch {d.pitch}">{d.pitch}</span>{/if}
         </span>
         <span class="artist">
+          {#if d.looping}<em class="loop">loop {d.loopText}</em>{:else if d.id && lengthShown[d.i]}<em class="next">loop {d.loopText}</em>{/if}
           {#if d.master}<em class="sync">master</em>{:else if d.sync}<em class="sync">sync</em>{/if}
           {#if rootDeck === d.i}<em>root</em>{/if}
           {d.artist ?? (d.id ? 'Unknown artist' : loadHints[d.i])}
@@ -184,6 +203,14 @@
   }
   .playing .bpm {
     color: var(--text);
+  }
+  em.loop {
+    background: var(--accent);
+    color: var(--bg-0);
+  }
+  em.next {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-2);
   }
   em.sync {
     background: color-mix(in srgb, var(--accent) 22%, transparent);

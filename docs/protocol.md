@@ -44,6 +44,7 @@ type Track = {
     cue: number,           // seconds
     trim: number,          // linear gain, 1.0 = unity
     sync: boolean,         // beat sync on: tempo and phase follow the master deck
+    loop: { active: boolean, beats: number }, // beats: loop length (the next loop's when not active)
     master: boolean,       // the deck synced decks follow
     bpm: number | null,    // playing tempo (beat grid tempo x rate), null without a grid
   }>,
@@ -118,6 +119,8 @@ type Track = {
 { cmd: "scroll", delta: number }                  // move the selection within the filtered list
 { cmd: "rescan" }
 { cmd: "sync", deck: number, on?: boolean }      // beat sync on/off (toggle if on is left out)
+{ cmd: "loop", deck: number }                    // loop from the nearest beat, or leave the loop
+{ cmd: "loop_length", deck: number, steps: number } // halve (<0) or double (>0) the loop length
 { cmd: "midi_out", bytes: number[] }              // 1-3 raw bytes to the mixer (LED tests)
 ```
 
