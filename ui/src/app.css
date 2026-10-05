@@ -1,0 +1,126 @@
+/* Booth-dark theme: near-black base, raised cards a few steps lighter,
+   one neutral text ramp. Colour is reserved for decks and status. */
+:root {
+  color-scheme: dark;
+
+  --bg-0: #08090b;
+  --bg: #0b0d10;
+  --bg-1: #101317;
+  --bg-2: #14181d;
+  --bg-3: #1b2026;
+  --bg-4: #262c34;
+  --line: #222830;
+  --line-2: #2f3640;
+
+  --text: #eef1f5;
+  --text-2: #aeb6c1;
+  --text-3: #727b87;
+  --text-4: #4a515b;
+
+  --ok: #3ddc84;
+  --warn: #ffb020;
+  --bad: #ff4d5e;
+  /* Keyboard focus + library selection: neutral cool white-blue, distinct from deck accents. */
+  --focus: #8fb4ff;
+
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'JetBrainsMono Nerd Font', 'SF Mono', 'Cascadia Mono', ui-monospace, Menlo,
+    Consolas, 'Liberation Mono', monospace;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --gap: 10px;
+  --scrollbar-w: 10px;
+
+  /* Deck card sizing (tightened on short screens below). */
+  --deck-pad: 14px;
+  --deck-gap: 12px;
+  --wave-h: 108px;
+  --btn-h: 58px;
+  --num-size: 44px;
+  --title-size: 19px;
+  --time-max: 42px;
+  --midi-w: clamp(320px, 25vw, 480px);
+}
+
+@media (max-height: 960px) {
+  :root {
+    --deck-pad: 12px;
+    --deck-gap: 10px;
+    --wave-h: 78px;
+    --btn-h: 48px;
+    --num-size: 38px;
+    --title-size: 16px;
+    --time-max: 32px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 14px/1.4 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 1px 5px;
+  border: 1px solid var(--line-2);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  font: 600 11px/1.3 var(--font-mono);
+  text-align: center;
+  color: var(--text-2);
+}
+
+/* Thin dark scrollbars (width matches --scrollbar-w). */
+* {
+  scrollbar-color: var(--bg-4) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--bg-4) padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #39414c padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+}

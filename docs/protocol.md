@@ -114,4 +114,5 @@ type Track = {
 { cmd: "select", track_id: string }
 { cmd: "scroll", delta: number }                  // move the selection within the filtered list
 { cmd: "rescan" }
+{ cmd: "midi_out", bytes: number[] }              // 1-3 raw bytes to the mixer (LED tests)
 ```

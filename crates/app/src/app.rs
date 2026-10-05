@@ -40,6 +40,8 @@ pub enum ClientCommand {
     Select { track_id: String },
     Scroll { delta: i32 },
     Rescan,
+    /// Raw MIDI to the mixer, e.g. [0x9F, 38, 127] toggles the left.lit1 ring.
+    MidiOut { bytes: Vec<u8> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -282,6 +284,14 @@ impl App {
             ClientCommand::Browse { query } => self.browse(query),
             ClientCommand::Select { track_id } => self.select(Some(track_id)),
             ClientCommand::Scroll { delta } => self.scroll(delta),
+            ClientCommand::MidiOut { bytes } => {
+                if !(1..=3).contains(&bytes.len()) {
+                    return Err("midi_out takes 1-3 bytes".into());
+                }
+                let mut b = [0u8; 3];
+                b[..bytes.len()].copy_from_slice(&bytes);
+                self.send(Command::MidiOut { bytes: b, len: bytes.len() as u8 });
+            }
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
