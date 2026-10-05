@@ -27,9 +27,9 @@
     transform: translateX(-50%);
     pointer-events: none;
   }
-  /* Clear the explore view's deck HUD and shortcut line. */
+  /* Clear the explore view's deck HUD and mixer legend (ExploreView sets the height). */
   .toasts.explore {
-    bottom: 104px;
+    bottom: calc(var(--explore-bottom, 80px) + 26px);
   }
   .toast {
     display: grid;

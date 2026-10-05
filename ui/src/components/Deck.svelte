@@ -2,6 +2,7 @@
   import { client } from '../lib/client.svelte';
   import { deckColor } from '../lib/decks';
   import { fmtBpm, fmtTime, idToName } from '../lib/format';
+  import { deckKey, keyText } from '../lib/mixer';
   import RateControl from './RateControl.svelte';
   import Waveform from './Waveform.svelte';
 
@@ -37,6 +38,9 @@
   const title = $derived(track?.title ?? (trackId ? idToName(trackId) : null));
   const artist = $derived(track?.artist ?? null);
   const bpm = $derived(track?.bpm ? fmtBpm(track.bpm * rate) : '');
+
+  /** "L lit 2", the mixer control that loads the selection onto this deck. */
+  const loadKey = $derived(deckKey(client.mixer, 'deck.load_selected', index));
 
   let cueHeld = $state(false);
 
@@ -83,7 +87,7 @@
     class="head"
     onclick={focus}
     aria-pressed={focused}
-    title={focused ? `Deck ${num} is focused: "load selected" goes here` : `Focus deck ${num} (key ${num})`}
+    title={focused ? `Deck ${num} is focused: "load selected" goes here` : `Focus deck ${num}`}
   >
     <span class="num">{num}</span>
     <span class="meta">
@@ -101,7 +105,7 @@
         <span class="sub loading-text">decoding track</span>
       {:else}
         <span class="title muted">Empty</span>
-        <span class="sub">Shift+{num} loads the selected track</span>
+        <span class="sub">{loadKey ? `${keyText(loadKey)} loads the selected track` : 'Nothing loaded'}</span>
       {/if}
     </span>
     {#if bpm}

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { client } from '../lib/client.svelte';
   import { fmtBpm } from '../lib/format';
+  import { keysFor, keyText } from '../lib/mixer';
+  import MixerKey from './MixerKey.svelte';
 
   let { inert = false }: { inert?: boolean } = $props();
 
@@ -17,6 +19,7 @@
       : 'No data',
   );
   const clock = $derived(fmtBpm(client.state?.bpm));
+  const viewKey = $derived(keysFor(client.mixer, 'view.explore')[0] ?? null);
   const wsTone = $derived(client.ws === 'open' ? 'ok' : client.ws === 'connecting' ? 'warn' : 'bad');
   const wsLabel = $derived(
     client.ws === 'open' ? 'Connected' : client.ws === 'connecting' ? 'Connecting…' : 'Disconnected',
@@ -82,14 +85,15 @@
     class="explore"
     onclick={() => client.setView('explore')}
     disabled={client.ws !== 'open'}
-    title="Explore similar tracks in a 3D tunnel (E)"
+    title="Explore similar tracks in a 3D tunnel{viewKey ? ` (${keyText(viewKey)})` : ''}"
   >
     <svg viewBox="0 0 20 20" aria-hidden="true">
       <circle cx="10" cy="10" r="8" />
       <circle cx="10" cy="10" r="4.6" />
       <circle cx="10" cy="10" r="1.6" />
     </svg>
-    Explore <kbd>E</kbd>
+    Explore
+    {#if viewKey}<MixerKey k={viewKey} />{/if}
   </button>
 </header>
 

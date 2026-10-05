@@ -1,12 +1,23 @@
 <script lang="ts">
   import { client } from '../lib/client.svelte';
   import { deckColor } from '../lib/decks';
-  import { idToName } from '../lib/format';
+  import { fmtRatePct, idToName } from '../lib/format';
+  import { deckKey, keyText } from '../lib/mixer';
   import { DECK_COUNT } from '../lib/protocol';
 
   let { rootDeck }: { rootDeck: number | null } = $props();
 
   const DECKS = Array.from({ length: DECK_COUNT }, (_, i) => i);
+  /** Show the pitch once it's off by 0.05 % or more (the pod faders move it). */
+  const PITCH_SHOWN = 0.0005 - 1e-9;
+
+  /** "L lit 2 loads the aim", from the mappings. */
+  const loadHints = $derived(
+    DECKS.map((i) => {
+      const k = deckKey(client.mixer, 'deck.load_selected', i);
+      return k ? `${keyText(k)} loads the aim` : 'Nothing loaded';
+    }),
+  );
 
   const decks = $derived(
     DECKS.map((i) => {
@@ -15,6 +26,7 @@
       const id = ds ? ds.track_id : (info?.track.id ?? null);
       const track = id == null ? null : info && info.track.id === id ? info.track : (client.library.get(id) ?? null);
       const length = ds?.length || (info && info.track.id === id ? info.length : 0) || 0;
+      const rate = ds?.rate ?? 1;
       return {
         i,
         id,
@@ -23,6 +35,7 @@
         playing: ds?.playing ?? false,
         loading: ds?.loading ?? false,
         progress: length > 0 ? Math.min(1, Math.max(0, (ds?.position ?? 0) / length)) : 0,
+        pitch: id != null && Math.abs(rate - 1) >= PITCH_SHOWN ? fmtRatePct(rate) : null,
       };
     }),
   );
@@ -44,11 +57,12 @@
       <span class="num">{d.i + 1}</span>
       <span class="meta">
         <span class="title">
-          {#if d.loading}<i>loading…</i>{:else}{d.title ?? 'Empty'}{/if}
+          <span class="tt">{#if d.loading}<i>loading…</i>{:else}{d.title ?? 'Empty'}{/if}</span>
+          {#if d.pitch}<span class="pitch" title="Pitch {d.pitch}">{d.pitch}</span>{/if}
         </span>
         <span class="artist">
           {#if rootDeck === d.i}<em>root</em>{/if}
-          {d.artist ?? (d.id ? 'Unknown artist' : `${d.i + 1} loads the aimed track`)}
+          {d.artist ?? (d.id ? 'Unknown artist' : loadHints[d.i])}
         </span>
       </span>
       <span class="state" aria-label={d.playing ? 'Playing' : 'Paused'}>
@@ -113,15 +127,28 @@
     min-width: 0;
     line-height: 1.25;
   }
-  .title,
+  .tt,
   .artist {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
   .title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
     font-size: 13.5px;
     font-weight: 620;
+  }
+  .tt {
+    min-width: 0;
+  }
+  .pitch {
+    flex: none;
+    font: 650 11.5px/1 var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--accent) 80%, var(--text));
   }
   .title i {
     color: var(--accent);

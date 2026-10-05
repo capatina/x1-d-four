@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import MixerKey from '../components/MixerKey.svelte';
+  import MixerLegend from '../components/MixerLegend.svelte';
   import { client } from '../lib/client.svelte';
   import { fmtBpm, idToName } from '../lib/format';
+  import { backKey, bandKey, diveHint, EXPLORE_LEGEND, keysFor, keysText, keyText } from '../lib/mixer';
   import { BANDS, type Band } from '../lib/protocol';
   import { viz } from '../lib/viz';
   import DeckHud from './DeckHud.svelte';
   import type { EngineStats, ExploreEngine } from './engine';
+  import LibraryTicker from './LibraryTicker.svelte';
   import Minimap from './Minimap.svelte';
   import { BAND_PALETTE, bandPalette } from './palette';
 
@@ -13,6 +17,8 @@
   let labels: HTMLDivElement;
 
   let engine = $state.raw<ExploreEngine | null>(null);
+  /** Height of the legend + deck HUD, so toasts can sit above it. */
+  let bottomH = $state(0);
   let failed = $state<string | null>(null);
   let stats = $state.raw<EngineStats | null>(null);
   const showStats = new URLSearchParams(location.search).has('stats');
@@ -42,6 +48,26 @@
 
   const currentTrack = $derived(ex?.current ? client.library.get(ex.current) : undefined);
   const selected = $derived(client.browser.selected);
+
+  // Everything is driven from the mixer; these say which control does what.
+  const maps = $derived(client.mixer);
+  const viewKey = $derived(keysFor(maps, 'view.explore')[0] ?? null);
+  const followKeys = $derived(keysText(maps, 'explore.follow'));
+  const back = $derived(backKey(maps));
+  const aimHint = $derived.by(() => {
+    const parts: string[] = [];
+    const dive = diveHint(maps);
+    if (dive) parts.push(`${dive} dives in`);
+    // "Load selected" loads the library selection: the aim, unless the left jog moved it.
+    const load = keysText(maps, 'deck.load_selected');
+    if (load && (!ex?.aim || selected === ex.aim)) parts.push(`${load} loads it`);
+    return parts.join(' · ');
+  });
+
+  function bandTitle(b: Band): string {
+    const k = bandKey(maps, b);
+    return `${BAND_PALETTE[b].label}: ${BAND_PALETTE[b].hint}${k ? ` (${keyText(k)})` : ''}`;
+  }
 
   onMount(() => {
     let cancelled = false;
@@ -87,6 +113,16 @@
     engine?.refreshLabels();
   });
 
+  $effect(() => {
+    engine?.setHint(aimHint);
+  });
+
+  $effect(() => {
+    const root = document.documentElement.style;
+    if (bottomH > 0) root.setProperty('--explore-bottom', `${bottomH}px`);
+    return () => root.removeProperty('--explore-bottom');
+  });
+
   function setBand(b: Band) {
     client.send({ cmd: 'explore_band', band: b });
   }
@@ -120,7 +156,7 @@
             class:on={band === b}
             style:--c={BAND_PALETTE[b].css}
             aria-checked={band === b}
-            title="{BAND_PALETTE[b].label}: {BAND_PALETTE[b].hint} ({b[0].toUpperCase()})"
+            title={bandTitle(b)}
             onclick={() => setBand(b)}>{BAND_PALETTE[b].label}</button
           >
         {/each}
@@ -130,7 +166,7 @@
         class="chip follow"
         class:on={ex?.follow}
         aria-pressed={ex?.follow ?? false}
-        title="Root follows the playing track (F)"
+        title="Root follows the playing track{followKeys ? ` (${followKeys})` : ''}"
         onclick={() => client.send({ cmd: 'explore_follow', follow: !(ex?.follow ?? false) })}
       >
         <span class="pip"></span>Follow {ex?.follow ? 'on' : 'off'}
@@ -172,8 +208,14 @@
 
   <!-- Top-right: tree + way out -->
   <aside class="side">
-    <button type="button" class="close" onclick={() => client.setView('decks')} title="Back to the decks (E or Esc)">
-      Decks <kbd>E</kbd>
+    <button
+      type="button"
+      class="close"
+      onclick={() => client.setView('decks')}
+      title="Back to the decks{viewKey ? ` (${keyText(viewKey)})` : ''}"
+    >
+      Decks
+      {#if viewKey}<MixerKey k={viewKey} />{/if}
     </button>
     {#if ex?.root}
       <Minimap msg={ex} />
@@ -186,6 +228,8 @@
       </div>
     {/if}
   </aside>
+
+  <LibraryTicker />
 
   <!-- Empty / waiting states -->
   {#if failed}
@@ -216,7 +260,13 @@
             Start from “{title(selected)}”
           </button>
         {/if}
-        <button type="button" onclick={() => client.setView('decks')}>Open the library <kbd>E</kbd></button>
+        <button type="button" onclick={() => client.setView('decks')}>
+          Open the library
+          {#if viewKey}<MixerKey k={viewKey} />{/if}
+        </button>
+      </div>
+      <div class="teach">
+        <MixerLegend slots={['play', 'scroll', 'root']} view="explore" tone="overlay" errors={false} />
       </div>
     </div>
   {:else if children.length === 0}
@@ -224,23 +274,17 @@
       {#if analysis?.running}
         <p class="sub">Analysing the library… portals appear as tracks are analysed.</p>
       {:else}
-        <p class="sub">No similar tracks here yet. <kbd>↓</kbd> climbs back up.</p>
+        <p class="sub">
+          No similar tracks here yet.
+          {#if back && ex.path.length > 1}<MixerKey k={back.key} />{back.turn ? ' left' : ''} climbs back up.{/if}
+        </p>
       {/if}
     </div>
   {/if}
 
-  <!-- Bottom: keys + decks -->
-  <footer class="bottom">
-    <p class="keys" aria-label="Shortcuts">
-      <span><kbd>←</kbd><kbd>→</kbd> aim</span>
-      <span><kbd>↑</kbd> dive</span>
-      <span><kbd>↓</kbd> back</span>
-      <span><kbd>L</kbd><kbd>M</kbd><kbd>H</kbd> band</span>
-      <span><kbd>F</kbd> follow</span>
-      <span><kbd>1</kbd>–<kbd>4</kbd> load</span>
-      <span><kbd>Space</kbd> play</span>
-      <span><kbd>E</kbd> decks</span>
-    </p>
+  <!-- Bottom: what the mixer does here, then the decks -->
+  <footer class="bottom" bind:clientHeight={bottomH}>
+    <MixerLegend slots={EXPLORE_LEGEND} view="explore" tone="overlay" />
     <DeckHud rootDeck={ex?.root_deck ?? null} />
   </footer>
 </div>
@@ -378,7 +422,7 @@
     background: color-mix(in srgb, var(--band) 20%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--band) 45%, transparent);
   }
-  .labels :global(.xl[data-kind='aimed'] .xl-k) {
+  .labels :global(.xl[data-kind='aimed'] .xl-k:not(:empty)) {
     display: block;
     margin-top: 6px;
     font-size: 11px;
@@ -690,35 +734,10 @@
     display: grid;
     gap: 10px;
   }
-  .keys {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 4px 16px;
-    margin: 0;
-    font-size: 11.5px;
-    color: var(--text-3);
-    opacity: 0.8;
-  }
-  .keys span {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    white-space: nowrap;
-  }
-  .keys kbd,
-  .close kbd,
-  .center kbd {
-    min-width: 1.5em;
-    padding: 0 4px;
-    border-color: rgba(255, 255, 255, 0.14);
-    background: rgba(255, 255, 255, 0.04);
-    font-size: 10.5px;
-    color: var(--text-2);
-  }
-  @media (max-width: 1100px) {
-    .keys span:nth-child(n + 6) {
-      display: none;
-    }
+  /* Wider than the prompt so the mixer hints stay on one line. */
+  .teach {
+    width: max-content;
+    max-width: calc(100vw - 48px);
+    margin-top: 10px;
   }
 </style>

@@ -6,12 +6,15 @@
  *   bun mock/server.ts [--port 7878] [--tracks 48] [--empty]
  *                      [--device running|connecting|stalled|missing|error]
  *                      [--bad-mappings] [--glitches] [--quiet]
- *                      [--view decks|explore] [--band low|mid|high]
+ *                      [--view explore|decks] [--band low|mid|high]
  *                      [--idle] [--analysis-seconds 4] [--section-seconds 12]
+ *                      [--ticker]
  *
- * --view explore starts in the explore view (for screenshots); --idle starts
- * with nothing playing, so the explorer has no root. --section-seconds 0
- * turns off the periodic "section" re-shuffles (steady screenshots).
+ * Starts in the explore view like the real server (--view decks for the deck
+ * view); --idle starts with nothing playing, so the explorer has no root.
+ * --section-seconds 0 turns off the periodic "section" re-shuffles (steady
+ * screenshots). --ticker turns the left jog every few seconds, moving the
+ * library selection away from the aim so Explore shows its library ticker.
  */
 import { existsSync, statSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
@@ -27,6 +30,7 @@ import type {
   ExploreMsg,
   ExploreNode,
   ExploreReason,
+  Mapping,
   MappingsMsg,
   MidiMsg,
   ServerMsg,
@@ -46,11 +50,12 @@ const { values: opts } = parseArgs({
     'bad-mappings': { type: 'boolean', default: false },
     glitches: { type: 'boolean', default: false },
     quiet: { type: 'boolean', default: false },
-    view: { type: 'string', default: 'decks' },
+    view: { type: 'string', default: 'explore' },
     band: { type: 'string', default: 'low' },
     idle: { type: 'boolean', default: false },
     'analysis-seconds': { type: 'string', default: '4' },
     'section-seconds': { type: 'string', default: '12' },
+    ticker: { type: 'boolean', default: false },
   },
 });
 
@@ -221,7 +226,7 @@ function setBrowser(query: string, selected: string | null) {
 }
 
 const CLOCK_BPM = 126;
-let view: View = opts.view === 'explore' ? 'explore' : 'decks';
+let view: View = opts.view === 'decks' ? 'decks' : 'explore';
 
 const deviceState = opts.device as DeviceStateName;
 const DEVICE_MESSAGES: Record<DeviceStateName, string | null> = {
@@ -272,6 +277,30 @@ function deckLoaded(deck: number): DeckLoadedMsg | null {
   return { type: 'deck_loaded', deck, track: d.track, length: d.track.duration ?? 0, peaks: d.peaks };
 }
 
+/** The default config/mappings.toml, as GET /api/mappings lists it. */
+const perDeck = (control: (n: number) => string, action: string, extra: Partial<Mapping> = {}): Mapping[] =>
+  [1, 2, 3, 4].map((n) => ({ control: control(n), action, deck: n, ...extra }));
+const MAPPINGS: Mapping[] = [
+  ...perDeck((n) => `left.lit${n}`, 'deck.load_selected', { led: 'deck.loaded' }),
+  ...perDeck((n) => `right.lit${n}`, 'deck.play_pause', { led: 'deck.playing' }),
+  { control: 'left.jog', action: 'library.scroll' },
+  { control: 'left.browse', action: 'library.scroll', amount: 10 },
+  { control: 'left.browse.push', action: 'explore.root' },
+  { control: 'left.button.A', action: 'explore.cycle_band' },
+  { control: 'left.button.B', action: 'explore.band', amount: 0 },
+  { control: 'left.button.C', action: 'explore.band', amount: 1 },
+  { control: 'left.button.D', action: 'explore.band', amount: 2 },
+  { control: 'left.button.E', action: 'explore.follow' },
+  ...perDeck((n) => `left.encoder${n}`, 'deck.nudge'),
+  ...perDeck((n) => `left.encoder${n}.push`, 'deck.cue'),
+  ...perDeck((n) => `left.fader${n}`, 'deck.rate'),
+  { control: 'right.jog', action: 'explore.aim' },
+  { control: 'right.browse', action: 'explore.step' },
+  { control: 'right.browse.push', action: 'explore.dive' },
+  ...perDeck((n) => `right.encoder${n}`, 'deck.nudge', { amount: 2.0 }),
+  { control: 'right.button.M', action: 'view.explore' },
+];
+
 const mappings: MappingsMsg = opts['bad-mappings']
   ? {
       type: 'mappings',
@@ -280,7 +309,7 @@ const mappings: MappingsMsg = opts['bad-mappings']
       count: 0,
       path: 'config/mappings.toml',
     }
-  : { type: 'mappings', ok: true, error: null, count: 23, path: 'config/mappings.toml' };
+  : { type: 'mappings', ok: true, error: null, count: MAPPINGS.length, path: 'config/mappings.toml' };
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -425,6 +454,14 @@ function handle(cmd: Command): string | null {
       ex.follow = false;
       const deck = decks.findIndex((d) => d.track?.id === cmd.id);
       reroot(cmd.id, deck >= 0 ? deck : null, 'root');
+      return null;
+    }
+    case 'explore_root_selected': {
+      const id = browser.selected;
+      if (!id || !index.has(id)) return 'Nothing selected';
+      ex.follow = false;
+      const deck = decks.findIndex((d) => d.track?.id === id);
+      reroot(id, deck >= 0 ? deck : null, 'root');
       return null;
     }
     default:
@@ -805,20 +842,12 @@ function fakeMidi() {
   const roll = rnd();
   if (roll < 0.35) {
     const delta = rnd() < 0.7 ? 1 : -1;
-    midi({
-      raw: `BF 0E ${delta > 0 ? '01' : '7F'}`,
-      desc: `cc ch16 14 = ${delta > 0 ? 1 : 127}`,
-      control: 'left.browse',
-      event: 'delta',
-      value: delta,
-      action: `browser.scroll delta=${delta}`,
-    });
     // Leave the aim alone in the explore view (keeps screenshots stable).
-    if (view === 'decks') handle({ cmd: 'scroll', delta });
+    jog(delta, view === 'decks');
   } else if (roll < 0.55) {
     const lit = 1 + Math.floor(rnd() * 4);
     const note = (0x23 + lit).toString(16).toUpperCase();
-    const action = lit === 1 ? 'deck.cue deck=1' : lit === 2 ? 'deck.cue deck=2' : null;
+    const action = `deck.load_selected deck=${lit}`;
     midi({ raw: `9F ${note} 7F`, desc: `note on ch16 ${0x23 + lit} vel 127`, control: `left.lit${lit}`, event: 'press', value: null, action });
     setTimeout(
       () => midi({ raw: `8F ${note} 00`, desc: `note off ch16 ${0x23 + lit}`, control: `left.lit${lit}`, event: 'release', value: null, action: null }),
@@ -840,6 +869,33 @@ function fakeMidi() {
   }
 }
 
+/** The left jog: one library row per tick, like the real mapping. */
+function jog(delta: number, scroll = true) {
+  midi({
+    raw: `BF 10 ${delta > 0 ? '01' : '7F'}`,
+    desc: `cc ch16 16 = ${delta > 0 ? 1 : 127}`,
+    control: 'left.jog',
+    event: 'delta',
+    value: delta,
+    action: 'library.scroll',
+  });
+  if (scroll) handle({ cmd: 'scroll', delta });
+}
+
+// --ticker: every few seconds, a short burst of left-jog ticks.
+if (opts.ticker) {
+  (function scheduleTicker() {
+    setTimeout(
+      () => {
+        const dir = rnd() < 0.5 ? -1 : 1;
+        const ticks = 1 + Math.floor(rnd() * 4);
+        for (let i = 0; i < ticks; i++) setTimeout(() => jog(dir), i * 130);
+        scheduleTicker();
+      },
+      2500 + rnd() * 2500,
+    );
+  })();
+}
 
 // ---------------------------------------------------------------------------
 // Server
@@ -874,7 +930,7 @@ const server = Bun.serve<undefined>({
             { name: 'left.upper1', kind: 'knob', midi: 'cc ch16 4', led: false },
           ]);
         case 'GET /api/mappings':
-          return json({ ok: mappings.ok, error: mappings.error, path: mappings.path, mappings: [] });
+          return json({ ok: mappings.ok, error: mappings.error, path: mappings.path, mappings: mappings.ok ? MAPPINGS : null });
         case 'POST /api/command': {
           const cmd = (await req.json()) as Command;
           const error = handle(cmd);

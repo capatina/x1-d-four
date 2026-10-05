@@ -113,6 +113,28 @@ export type MappingsMsg = {
   path: string;
 };
 
+/** One `[[map]]` entry of mappings.toml, as `GET /api/mappings` lists it. */
+export type Mapping = {
+  /** Catalog name, e.g. "left.lit1", "right.browse.push", "shift.left.jog". */
+  control: string;
+  /** e.g. "deck.play_pause", "explore.aim", "view.explore". */
+  action: string;
+  /** 1-4 (as printed on the mixer); absent = the focused deck. */
+  deck?: number;
+  /** Step size or range; meaning depends on the action. */
+  amount?: number;
+  /** LED feedback rule, e.g. "deck.playing". */
+  led?: string;
+};
+
+/** `GET /api/mappings`. `mappings` is null when no mappings file has loaded. */
+export type MappingsResponse = {
+  ok: boolean;
+  error: string | null;
+  path: string;
+  mappings: Mapping[] | null;
+};
+
 export type LibraryChangedMsg = { type: 'library_changed'; tracks: number };
 
 export type ErrorMsg = { type: 'error'; message: string };
@@ -234,4 +256,6 @@ export type Command =
   | { cmd: 'explore_back' }
   | { cmd: 'explore_follow'; follow: boolean }
   /** Re-root on any library track (follow turns off). */
-  | { cmd: 'explore_root'; id: string };
+  | { cmd: 'explore_root'; id: string }
+  /** Re-root on the library selection (follow turns off). */
+  | { cmd: 'explore_root_selected' };

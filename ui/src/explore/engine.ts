@@ -97,6 +97,7 @@ type Label = {
   artist: HTMLDivElement;
   bpm: HTMLSpanElement;
   sim: HTMLSpanElement;
+  hint: HTMLDivElement;
   kind: LabelKind | null;
   text: string;
 };
@@ -160,6 +161,7 @@ export class ExploreEngine {
   readonly #tmp = new THREE.Vector3();
 
   #msg: ExploreMsg | null = null;
+  #hint = '';
   #raf = 0;
   #running = false;
   #disposed = false;
@@ -293,6 +295,13 @@ export class ExploreEngine {
       }
     }
     this.#layout(reason);
+  }
+
+  /** One line under the aimed portal saying how to use it (mixer controls); '' hides it. */
+  setHint(text: string): void {
+    if (text === this.#hint) return;
+    this.#hint = text;
+    for (const p of this.#portals.values()) if (p.label) p.label.hint.textContent = text;
   }
 
   /** Library metadata changed: refresh label text. */
@@ -890,10 +899,10 @@ export class ExploreEngine {
     meta.append(sim, bpm);
     const hint = document.createElement('div');
     hint.className = 'xl-k';
-    hint.textContent = 'Enter dives in · 1–4 loads it';
+    hint.textContent = this.#hint;
     el.append(title, artist, meta, hint);
     this.#o.labels.append(el);
-    return { el, title, artist, bpm, sim, kind: null, text: '' };
+    return { el, title, artist, bpm, sim, hint, kind: null, text: '' };
   }
 
   #fillLabel(p: Portal, l: Label): void {

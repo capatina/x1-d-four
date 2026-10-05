@@ -5,7 +5,9 @@ import {
   type Command,
   type DeckLoadedMsg,
   type ExploreMsg,
+  type Mapping,
   type MappingsMsg,
+  type MappingsResponse,
   type MidiMsg,
   type ServerMsg,
   type StateMsg,
@@ -43,8 +45,11 @@ class Client {
   state = $state.raw<StateMsg | null>(null);
   /** Focused deck as its own signal, so readers only update when it changes. */
   focused = $derived(this.state?.focused ?? 0);
-  /** Server-owned view (the mixer can switch it too). */
-  view = $derived<View>(this.state?.view === 'explore' ? 'explore' : 'decks');
+  /**
+   * Server-owned view (the mixer can switch it too). Explore is the main
+   * view, so that's what shows until the first `state` says otherwise.
+   */
+  view = $derived<View>(this.state?.view === 'decks' ? 'decks' : 'explore');
 
   /** Similarity tree for the explore view; null until the server sends one. */
   explore = $state.raw<ExploreMsg | null>(null);
@@ -62,6 +67,8 @@ class Client {
   /** Newest first. */
   midi = $state.raw<MidiEntry[]>([]);
   mappings = $state.raw<MappingsMsg | null>(null);
+  /** The mapping table itself (GET /api/mappings), refetched on every `mappings` message. */
+  mixer = $state.raw<Mapping[]>([]);
 
   ws = $state<WsStatus>('connecting');
   everConnected = $state(false);
@@ -76,6 +83,7 @@ class Client {
   #pendingState: StateMsg | null = null;
   #stateFrame = 0;
   #libSeq = 0;
+  #mapSeq = 0;
   #midiSeq = 0;
   #toastSeq = 0;
   #rescanTimer: ReturnType<typeof setTimeout> | undefined;
@@ -243,6 +251,7 @@ class Client {
         break;
       case 'mappings':
         this.mappings = msg;
+        void this.#loadMappings();
         break;
       case 'library_changed':
         clearTimeout(this.#rescanTimer);
@@ -272,6 +281,19 @@ class Client {
     const next = this.deckInfo.slice();
     next[deck] = info;
     this.deckInfo = next;
+  }
+
+  async #loadMappings(): Promise<void> {
+    const seq = ++this.#mapSeq;
+    try {
+      const res = await fetch('/api/mappings');
+      if (!res.ok) return;
+      const body = (await res.json()) as MappingsResponse;
+      if (seq !== this.#mapSeq) return;
+      this.mixer = Array.isArray(body.mappings) ? body.mappings : [];
+    } catch {
+      // Keep the last table; the next `mappings` message tries again.
+    }
   }
 
   async #loadRecentMidi(): Promise<void> {

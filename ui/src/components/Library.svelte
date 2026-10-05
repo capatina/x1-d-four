@@ -3,7 +3,9 @@
   import { client } from '../lib/client.svelte';
   import { deckColor } from '../lib/decks';
   import { fmtBpm, fmtLength, idToName } from '../lib/format';
+  import { DECKS_LEGEND } from '../lib/mixer';
   import { DECK_COUNT } from '../lib/protocol';
+  import MixerLegend from './MixerLegend.svelte';
 
   /** Row height in px; must match --row-h below. */
   const ROW = 34;
@@ -52,11 +54,13 @@
   });
 
   // Keep the server-selected row in view, so hardware encoder scrolling shows.
-  // Also re-run once rows exist (the first `browser` usually beats the library fetch).
+  // Also re-run once rows exist (the first `browser` usually beats the library
+  // fetch) and when the list's height changes (the mixer legend below it wraps).
   $effect(() => {
     const sel = selected;
     const list = ids;
     void hasRows;
+    void viewH;
     untrack(() => {
       if (!scroller || sel == null) return;
       const i = list.indexOf(sel);
@@ -124,8 +128,6 @@
       />
       {#if query}
         <button type="button" class="clear" aria-label="Clear search" onclick={clearSearch}>×</button>
-      {:else}
-        <kbd class="slash">/</kbd>
       {/if}
     </div>
     <span class="count">
@@ -137,7 +139,7 @@
         {/if}
       {/if}
     </span>
-    <span class="target" style:--accent={deckColor(focused)} title="Enter or double-click loads to the focused deck">
+    <span class="target" style:--accent={deckColor(focused)} title="Double-click a row to load it to the focused deck">
       Load → <b>Deck {focused + 1}</b>
     </span>
     <button type="button" class="rescan" onclick={() => client.rescan()} disabled={client.rescanning}>
@@ -186,8 +188,8 @@
           {#each rows as { id, index } (id)}
             {@const t = track(id)}
             {@const decks = onDecks.get(id)}
-            <!-- Keyboard users drive the (server-owned) selection with the global
-                 ↑/↓/Enter shortcuts, so rows themselves aren't tab stops. -->
+            <!-- The mixer (and hidden ↑/↓/Enter shortcuts) drive the server-owned
+                 selection, so rows themselves aren't tab stops. -->
             <!-- svelte-ignore a11y_interactive_supports_focus, a11y_click_events_have_key_events -->
             <div
               class="row"
@@ -233,13 +235,8 @@
     </div>
   </div>
 
-  <footer class="hints" aria-label="Keyboard shortcuts">
-    <span><kbd>↑</kbd><kbd>↓</kbd> select</span>
-    <span><kbd>Enter</kbd> load</span>
-    <span><kbd>1</kbd>–<kbd>4</kbd> focus deck</span>
-    <span><kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>4</kbd> load to deck</span>
-    <span><kbd>Space</kbd> play/pause focused</span>
-    <span><kbd>/</kbd> search</span>
+  <footer class="hints">
+    <MixerLegend slots={DECKS_LEGEND} view="decks" lead />
   </footer>
 </section>
 
@@ -300,7 +297,6 @@
     border-color: var(--focus);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 25%, transparent);
   }
-  .slash,
   .clear {
     position: absolute;
     right: 8px;
@@ -541,18 +537,13 @@
     background: color-mix(in srgb, var(--focus) 32%, transparent);
   }
 
-  /* Shortcut hints */
+  /* Mixer legend */
   .hints {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 18px;
-    padding: 7px 12px;
+    padding: 8px 12px;
     border-top: 1px solid var(--line);
-    font-size: 12px;
-    color: var(--text-3);
   }
-  .hints span {
-    white-space: nowrap;
+  .hints:empty {
+    display: none;
   }
 
   .sr {
