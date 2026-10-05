@@ -7,7 +7,8 @@ import { waves } from '../lib/waves';
 import { keeperAtlas, runeAtlas } from './atlas';
 import { Labels, type Obstacle } from './labels';
 import { makeGrass, makeLand, makeLife, makeSky, makeTrees, makeWater, type Wrapped } from './meshes';
-import { BAND_PALETTE, REALM_SHADER } from './palette';
+import { AGES, BAND_PALETTE, REALM_SHADER } from './palette';
+import { makeDragon, makeProps, PROP_PERIOD } from './props';
 import {
   GRAND_SEGMENTS,
   makeBillboards,
@@ -82,6 +83,28 @@ const SWEEP_MS = 160;
 const SWEEP_R = 40;
 /** Keepers' lantern pools and loop rings lie this far down the Current. */
 const POOL_Z = -12;
+/** Waystones pass this line (the near water above the strip) on each phrase downbeat. */
+const BOW_Z = -8;
+/** Mix minutes → age: dawn 0–12, day 12–40, dusk 40–70, night 70+, a second dawn after 150. */
+const AGE_KEYS: [number, number][] = [
+  [0, 0],
+  [8, 0],
+  [16, 1],
+  [36, 1],
+  [44, 2],
+  [66, 2],
+  [74, 3],
+  [146, 3],
+  [154, 4],
+];
+/** Sun (or moon) directions for dawn, day, dusk and night. */
+const SUN_DIRS = [
+  [-0.62, 0.16, -0.77],
+  [-0.45, 0.4, -0.8],
+  [0.58, 0.13, -0.8],
+  [0.34, 0.36, -0.87],
+] as const;
+const FLYOVER_COOLDOWN = 180_000;
 
 /**
  * The Wayfaring: one forward render pass over a world that streams toward a
@@ -187,6 +210,34 @@ export class ExploreEngine {
   readonly #wasLoading = [false, false, false, false];
   readonly #wasTrack: (string | null)[] = [null, null, null, null];
   #vigil = 0;
+  #blend = 0;
+
+  // Ages, structures, the dragon
+  readonly #props: ReturnType<typeof makeProps>;
+  readonly #dragon: ReturnType<typeof makeDragon>;
+  readonly #ageCourse = [1e9, 1e9, 1e9];
+  #bars = 0;
+  #perBar = 4.5;
+  #flow = 0;
+  #low = 0;
+  #breakdown = 0;
+  #breakdownEnd = -1e9;
+  #lowBelowAt = -1e9;
+  #onsetRate = 0;
+  #onsetMedian = 0;
+  readonly #barEnergy = new Float32Array(17);
+  #barIndex = -1;
+  #buildUp = false;
+  #dragonMode = 0;
+  #dragonT = 0;
+  #dragonD = 15;
+  #dragonSeed = 0;
+  #lastFlyover = -1e9;
+  #flownRoot: string | null = null;
+  #waveAt = -1e9;
+  readonly #sunA = new THREE.Vector3();
+  readonly #sunB = new THREE.Vector3();
+  readonly #tmp = new THREE.Vector3();
 
   // Time, music, frame pacing
   #raf = 0;
@@ -239,6 +290,8 @@ export class ExploreEngine {
     const keeperTex = new THREE.CanvasTexture(keeperAtlas());
     keeperTex.flipY = false;
     this.#keepers = makeKeepers(s, keeperTex);
+    this.#props = makeProps(s);
+    this.#dragon = makeDragon(s);
     const grass = makeGrass(s);
     const trees = makeTrees(s);
     const swallows = makeLife(s, false);
@@ -256,6 +309,8 @@ export class ExploreEngine {
       this.#spires.mesh,
       this.#bills.mesh,
       this.#keepers.mesh,
+      ...this.#props.meshes,
+      this.#dragon.mesh,
     );
     this.#setBand(0, true);
     this.#camera.position.copy(CAMERA);
@@ -731,7 +786,10 @@ export class ExploreEngine {
     if (live && energy > 0.015) this.#musicTime += dt * (0.3 + energy * 0.7);
     if (viz.onsets !== this.#onsets) {
       this.#onsets = viz.onsets;
-      if (live) this.#gust = Math.min(1, this.#gust + 0.08);
+      if (live) {
+        this.#gust = Math.min(1, this.#gust + 0.08);
+        this.#gustOnset = true;
+      }
     }
     this.#gust *= Math.exp(-dt / 1.8);
     const spec = s.uSpectrum.value;
@@ -760,6 +818,10 @@ export class ExploreEngine {
     s.uGrowth.value = 1 - Math.exp(-this.#musicTime / 100);
     s.uLife.value += (Math.min(1, energy * 0.85 + s.uGrowth.value * 0.7) - s.uLife.value) * (1 - Math.exp(-dt / 8));
 
+    this.#ages();
+    this.#progression(now, dt, live, energy);
+    this.#waystones();
+    this.#dragonFrame(now, dt);
     this.#passageFrame(now);
     this.#keepersFrame(now, dt, live);
     this.#camera.position.copy(CAMERA);
@@ -915,6 +977,21 @@ export class ExploreEngine {
         qa.anims.clear();
         this.#last = performance.now();
       },
+      /** Jump the mix to `minutes` of music; structures of past ages appear at once. */
+      setMinutes: (minutes: number) => {
+        this.#musicTime = minutes * 60;
+        this.#ages();
+        for (let i = 0; i < 3; i++) this.#ageCourse[i] = this.#shared.uAge.value >= i + 0.5 ? -1e9 : 1e9;
+      },
+      /** Force the dragon: 'far', 'flyover', 'perch' or 'drop' (the full drop, as if earned). */
+      dragon: (what: 'far' | 'flyover' | 'perch' | 'drop') => {
+        if (what === 'drop') {
+          this.#lastFlyover = -1e9;
+          this.#flownRoot = null;
+          this.#drop(this.#now());
+        } else this.#startDragon(what === 'far' ? 1 : what === 'perch' ? 3 : 2);
+        if (what === 'far') this.#buildUp = true;
+      },
       /** Diagnostics: show or hide one scene mesh (by index) to price it. */
       meshes: () => this.#scene.children.map((m, i) => `${i}:${(m as THREE.Mesh).geometry?.type}:${m.renderOrder}`),
       toggle: (i: number, visible: boolean) => {
@@ -935,6 +1012,11 @@ export class ExploreEngine {
         mist: this.#shared.uMist.value,
         vigil: this.#vigil,
         age: this.#shared.uAge.value,
+        bars: this.#bars,
+        dragon: this.#dragonMode,
+        breakdown: this.#breakdown,
+        buildUp: this.#buildUp,
+        low: this.#low,
         anchors: Array.from(this.#anchors.slice(0, this.#children.length * 2)),
         calls: this.#renderer.info.render.calls,
         triangles: this.#renderer.info.render.triangles,
@@ -978,7 +1060,18 @@ export class ExploreEngine {
     } else this.#speedF *= Math.exp(-dt / 0.6);
     this.#energyS += (energy - this.#energyS) * (1 - Math.exp(-dt / 4));
     const perBar = 4.5 + 3 * this.#energyS;
+    this.#perBar = perBar;
     const v = this.#speedF * (bpm / 240) * perBar;
+    // Bars from tempo (stopping halts them), pulled gently onto the master's phrase grid.
+    this.#bars += this.#speedF * (bpm / 240) * dt;
+    const masterBars = this.#masterBars(now);
+    if (masterBars !== null) {
+      const err = masterBars - this.#bars - 8 * Math.round((masterBars - this.#bars) / 8);
+      this.#bars += err * (1 - Math.exp(-dt / 2));
+    }
+    // Ley light flows with the journey, slower in a breakdown.
+    this.#flow += (this.#reduced ? 0 : this.#speed * 0.3 * (this.#breakdown >= 8 ? 0.4 : 1)) * dt;
+    s.uFlow.value = this.#flow % 1000;
     const impulse = 5 * Math.exp(-(now - this.#impulseT0) / 1000 / IMPULSE_TAU) * this.#impulseDir * Math.max(v, 1.6);
     this.#speed = this.#reduced ? 0 : v + impulse;
     this.#course += this.#speed * dt;
@@ -1015,6 +1108,7 @@ export class ExploreEngine {
       this.#starts[1] = NONE;
       if (this.#sweep === 1) this.#sweep = 0;
     }
+    this.#props.wrap.value.set(mod(c, PROP_PERIOD), Math.floor(c / PROP_PERIOD));
     s.uSeeds.value.set(this.#seeds[0], this.#seeds[1], this.#seeds[2]);
     s.uBounds.value.set(this.#bounds[0], this.#bounds[1]);
     s.uRealms.value.set(this.#realms[0], this.#realms[1], this.#realms[2]);
@@ -1102,7 +1196,7 @@ export class ExploreEngine {
       const pool = s.uLantern.value;
       pool[i * 4] = x * 0.82 + riverX * 0.18;
       pool[i * 4 + 1] = POOL_Z;
-      pool[i * 4 + 2] = loaded ? bright * (st?.focused === i ? 0.9 : 0.6) : 0;
+      pool[i * 4 + 2] = loaded ? bright * (st?.focused === i ? 0.9 : 0.6) * (this.#breakdown >= 8 ? 1.6 : 1) : 0;
       pool[i * 4 + 3] = 7;
       const ring = s.uLoop.value;
       const loop = d?.loop;
@@ -1113,6 +1207,26 @@ export class ExploreEngine {
         d && loop && active ? ((((d.position + (d.playing ? d.rate * age : 0) - loop.start!) / (loop.end! - loop.start!)) % 1) + 1) % 1 : 0;
       ring[i * 4 + 3] = active ? 1 : 0;
       if (this.#reduced) ring[i * 4 + 2] = 0;
+    }
+    // A long blend (two synced decks playing together for 2 min): their pools meet on the water.
+    let a = -1,
+      b = -1;
+    if (st)
+      for (let i = 0; i < 4; i++) {
+        const d = st.decks[i];
+        if (d?.playing && d.sync && d.track_id) {
+          if (a < 0) a = i;
+          else if (b < 0) b = i;
+        }
+      }
+    this.#blend = a >= 0 && b >= 0 ? this.#blend + dt : 0;
+    if (this.#blend > 120 && a >= 0 && b >= 0) {
+      const pool = s.uLantern.value;
+      const k = Math.min(1, (this.#blend - 120) / 8);
+      const mx = (pool[a * 4] + pool[b * 4]) / 2;
+      pool[a * 4] += (mx - 1.6 - pool[a * 4]) * k;
+      pool[b * 4] += (mx + 1.6 - pool[b * 4]) * k;
+      pool[a * 4 + 3] = pool[b * 4 + 3] = 7 + 3 * k;
     }
     K.view.set(this.#width, this.#height);
   }
@@ -1147,11 +1261,181 @@ export class ExploreEngine {
     s.uBar.value = this.#barPhase(now);
   }
 
-  /** Realm haze and zenith (crossfaded with the band); the light table comes with the ages. */
+  /** Realm haze and zenith (crossfaded with the band), scaled by the age's light table in #ages. */
   #realmLight(band: number) {
     const s = this.#shared;
     mixHex(REALM_SHADER.haze, band, s.uHaze.value);
     mixHex(REALM_SHADER.zenith, band, s.uZenith.value);
+  }
+
+  /**
+   * The light table over the mix (monotonic `uAge`): the land grows older, the
+   * light goes dawn, day, dusk, night (and a second dawn); magic is brightest
+   * when the land is darkest. Structures spawn only after their age arrives.
+   */
+  #ages() {
+    const s = this.#shared;
+    const minutes = this.#musicTime / 60;
+    let age = 4;
+    for (let i = 1; i < AGE_KEYS.length; i++)
+      if (minutes <= AGE_KEYS[i][0]) {
+        const [m0, a0] = AGE_KEYS[i - 1],
+          [m1, a1] = AGE_KEYS[i];
+        age = a0 + (a1 - a0) * ((minutes - m0) / (m1 - m0));
+        break;
+      }
+    s.uAge.value = age;
+    for (let i = 0; i < 3; i++) if (age >= i + 0.5 && this.#ageCourse[i] > 1e8) this.#ageCourse[i] = this.#course;
+    this.#props.ages.set(this.#ageCourse[0], this.#ageCourse[1], this.#ageCourse[2], 0);
+    const i0 = Math.min(3, Math.floor(age)) % 4;
+    const i1 = (i0 + 1) % 4;
+    const t = age >= 4 ? 0 : age - Math.floor(age);
+    const a = AGES[age >= 4 ? 0 : i0],
+      b = AGES[age >= 4 ? 0 : i1];
+    const day = AGES[1];
+    const ha = cacheHexGet(a.haze),
+      hb = cacheHexGet(b.haze),
+      hd = cacheHexGet(day.haze);
+    const za = cacheHexGet(a.zenith),
+      zb = cacheHexGet(b.zenith),
+      zd = cacheHexGet(day.zenith);
+    const sa = cacheHexGet(a.sun),
+      sb = cacheHexGet(b.sun);
+    const haze = s.uHaze.value,
+      zen = s.uZenith.value;
+    haze.set(
+      (haze.x * (ha[0] + (hb[0] - ha[0]) * t)) / hd[0],
+      (haze.y * (ha[1] + (hb[1] - ha[1]) * t)) / hd[1],
+      (haze.z * (ha[2] + (hb[2] - ha[2]) * t)) / hd[2],
+    );
+    zen.set(
+      (zen.x * (za[0] + (zb[0] - za[0]) * t)) / zd[0],
+      (zen.y * (za[1] + (zb[1] - za[1]) * t)) / zd[1],
+      (zen.z * (za[2] + (zb[2] - za[2]) * t)) / zd[2],
+    );
+    s.uSun.value.set(sa[0] + (sb[0] - sa[0]) * t, sa[1] + (sb[1] - sa[1]) * t, sa[2] + (sb[2] - sa[2]) * t);
+    const da = SUN_DIRS[age >= 4 ? 0 : i0],
+      db = SUN_DIRS[age >= 4 ? 0 : i1];
+    this.#sunA.set(da[0], da[1], da[2]);
+    this.#sunB.set(db[0], db[1], db[2]);
+    s.uSunDir.value.lerpVectors(this.#sunA, this.#sunB, t).normalize();
+    s.uFog.value = (a.fog + (b.fog - a.fog) * t) * (this.#breakdown >= 8 ? 1.3 : 1);
+    s.uLight.value = a.light + (b.light - a.light) * t;
+    s.uMagic.value = a.magic + (b.magic - a.magic) * t;
+    s.uNight.value = Math.max(0, 1 - Math.abs(age - 3));
+    s.uAurora.value = Math.max(0, Math.min(1, (age - 2.7) * 3)) * (age < 3.9 ? 1 : 0);
+  }
+
+  /** The master deck's bar count from its grid and dead-reckoned position, or null. */
+  #masterBars(now: number) {
+    const st = waves.state;
+    if (!st) return null;
+    for (let i = 0; i < st.decks.length; i++) {
+      const d = st.decks[i];
+      if (!d.master || !d.track_id || !d.playing) continue;
+      const grid = client.deckInfo[i]?.grid;
+      if (!grid || grid.bpm <= 0) return null;
+      const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
+      return ((d.position + d.rate * age - grid.first_beat) * grid.bpm) / 240;
+    }
+    return null;
+  }
+
+  /** Waystones every 8 bars of course, so one passes the bow on each phrase downbeat (larger every 32). */
+  #waystones() {
+    const w = this.#props.waystones;
+    const next = Math.ceil(this.#bars / 8) * 8;
+    const grown = Math.min(1, Math.max(0.5, this.#shared.uAge.value * 1.4));
+    for (let j = 0; j < 4; j++) {
+      const bar = next + (j - 1) * 8;
+      const z = BOW_Z - (bar - this.#bars) * this.#perBar;
+      w[j * 4] = z;
+      w[j * 4 + 1] = grown;
+      w[j * 4 + 2] = z > 40 || z < -230 ? 0 : Math.min(1, (z + 230) / 30);
+      w[j * 4 + 3] = mod(bar, 32) === 0 ? 1 : 0;
+    }
+  }
+
+  /**
+   * Within a track: a breakdown (low band under 0.25 for 8 s) thickens the fog
+   * and slows the ley flow; a build-up (energy rising over 16 bars) brings the
+   * far dragon round the horizon; a drop after a breakdown sends a wave of
+   * light down the aimed route and a gust through the grass, and, if earned
+   * (3 min apart, once per track), the dragon's flyover.
+   */
+  #progression(now: number, dt: number, live: boolean, energy: number) {
+    const low = this.#levels[0];
+    this.#low = low;
+    const playing = this.#playing && live;
+    if (playing && low < 0.25) {
+      this.#breakdown += dt;
+      this.#lowBelowAt = now;
+    } else {
+      if (this.#breakdown >= 8) this.#breakdownEnd = now;
+      this.#breakdown = 0;
+    }
+    // Onset rate over ~2 s against the track's typical rate.
+    const kr = 1 - Math.exp(-dt / 2);
+    this.#onsetRate += ((this.#gustOnset ? 1 / Math.max(dt, 1e-3) : 0) - this.#onsetRate) * kr;
+    this.#gustOnset = false;
+    if (playing) this.#onsetMedian += (this.#onsetRate - this.#onsetMedian) * (1 - Math.exp(-dt / 40));
+    const afterBreakdown = this.#breakdown >= 8 || now - this.#breakdownEnd < 4000;
+    if (playing && afterBreakdown && low > 0.6 && now - this.#lowBelowAt < 2000 && this.#onsetRate >= this.#onsetMedian) {
+      this.#breakdownEnd = -1e9;
+      this.#drop(now);
+    }
+    // Build-up: energy sampled per bar; rising over the last 16.
+    const bar = Math.floor(this.#bars);
+    if (bar !== this.#barIndex) {
+      this.#barIndex = bar;
+      this.#barEnergy.copyWithin(0, 1);
+      this.#barEnergy[16] = energy;
+      const e = this.#barEnergy;
+      this.#buildUp = playing && e[0] > 0 && e[16] - e[0] > 0.12 && e[16] >= e[12] && e[12] >= e[8] && e[8] >= e[4] && e[4] >= e[0];
+    }
+    this.#shared.uLeyWave.value = (now - this.#waveAt) / 1000;
+  }
+  #gustOnset = false;
+
+  #drop(now: number) {
+    this.#waveAt = now;
+    this.#gust = 1;
+    const root = this.#msg?.root ?? null;
+    if (now - this.#lastFlyover >= FLYOVER_COOLDOWN && root !== this.#flownRoot) {
+      this.#flownRoot = root;
+      this.#lastFlyover = now;
+      this.#startDragon(this.#reduced ? 3 : 2);
+    }
+  }
+
+  #startDragon(mode: number) {
+    this.#dragonMode = mode;
+    this.#dragonT = 0;
+    this.#dragonD = mode === 3 ? 20 : 12 + Math.random() * 6;
+    this.#dragonSeed = Math.random();
+  }
+
+  /** The dragon's modes, and its shadow on the land: shadow first, body second. */
+  #dragonFrame(now: number, dt: number) {
+    const s = this.#shared;
+    void now;
+    if (this.#dragonMode === 0 && this.#buildUp && !this.#reduced) this.#startDragon(1);
+    if (this.#dragonMode === 1 && !this.#buildUp) this.#dragonMode = 0;
+    if (this.#dragonMode >= 2) {
+      this.#dragonT += dt;
+      if (this.#dragonT > this.#dragonD) this.#dragonMode = 0;
+    } else if (this.#dragonMode === 1) this.#dragonT += dt;
+    const mode = this.#dragonMode;
+    this.#dragon.mesh.visible = mode !== 0;
+    this.#dragon.dragon.set(mode, mode === 3 ? 1 : this.#dragonT, this.#dragonD, this.#dragonSeed);
+    const sh = s.uShadow.value;
+    if (mode === 2) {
+      // The shadow runs ~2.5 s ahead of the body along the same course, on the land.
+      flyover(this.#dragonT + 2.5, this.#dragonD, this.#dragonSeed, this.#tmp);
+      const u = this.#dragonT / this.#dragonD;
+      // Nearer while the body is still out of sight above, so the land is crossed first.
+      sh.set(this.#tmp.x, this.#tmp.z + 45 * (1 - u), 14, 0.85 * Math.min(1, this.#dragonT / 1.2) * Math.min(1, (1 - u) * 6));
+    } else sh.w = 0;
   }
 
   #barPhase(now: number) {
@@ -1297,6 +1581,31 @@ function mixHex(table: readonly string[], band: number, out: THREE.Vector3) {
   out.set(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t);
 }
 const HEX_CACHE = new Map<string, [number, number, number]>();
+function cacheHexGet(hex: string) {
+  return HEX_CACHE.get(hex) ?? cacheHex(hex);
+}
+
+/** CPU twin of the dragon's flyover path (props.ts), for its shadow. */
+function flyover(t: number, D: number, seed: number, out: THREE.Vector3) {
+  const u = Math.max(0, Math.min(1, t / D));
+  const side = seed < 0.5 ? 1 : -1;
+  const ax = 90 * side,
+    ay = 64,
+    az = 20,
+    bx = 25 * side,
+    by = -4,
+    bz = -170,
+    cx = -240 * side,
+    cy = 24,
+    cz = -250;
+  const abx = ax + (bx - ax) * u,
+    aby = ay + (by - ay) * u,
+    abz = az + (bz - az) * u;
+  const bcx = bx + (cx - bx) * u,
+    bcy = by + (cy - by) * u,
+    bcz = bz + (cz - bz) * u;
+  out.set(abx + (bcx - abx) * u, aby + (bcy - aby) * u, abz + (bcz - abz) * u);
+}
 function cacheHex(hex: string) {
   const n = Number.parseInt(hex.slice(1), 16);
   const v: [number, number, number] = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];

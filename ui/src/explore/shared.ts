@@ -40,6 +40,12 @@ export function makeShared() {
     /** Age of the mix: 0 dawn, 1 day, 2 dusk, 3 night, 4 second dawn. */
     uAge: { value: 0 },
     uNight: { value: 0 },
+    /** The aurora (night, late in a set). */
+    uAurora: { value: 0 },
+    /** Ley flow phase (slows in a breakdown, stops in vigil). */
+    uFlow: { value: 0 },
+    /** The light wave down the aimed ley line on a drop: seconds since it began. */
+    uLeyWave: { value: 99 },
     uVigil: { value: 0 },
     /** Scouting: the land beyond is misted. */
     uMist: { value: 0 },
@@ -105,7 +111,7 @@ export function widthAt(z: number) {
 
 export const common = /* glsl */ `
   uniform float uTime, uWind, uGrowth, uBand, uRealmNow, uLife, uMotion;
-  uniform float uCourse, uCourseW, uCourseK, uRiver0, uAge, uNight, uVigil, uMist, uFog, uLight, uMagic, uBar;
+  uniform float uCourse, uCourseW, uCourseK, uRiver0, uAge, uNight, uAurora, uLeyWave, uFlow, uVigil, uMist, uFog, uLight, uMagic, uBar;
   uniform vec2 uSnap, uBounds, uStarts;
   uniform vec3 uSeeds, uRealms, uSun, uSunDir, uHaze, uZenith, uAccent;
   uniform float uSpectrum[64];
@@ -207,7 +213,7 @@ export const common = /* glsl */ `
   float shadowAt(vec3 p) {
     if (uShadow.w <= 0.) return 0.;
     vec2 v = (p.xz - uShadow.xy) / uShadow.z;
-    return uShadow.w * (1. - smoothstep(.55, 1., length(v * vec2(1., 1.8))));
+    return uShadow.w * (1. - smoothstep(.45, 1., length(v * vec2(1., 1.7))));
   }
   // Coverage of rune i (atlas cell) at local (u, v) in 0..1, v down.
   float rune(float i, vec2 l) {

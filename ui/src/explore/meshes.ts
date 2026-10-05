@@ -53,6 +53,18 @@ export function makeSky(s: Shared) {
       col += uSun * (.2 - uNight * .14) * exp(-sd * sd * 16.);
       float disc = 1. - smoothstep(.018 - uNight * .004, .023 - uNight * .004, sd);
       col = mix(col, uSun * (1.02 - uNight * .1), disc);
+      // Night: stars and (late, rare) a slow aurora in the realm's accent, at most 18 %.
+      if (uNight > 0.) {
+        vec2 sp = d.xz / (d.y + .35) * 180.;
+        float star = textureLod(uNoise, (floor(sp) + .5) / 256., 0.).a;
+        vec2 f = fract(sp) - .5;
+        float tw = .75 + .25 * sin(uTime * 1.3 * uMotion + star * 50.);
+        float mag = .35 + .65 * fract(star * 37.31);
+        col += vec3(.95, .93, .86) * step(.993, star) * mag * (1. - smoothstep(.08, .34, length(f))) * smoothstep(.05, .3, y) * uNight * tw;
+        float band = y - .17 - (snoise(vec2(d.x * 2.2 + uTime / 20., 1.7)) - .5) * .14;
+        float curtain = exp(-band * band / .014) * smoothstep(.25, .7, snoise(vec2(d.x * 9. + uTime / 20. * 3., uTime / 20.)));
+        col = mix(col, uAccent * 1.1, min(.18, curtain * .18) * uAurora);
+      }
       vec2 cp = d.xz / max(.12, d.y) * 2.2 + vec2(uTime * .002 * uMotion, -uCourse * .0006);
       float clouds = snoise(cp) * .65 + snoise(cp * 2.8) * .35;
       float cover = smoothstep(.52, .78, clouds) * smoothstep(.03, .25, y) * .38;
@@ -113,8 +125,8 @@ export function makeLand(s: Shared) {
       float b = beam(vP);
       c = mix(c, uAccent * (.6 + .4 * uMagic), b * .7) + uAccent * b * .25 + lanterns(vP);
       c = loopRings(c, vP);
-      c *= 1. - shadowAt(vP) * .45;
-      gl_FragColor = vec4(fogged(c, vP) + grain(gl_FragCoord.xy), 1.);
+      // The dragon's shadow is known before the dragon: it darkens through the haze.
+      gl_FragColor = vec4(fogged(c, vP) * (1. - shadowAt(vP) * .5) + grain(gl_FragCoord.xy), 1.);
     }
   `,
     ),
@@ -150,8 +162,7 @@ export function makeWater(s: Shared) {
       float b = beam(vP);
       c = mix(c, uAccent * (.75 + .5 * uMagic), b) + uAccent * b * .45 + lanterns(vP) * 1.5;
       c = loopRings(c, vP);
-      c *= 1. - shadowAt(vP) * .4;
-      gl_FragColor = vec4(fogged(c, vP), 1.);
+      gl_FragColor = vec4(fogged(c, vP) * (1. - shadowAt(vP) * .45), 1.);
     }
   `,
     ),

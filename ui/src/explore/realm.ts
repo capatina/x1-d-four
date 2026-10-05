@@ -226,8 +226,10 @@ export function makeRoutes(s: Shared) {
       }
       vec3 base = lit(stone * pat, vec3(0., 1., 0.));
       // Ley light flows along the route toward its gate.
-      float flow = pow(fract(vR.y * 6. - uCourse * .3), 5.) * (1. - uVigil);
-      float leyAmt = light * (.45 + 1.1 * flow) * uMagic * (1. - .6 * uMist) * (1. - .45 * uVigil);
+      float flow = pow(fract(vR.y * 6. - uFlow), 5.) * (1. - uVigil);
+      // A drop sends a wave of light down the aimed route (600 ms).
+      float wave = grand ? 0. : exp(-pow((vR.y - uLeyWave / .6) * 7., 2.)) * step(uLeyWave, .7) * min(light, 1.) * 2.2;
+      float leyAmt = (light * (.45 + 1.1 * flow) + wave) * uMagic * (1. - .6 * uMist) * (1. - .45 * uVigil);
       vec3 ley = uAccent * leyAmt;
       float alpha = core * (grand ? .3 : .34 + .62 * min(light, 1.)) * (1. - .5 * uMist * (1. - light));
       if (slot == 7) alpha = core * light;
