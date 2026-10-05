@@ -36,6 +36,7 @@ pub struct ExploreState {
     last_tick: Mutex<Option<Instant>>,
     /// Jog ticks collected towards the next band change, and when the last came in.
     band_ticks: Mutex<(i32, Option<Instant>)>,
+    xfader: Mutex<CrossfaderBand>,
 }
 
 impl App {
@@ -283,6 +284,28 @@ impl App {
         }
     }
 
+    /// The crossfader picks the band: left low, middle mid, right high.
+    pub fn explore_band_crossfader(&self, value: u8) {
+        let current = self.explore.explorer.lock().unwrap().band;
+        let band = self.explore.xfader.lock().unwrap().feed(value, Instant::now(), current);
+        if band != current {
+            self.explore_band(band);
+        }
+    }
+
+    /// Called from the app tick: a crossfader glide that stopped short of an end
+    /// only shows where it is once it rests.
+    pub fn explore_crossfader_settle(&self) {
+        if !self.explore.xfader.lock().unwrap().unsettled() {
+            return;
+        }
+        let current = self.explore.explorer.lock().unwrap().band;
+        let band = self.explore.xfader.lock().unwrap().settle(Instant::now(), current);
+        if band != current {
+            self.explore_band(band);
+        }
+    }
+
     pub fn explore_cycle_band(&self) {
         let band = self.explore.explorer.lock().unwrap().band.next();
         self.explore_band(band);
@@ -370,9 +393,174 @@ fn fader_band(value: u8, current: Band) -> Band {
     }
 }
 
+/// Reads the Xone:4D crossfader (CC5) as a band. With XFADE CURVE fully left
+/// (the only setting where it sends MIDI), CC5 climbs from 0 at the left end
+/// (quarter ~45, middle ~62, three-quarters ~90) to ~98, then over the last
+/// stretch the mixer glides it straight back to 0: both ends read 0. A glide
+/// to 0 that turns down straight after a climb past `WRAP_PEAK` is the right
+/// end, and the band stays high there. Leaving the right end glides the value
+/// back up past ~100 before it follows the fader down again.
+#[derive(Default)]
+pub struct CrossfaderBand {
+    last: Option<(u8, Instant)>,
+    /// +1 climbing, -1 falling, 0 just started after a rest.
+    dir: i8,
+    /// Highest value of the current climb.
+    peak: u8,
+    /// The current climb is the glide out of the right end, so it can't wrap.
+    climb_from_end: bool,
+    /// Falling straight after a climb past `WRAP_PEAK`: hold the band until it
+    /// lands on 0 (the right end) or rests somewhere (an ordinary move).
+    falling: bool,
+    /// At the right end, reading 0, or gliding back up out of it.
+    right_end: bool,
+}
+
+impl CrossfaderBand {
+    /// Messages closer together than this are one movement.
+    const MOVING: Duration = Duration::from_millis(150);
+    const SETTLE: Duration = Duration::from_millis(250);
+    const WRAP_PEAK: u8 = 90;
+    const HIGH: u8 = 84;
+
+    fn feed(&mut self, value: u8, now: Instant, current: Band) -> Band {
+        let last = self.last.replace((value, now));
+        if last.is_none_or(|(_, at)| now.duration_since(at) >= Self::MOVING) {
+            self.dir = 0;
+            self.falling = false;
+        }
+        let prev = last.map_or(value, |(v, _)| v);
+        if value > prev {
+            if self.dir != 1 {
+                self.peak = 0;
+                self.climb_from_end = self.right_end;
+                self.falling = false;
+            }
+            self.dir = 1;
+            self.peak = self.peak.max(value);
+        } else if value < prev {
+            if self.dir == 1 && self.peak >= Self::WRAP_PEAK && !self.climb_from_end {
+                self.falling = true;
+            }
+            // Out of the right end the value climbs past `HIGH` before it turns:
+            // turning lower means it was never there (a quick swing to the left end).
+            if self.dir == 1 && self.right_end && self.peak < Self::HIGH {
+                self.right_end = false;
+            }
+            self.dir = -1;
+        }
+
+        if self.right_end {
+            if value >= Self::HIGH {
+                self.right_end = false;
+            }
+            return Band::High;
+        }
+        if self.falling {
+            if value == 0 {
+                self.falling = false;
+                self.right_end = true;
+                return Band::High;
+            }
+            return current;
+        }
+        crossfader_zone(value, current)
+    }
+
+    fn unsettled(&self) -> bool {
+        self.falling || (self.right_end && self.last.is_some_and(|(v, _)| v != 0))
+    }
+
+    /// Once the fader rests, a held fall or a right end that never climbed back
+    /// out was an ordinary move: show where it stopped.
+    fn settle(&mut self, now: Instant, current: Band) -> Band {
+        let Some((value, at)) = self.last else { return current };
+        if now.duration_since(at) < Self::SETTLE || !self.unsettled() {
+            return current;
+        }
+        self.falling = false;
+        self.right_end = false;
+        crossfader_zone(value, current)
+    }
+}
+
+/// Band for a crossfader value away from the right end: thirds of the travel,
+/// with dead zones where the current band holds.
+fn crossfader_zone(value: u8, current: Band) -> Band {
+    match (value, current) {
+        (0..=48, _) => Band::Low,
+        (56..=76, _) => Band::Mid,
+        (84..=127, _) => Band::High,
+        (49..=55, Band::High) | (77..=83, Band::Low) => Band::Mid,
+        _ => current,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plays `moves` into a crossfader decoder, ~6.5 ms per message like the
+    /// mixer, resting 3 s after each move, and returns the band after each rest.
+    fn crossfader(moves: &[&[u8]]) -> Vec<Band> {
+        let (mut x, mut band, mut t) = (CrossfaderBand::default(), Band::Mid, Instant::now());
+        moves
+            .iter()
+            .map(|values| {
+                for &v in *values {
+                    t += Duration::from_micros(6500);
+                    band = x.feed(v, t, band);
+                }
+                t += Duration::from_secs(3);
+                band = x.settle(t, band);
+                band
+            })
+            .collect()
+    }
+
+    fn ramp(from: u8, to: u8, step: u8) -> Vec<u8> {
+        let mut v = vec![from];
+        while *v.last().unwrap() != to {
+            let l = *v.last().unwrap();
+            v.push(if from < to { l.saturating_add(step).min(to) } else { l.saturating_sub(step).max(to) });
+        }
+        v
+    }
+
+    #[test]
+    fn crossfader_slow_stops_left_to_right() {
+        // Recorded 2026-10-05: hard left, quarter, middle, three-quarters, hard right.
+        let right_end = [89, 90, 91, 92, 94, 96, 98, 95, 89, 84, 79, 73, 68, 62, 57, 51, 45, 39, 33, 26, 19, 12, 5, 0];
+        let bands = crossfader(&[&ramp(49, 0, 3), &ramp(4, 44, 2), &ramp(45, 61, 1), &ramp(62, 88, 1), &right_end]);
+        assert_eq!(bands, [Band::Low, Band::Low, Band::Mid, Band::High, Band::High]);
+    }
+
+    #[test]
+    fn crossfader_leaving_the_right_end() {
+        let to_right: Vec<u8> = ramp(0, 98, 2).into_iter().chain(ramp(95, 0, 6)).collect();
+        // Out of the right end the mixer glides up past 100, then follows the fader down.
+        let out_of_end = ramp(0, 107, 8);
+        let to_left: Vec<u8> = out_of_end.iter().copied().chain(ramp(106, 0, 5)).collect();
+        let to_middle: Vec<u8> = out_of_end.iter().copied().chain(ramp(106, 61, 3)).collect();
+        assert_eq!(crossfader(&[&to_right, &to_left]), [Band::High, Band::Low]);
+        assert_eq!(crossfader(&[&to_right, &to_middle]), [Band::High, Band::Mid]);
+        assert_eq!(crossfader(&[&to_right, &ramp(0, 101, 8)]), [Band::High, Band::High]);
+    }
+
+    #[test]
+    fn crossfader_ordinary_moves_down() {
+        // From three-quarters at rest straight to the left end.
+        assert_eq!(crossfader(&[&ramp(0, 93, 3), &ramp(93, 0, 6)]), [Band::High, Band::Low]);
+        // Climbing high then turning back without a pause, stopping at the quarter.
+        let turn: Vec<u8> = ramp(40, 95, 3).into_iter().chain(ramp(94, 44, 4)).collect();
+        assert_eq!(crossfader(&[&turn]), [Band::Low]);
+        // A quick swing high and back to the left end looks like the right end,
+        // until the next swing turns back below `HIGH` (recorded wiggle).
+        let wiggle: Vec<u8> = ramp(5, 92, 4).into_iter().chain(ramp(90, 0, 6)).chain(ramp(10, 83, 7)).chain(ramp(78, 0, 6)).collect();
+        assert_eq!(crossfader(&[&wiggle]), [Band::Low]);
+        // Wobbling around the middle stays mid.
+        assert_eq!(crossfader(&[&[51, 57, 56, 55, 54, 52, 58, 63, 60]]), [Band::Mid]);
+    }
 
     #[test]
     fn fader_regions_with_dead_zones() {

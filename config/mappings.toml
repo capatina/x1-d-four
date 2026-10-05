@@ -23,6 +23,7 @@
 # Explore (the similarity tunnel):
 #   explore.cycle_band   on press: low -> mid -> high
 #   explore.band_fader   fader: bottom third low, middle mid, top third high
+#   explore.band_crossfader  the Xone:4D crossfader (xfader): left low, middle mid, right high
 #   explore.band_step    jog/encoder: turn right for the next band up, left for down;
 #                        amount = ticks per band step (default 8), stops at low/high
 #   explore.band         on press, amount = 0 (low), 1 (mid) or 2 (high)
@@ -79,11 +80,11 @@ control = "left.jog"
 action = "deck.jog"
 amount = 4
 
-# Right pod fader 1: bottom = low, middle = mid, top = high band. (The Xone:4D's
-# crossfader can't do this: its MIDI reads 0 at both ends and peaks in the middle.)
+# Crossfader: left = low, middle = mid, right = high band. It only sends MIDI with
+# XFADE CURVE turned fully left.
 [[map]]
-control = "right.fader1"
-action = "explore.band_fader"
+control = "xfader"
+action = "explore.band_crossfader"
 
 [[map]]
 control = "left.browse"

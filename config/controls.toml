@@ -391,8 +391,10 @@ led = true
 
 # ---- mixer section ----
 
-# Measured 2026-10-05: CC5 reads 0 at BOTH ends and peaks in the middle (XFADE on or
-# off), so it can't tell left from right; it settles back to 0 after most moves.
+# Measured 2026-10-05: CC5 only sends with XFADE CURVE fully left. It climbs from 0
+# at the left end (quarter ~45, middle ~62, three-quarters ~90) to ~98, then the
+# mixer glides it back to 0 over the last stretch, so both ends read 0.
+# explore.band_crossfader tells the ends apart from the movement.
 [[control]]
 name = "xfader"
 cc = 5

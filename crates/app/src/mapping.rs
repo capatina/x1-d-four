@@ -56,6 +56,7 @@ pub enum Action {
     LoopLength,
     Jog,
     BandFader,
+    BandCrossfader,
 }
 
 impl Action {
@@ -88,6 +89,7 @@ impl Action {
             "deck.loop_length" => Self::LoopLength,
             "deck.jog" => Self::Jog,
             "explore.band_fader" => Self::BandFader,
+            "explore.band_crossfader" => Self::BandCrossfader,
             other => bail!("unknown action {other:?}"),
         })
     }
@@ -140,6 +142,8 @@ pub enum Intent {
     Jog(Option<usize>, f64),
     /// Fader position 0..=127 picking low / mid / high.
     BandFader(u8),
+    /// The Xone:4D crossfader's CC picking low / mid / high (see `CrossfaderBand`).
+    BandCrossfader(u8),
 }
 
 pub struct Rule {
@@ -207,6 +211,7 @@ impl Rule {
             (Action::LoopLength, Press) => Intent::LoopLength(d, a.unwrap_or(1.0) as i32),
             (Action::Jog, Delta(n)) => Intent::Jog(d, n as f64 * a.unwrap_or(4.0)),
             (Action::BandFader, Value(v)) => Intent::BandFader(v),
+            (Action::BandCrossfader, Value(v)) => Intent::BandCrossfader(v),
             _ => return None,
         })
     }
@@ -238,7 +243,7 @@ impl Mappings {
                 Action::Trim => kind != Kind::Button,
                 Action::ExploreAim | Action::LoopLength => kind != Kind::Absolute,
                 Action::Jog => kind == Kind::Relative,
-                Action::BandFader => kind == Kind::Absolute,
+                Action::BandFader | Action::BandCrossfader => kind == Kind::Absolute,
                 Action::ExploreStep | Action::ExploreBandStep | Action::FocusStep => kind == Kind::Relative,
                 _ => kind == Kind::Button,
             };

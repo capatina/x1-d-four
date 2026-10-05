@@ -33,8 +33,10 @@ It's played entirely from the mixer:
 | Jog wheel | nudge the focused deck (smooth; a synced deck keeps the offset) | aim between portals |
 | JOG/SELECT | focus deck 1–4 (the tunnel grows from it); push to start from the search selection | dive / back; push to dive |
 | Buttons | A low, B mid, C high band; E follow the focused deck on/off | |
-| Encoders 1–4 | nudge; push = cue | skip ±2 s |
-| Faders 1–4 | pitch ±8 % | fader 1: band, bottom low / middle mid / top high |
+| Encoders 1–4 | push = 8-bar loop on deck 1–4; turn = loop length | skip ±2 s; push = sync |
+| Faders 1–4 | pitch ±8 % | |
+
+The crossfader picks the band: left low, middle mid, right high. It only sends MIDI with **XFADE CURVE** turned fully left.
 
 ## Map controls by talking to your agent
 

@@ -396,6 +396,7 @@ impl App {
                 Ok(self.send(Command::Jog { deck: self.deck_or_focused(d), frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
             }
             Intent::BandFader(v) => Ok(self.explore_band_fader(v)),
+            Intent::BandCrossfader(v) => Ok(self.explore_band_crossfader(v)),
         };
         if let Err(e) = result {
             self.broadcast(json!({ "type": "error", "message": e }));
@@ -776,6 +777,7 @@ impl App {
     /// Runs ~30 times a second: state broadcast and LED sync.
     pub fn tick(&self) {
         self.sync_leds();
+        self.explore_crossfader_settle();
         self.explore_tick(false);
         if self.tx.receiver_count() > 0 {
             self.broadcast(self.state_json());
