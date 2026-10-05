@@ -25,6 +25,9 @@ pub struct Control {
     pub kind: Option<Kind>,
     #[serde(default)]
     pub led: bool,
+    /// Map 1 encoders: the note sent per click turning [left, right].
+    #[serde(default)]
+    pub turn_notes: Option<[u8; 2]>,
 }
 
 impl Control {
@@ -71,7 +74,8 @@ pub struct Catalog {
     /// 0-based MIDI channel the mixer sends on.
     pub channel: u8,
     pub controls: Vec<Control>,
-    by_key: HashMap<Key, usize>,
+    /// Message -> control, plus the step for a Map 1 turn note.
+    by_key: HashMap<Key, (usize, Option<i8>)>,
     by_name: HashMap<String, usize>,
 }
 
@@ -89,8 +93,15 @@ impl Catalog {
                 (None, Some(n)) => Key::Cc(n),
                 _ => bail!("control {} needs exactly one of note or cc", c.name),
             };
-            if by_key.insert(key, i).is_some() {
+            if by_key.insert(key, (i, None)).is_some() {
                 bail!("control {} reuses a MIDI message", c.name);
+            }
+            if let Some([left, right]) = c.turn_notes {
+                for (note, step) in [(left, -1), (right, 1)] {
+                    if by_key.insert(Key::Note(note), (i, Some(step))).is_some() {
+                        bail!("control {} reuses note {note}", c.name);
+                    }
+                }
             }
             if by_name.insert(c.name.clone(), i).is_some() {
                 bail!("duplicate control name {}", c.name);
@@ -126,8 +137,16 @@ impl Catalog {
         } else {
             return None;
         };
-        let &i = self.by_key.get(&key)?;
+        let &(i, turn) = self.by_key.get(&key)?;
         let control = &self.controls[i];
+        if let Some(step) = turn {
+            // Map 1 encoder click: a note on per step; ignore any note off.
+            if event != ControlEvent::Press {
+                return None;
+            }
+            let name = if shift { format!("shift.{}", control.name) } else { control.name.clone() };
+            return Some(Resolved { name, base: i, event: ControlEvent::Delta(step) });
+        }
         let event = match (control.kind(), event) {
             (Kind::Relative, ControlEvent::Value(v)) => ControlEvent::Delta(if v < 64 { v as i8 } else { (v as i16 - 128) as i8 }),
             (_, e) => e,
@@ -164,5 +183,20 @@ mod tests {
         let r = c.resolve(&MidiMessage::Cc { ch: 14, num: 19, val: 100 }).unwrap();
         assert_eq!((r.name.as_str(), r.event), ("shift.left.fader1", ControlEvent::Value(100)));
         assert!(c.resolve(&MidiMessage::NoteOn { ch: 3, note: 38, vel: 1 }).is_none());
+    }
+
+    #[test]
+    fn map1_encoder_notes_turn_the_same_control() {
+        let c = catalog();
+        let r = c.resolve(&MidiMessage::NoteOn { ch: 15, note: 90, vel: 127 }).unwrap();
+        assert_eq!((r.name.as_str(), r.event), ("left.encoder1", ControlEvent::Delta(1)));
+        let r = c.resolve(&MidiMessage::NoteOn { ch: 15, note: 89, vel: 127 }).unwrap();
+        assert_eq!((r.name.as_str(), r.event), ("left.encoder1", ControlEvent::Delta(-1)));
+        let r = c.resolve(&MidiMessage::NoteOn { ch: 15, note: 104, vel: 127 }).unwrap();
+        assert_eq!((r.name.as_str(), r.event), ("right.encoder4", ControlEvent::Delta(1)));
+        assert!(c.resolve(&MidiMessage::NoteOff { ch: 15, note: 90, vel: 0 }).is_none());
+        // Map 2's CC still works for the same control.
+        let r = c.resolve(&MidiMessage::Cc { ch: 15, num: 32, val: 127 }).unwrap();
+        assert_eq!((r.name.as_str(), r.event), ("left.encoder1", ControlEvent::Delta(-1)));
     }
 }

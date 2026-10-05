@@ -21,6 +21,10 @@
   $effect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      if (search.open) {
+        if (search.key(e)) e.preventDefault();
+        return;
+      }
       if (e.key.length === 1 && e.key !== ' ' && !e.repeat) {
         e.preventDefault();
         search.start(e.key);

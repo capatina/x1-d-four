@@ -7,6 +7,8 @@
 #
 # kind: button (note on/off), absolute (CC 0-127), relative (CC two's complement:
 #       1 = +1, 127 = -1). led = true marks red rings the host can toggle.
+# turn_notes = [left, right]: in "Map 1" the top encoders send one note per
+#       click and direction instead of a CC; both maps resolve to the same control.
 # Jog-switch directions are read off the guide's diagram and still unconfirmed.
 
 base_channel = 16
@@ -17,6 +19,7 @@ base_channel = 16
 name = "left.encoder1"
 cc = 32
 kind = "relative"
+turn_notes = [89, 90]
 
 [[control]]
 name = "left.encoder1.push"
@@ -26,6 +29,7 @@ note = 28
 name = "left.encoder2"
 cc = 33
 kind = "relative"
+turn_notes = [91, 92]
 
 [[control]]
 name = "left.encoder2.push"
@@ -35,6 +39,7 @@ note = 14
 name = "left.encoder3"
 cc = 34
 kind = "relative"
+turn_notes = [93, 94]
 
 [[control]]
 name = "left.encoder3.push"
@@ -44,6 +49,7 @@ note = 16
 name = "left.encoder4"
 cc = 35
 kind = "relative"
+turn_notes = [95, 96]
 
 [[control]]
 name = "left.encoder4.push"
@@ -201,6 +207,7 @@ led = true
 name = "right.encoder1"
 cc = 40
 kind = "relative"
+turn_notes = [97, 98]
 
 [[control]]
 name = "right.encoder1.push"
@@ -210,6 +217,7 @@ note = 60
 name = "right.encoder2"
 cc = 41
 kind = "relative"
+turn_notes = [99, 100]
 
 [[control]]
 name = "right.encoder2.push"
@@ -219,6 +227,7 @@ note = 46
 name = "right.encoder3"
 cc = 42
 kind = "relative"
+turn_notes = [101, 102]
 
 [[control]]
 name = "right.encoder3.push"
@@ -228,6 +237,7 @@ note = 48
 name = "right.encoder4"
 cc = 43
 kind = "relative"
+turn_notes = [103, 104]
 
 [[control]]
 name = "right.encoder4.push"

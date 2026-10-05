@@ -36,6 +36,13 @@
   const loadKeys = $derived(keysFor(client.mixer, 'deck.load_selected'));
   const rootKeys = $derived(keysFor(client.mixer, 'explore.root'));
 
+  $effect(() => {
+    search.input = input ?? null;
+    return () => {
+      search.input = null;
+    };
+  });
+
   // Focus the box when it opens, with the caret after the first character.
   $effect(() => {
     if (search.open) {
@@ -62,22 +69,7 @@
   });
 
   function onKey(e: KeyboardEvent) {
-    switch (e.key) {
-      case 'ArrowDown':
-      case 'ArrowUp':
-        e.preventDefault();
-        client.send({ cmd: 'scroll', delta: e.key === 'ArrowUp' ? -1 : 1 });
-        break;
-      case 'Enter':
-        e.preventDefault();
-        if (selected) client.send({ cmd: 'explore_root_selected' });
-        search.close();
-        break;
-      case 'Escape':
-        e.preventDefault();
-        search.close();
-        break;
-    }
+    if (search.key(e)) e.preventDefault();
   }
 
   function pick(id: string) {
