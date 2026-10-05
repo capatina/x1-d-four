@@ -47,7 +47,7 @@ Users ask for mappings in plain words ("make the left pod's first lit button pla
    - The shift layer prefixes `shift.`.
 2. If you're unsure which physical control the user means (the jog switches and Map 1 vs Map 2 are unconfirmed), ask them to press it. Then read `curl -s localhost:7878/api/midi/recent | jq '.[-5:]'`: each entry has `raw`, the resolved `control` (null if it isn't in the catalog) and the `action` that fired. If the control is missing, add it to `controls.toml`.
 3. Edit `config/mappings.toml` using the action vocabulary in its header comment.
-4. Saving reloads the file. Check `curl -s localhost:7878/api/mappings | jq '{ok, error, count}'`; the UI's MIDI panel shows the same status.
+4. Saving reloads the file. Check `curl -s localhost:7878/api/mappings | jq '{ok, error, count}'`; the control legend at the bottom of the UI shows an error line when the file doesn't parse.
 
 Holding the left JOG/SELECT encoder (above the left jog wheel) for about half a second toggles the mixer's shift layer: the BPM display shows SFT and every control sends on channel 15 (`shift.*`). Unmapped shift controls look like "nothing works".
 

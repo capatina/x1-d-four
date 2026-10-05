@@ -1,21 +1,29 @@
 # X1 D. Four
 
-**Bare-metal decks for the Allen & Heath Xone:4D.** A userspace USB driver written in Rust, plus a browser UI: four decks playing into the mixer's four channels at 5 ms latency. No kernel module, no ALSA, no PipeWire, no libusb.
+**DJ decks and a music visualizer in one, for the Allen & Heath Xone:4D.** Four decks play straight into the mixer's channels through X1 D. Four's own Rust USB driver at 5 ms latency, and the screen that runs your mix turns your library into a mythic realm you travel through as you play. The visuals are the track browser: you pick the next track by choosing a path, and the world answers the music and the mixer's own controls.
 
 *Unofficial: not affiliated with or endorsed by Allen & Heath.*
 
 ![X1 D. Four Explore: the Wayfaring](docs/screenshots/wayfaring/01-lowmarch-travel-1080.webp)
 
-The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. Four talks to its Ploytec USB chip directly through Linux usbfs. It renders each deck straight into the USB packets on a real-time thread, and the mixer's own knobs and buttons drive the decks.
+The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. Four talks to its Ploytec USB chip directly through Linux usbfs: no kernel module, no ALSA, no PipeWire, no libusb. It renders each deck straight into the USB packets on a real-time thread, and the mixer's own knobs and buttons drive both the decks and the visuals.
 
 ## What you get
 
+### Mix
+
 - **4 decks → 4 channels.** Deck *n* plays into USB pair *n*, and each mixer channel set to **SC (USB)** plays its deck. All the mixing (faders, EQ, filters, FX, cueing) stays on the mixer's analog hardware.
 - **5 ms output latency.** Each packet carries 80 frames (1.67 ms at 48 kHz), and 3 packets are in flight by default (`--urbs 2` gives 3.3 ms). The driver's output matches the packets of the reverse-engineered kernel driver byte for byte.
-- **Decks:** play/pause, CDJ-style cue, click-to-seek waveforms, nudge, varispeed, and click-free starts and stops.
-- **Library:** everything in `~/Music`, with search. Plays MP3, FLAC, WAV, AIFF, AAC/ALAC and Vorbis.
-- **The mixer's MIDI controls**: buttons, encoders, faders and jog wheels, mapped in a TOML file that reloads on save, with LED feedback on the lit buttons. The UI's live MIDI monitor names every control as you touch it.
+- **Decks:** beat sync phase-locked to the master deck, loops from ½ beat to 32 bars (8 bars by default), a jog that jumps through a track and speeds up as you spin, a fine shift to fix a sync by ear, varispeed from the pitch faders, and click-free starts and stops. Every track gets a beat grid when it loads.
+- **Library:** everything in `~/Music`. Type anywhere to search, then load from the mixer or drag a result onto a deck. Plays MP3, FLAC, WAV, AIFF, AAC/ALAC and Vorbis.
+- **The mixer's MIDI controls**: buttons, encoders, faders and jog wheels, mapped in a TOML file that reloads on save, with LED feedback on the lit buttons. The on-screen legend shows what each control does, and `/api/midi/recent` names every control as you touch it.
 - **Readout of the mixer's own MIDI clock BPM.**
+
+### Visualize
+
+- **A realm built from your library** (below): tracks similar to what's playing become routes ahead of you, in the band you choose. Wind, light and lanterns follow the music; the journey travels with the tempo and ages from dawn to night over a set.
+- **Faithful 3-band waveforms** of all four decks on one timeline: kicks stand out as low peaks, breakdowns drop, and synced decks' beats line up.
+- **Instant:** every mixer move shows in the next frame, and the scene runs at 60 fps on integrated graphics.
 
 ## Explore: the Wayfaring
 
@@ -71,10 +79,7 @@ cargo build --release
 target/release/x1-d-four --open             # or open http://127.0.0.1:7878 yourself
 ```
 
-Set each channel's source switch on the mixer to **SC**. Load tracks from the library with the 1–4 buttons, or from the mixer. The default mapping is:
-- the left jog wheel browses the library;
-- the left lit buttons load decks 1–4;
-- the right lit buttons play/pause decks 1–4.
+Set each channel's source switch on the mixer to **SC**. Type to search, or aim a route in the realm with the right JOG/SELECT knob, then load it onto a deck with the left lit buttons 1–4; the right lit buttons play/pause decks 1–4. The full layout is in the table above.
 
 Other commands:
 - `x1-d-four probe --pair 2`: plays a test tone into USB pair 2.
