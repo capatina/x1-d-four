@@ -45,14 +45,20 @@ impl Track {
 
 /// Decode a file into a playable track.
 pub fn load(path: &Path) -> anyhow::Result<Track> {
-    let (rate, samples) = decode_stereo(path)?;
+    let (rate, samples) = decode(path, 2)?;
     let samples = if rate == SAMPLE_RATE { samples } else { resample(&samples, rate, SAMPLE_RATE)? };
     Ok(Track::from_samples(path.to_owned(), samples))
 }
 
-/// Decode to interleaved stereo f32 at the file's own rate. Mono is duplicated,
-/// anything wider keeps its first two channels.
-fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
+/// Decode to mono f32 at the file's own rate (left/right averaged), for analysis.
+pub fn decode_mono(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
+    decode(path, 1)
+}
+
+/// Decode to interleaved f32 at the file's own rate: `out_channels` 2 gives
+/// stereo (mono duplicated, wider files keep their first two channels), 1 gives
+/// the average of the first two channels.
+fn decode(path: &Path, out_channels: usize) -> anyhow::Result<(u32, Vec<f32>)> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -81,7 +87,7 @@ fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(SymError::ResetRequired) => break,
-            Err(SymError::IoError(_)) if decoded_enough(&out, rate) => break,
+            Err(SymError::IoError(_)) if decoded_enough(&out, rate, out_channels) => break,
             Err(e) => return Err(e).context("read packet"),
         };
         if packet.track_id != track_id {
@@ -91,19 +97,23 @@ fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
             Ok(b) => b,
             Err(SymError::DecodeError(_)) => continue,
             // A file cut off mid-frame: keep what decoded, if it's a real track.
-            Err(SymError::IoError(_)) if decoded_enough(&out, rate) => break,
+            Err(SymError::IoError(_)) if decoded_enough(&out, rate, out_channels) => break,
             Err(e) => return Err(e).context("decode"),
         };
         rate = buf.spec().rate();
         let channels = buf.spec().channels().count().max(1);
         scratch.resize(buf.samples_interleaved(), 0.0);
         buf.copy_to_slice_interleaved(&mut scratch);
-        out.reserve(scratch.len() / channels * 2);
+        out.reserve(scratch.len() / channels * out_channels);
         for frame in scratch.chunks_exact(channels) {
             let l = frame[0];
             let r = if channels > 1 { frame[1] } else { l };
-            out.push(l);
-            out.push(r);
+            if out_channels == 1 {
+                out.push(0.5 * (l + r));
+            } else {
+                out.push(l);
+                out.push(r);
+            }
         }
     }
     if out.is_empty() || rate == 0 {
@@ -113,8 +123,8 @@ fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
 }
 
 /// More than 5 s decoded: an I/O error now means a truncated file, not a bogus one.
-fn decoded_enough(out: &[f32], rate: u32) -> bool {
-    rate > 0 && out.len() / 2 > rate as usize * 5
+fn decoded_enough(out: &[f32], rate: u32, channels: usize) -> bool {
+    rate > 0 && out.len() / channels > rate as usize * 5
 }
 
 fn resample(samples: &[f32], from: u32, to: u32) -> anyhow::Result<Vec<f32>> {

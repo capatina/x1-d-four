@@ -116,3 +116,73 @@ type Track = {
 { cmd: "rescan" }
 { cmd: "midi_out", bytes: number[] }              // 1-3 raw bytes to the mixer (LED tests)
 ```
+
+## Explore (similarity tunnel)
+
+Each track is analysed into three feature vectors, one per frequency band:
+- `low`: kick, sub, bassline and groove;
+- `mid`: harmony, key and chords;
+- `high`: hats, percussion and air.
+
+The explorer builds a tree of similar tracks in the active band. The tree is rooted at what's playing (the **root**). You move down it by diving into portals; the node you're standing on is **current**.
+
+The **aimed** child of `current` is also the library selection, so every "load selected" control loads it.
+
+### Server → client
+
+**`explore`** is sent on connect and whenever anything below changes:
+```ts
+{
+  type: "explore",
+  band: "low" | "mid" | "high",
+  follow: boolean,                 // root follows the playing track
+  root: string | null,             // track id at depth 0
+  root_deck: number | null,        // deck playing the root, if any
+  path: string[],                  // ids from root to current, inclusive (path[0] = root)
+  current: string | null,          // node whose children are shown ahead
+  aim: string | null,              // aimed child of current (= library selection)
+  nodes: Array<{
+    id: string,
+    parent: string | null,         // null only for the root
+    depth: number,                 // 0 = root
+    sim: number,                   // similarity to parent in the active band, 0..1
+    tempo: number | null,          // analysed BPM
+  }>,                              // always contains current's children and grandchildren
+  reason: "init" | "band" | "root" | "section" | "dive" | "back" | "aim" | "follow",
+}
+```
+
+**`analysis`** reports library analysis progress, on connect and about once a second while it runs:
+```ts
+{ type: "analysis", done: number, total: number, running: boolean, error: string | null }
+```
+
+**`viz`** is sent about 60 times a second, only while `state.view == "explore"`:
+```ts
+{
+  type: "viz",
+  t: number,                       // ms since server start
+  spectrum: number[],              // 64 log-spaced bins, 0..255, of what the decks are sending
+  bands: [number, number, number], // overall low/mid/high level, 0..1
+  decks: Array<[number, number, number]>, // per deck low/mid/high, 0..1
+  onset: boolean,                  // a transient (kick) in this frame
+  beat: number | null,             // 0..1 phase within the beat, from the mixer's MIDI clock
+  bpm: number | null,
+}
+```
+
+`state` gains `view: "decks" | "explore"`. The mixer can switch views, so the UI must follow it.
+
+### Client → server
+
+```ts
+{ cmd: "view", view: "decks" | "explore" }
+{ cmd: "explore_band", band: "low" | "mid" | "high" }
+{ cmd: "explore_cycle_band" }                     // low → mid → high → low
+{ cmd: "explore_aim", delta: number }             // rotate the aim among current's children
+{ cmd: "explore_aim", id: string }                // aim at a specific child (click on a portal)
+{ cmd: "explore_dive", id?: string }              // dive into the aimed (or given) child
+{ cmd: "explore_back" }                           // climb one step back up the path
+{ cmd: "explore_follow", follow: boolean }
+{ cmd: "explore_root", id: string }               // re-root on any library track (follow turns off)
+```
