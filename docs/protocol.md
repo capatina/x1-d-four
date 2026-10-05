@@ -216,5 +216,6 @@ To draw a frame at 60 fps between the 30 Hz `state` messages, advance a playing 
 
 ### Client → server
 ```ts
-{ cmd: "jog", deck: number, ms: number }   // smooth nudge: playing = brief speed bend, paused = glide; ± milliseconds of track time
+{ cmd: "jog", deck: number, ms: number }   // jump ± milliseconds of track time at once; a synced, playing deck moves in whole beats
+{ cmd: "shift", deck: number, ms: number } // smooth nudge: playing = brief speed bend, paused = glide; a synced deck keeps the offset
 ```

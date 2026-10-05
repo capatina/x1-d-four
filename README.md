@@ -30,8 +30,8 @@ It's played entirely from the mixer:
 | | Left pod | Right pod |
 |---|---|---|
 | Lit buttons 1–4 | load the aimed track onto deck 1–4 | play/pause deck 1–4 |
-| Jog wheel | nudge the focused deck (smooth; a synced deck keeps the offset) | aim between portals |
-| JOG/SELECT | focus deck 1–4 (the tunnel grows from it); push to start from the search selection | dive / back; push to dive |
+| Jog wheel | move through the focused deck: turn slowly for precision, spin to fly (a synced deck moves in whole beats) | shift the focused deck to fix its sync (it keeps the offset) |
+| JOG/SELECT | focus deck 1–4 (the tunnel grows from it); push to start from the search selection | aim between portals; push to dive |
 | Buttons | A low, B mid, C high band; E follow the focused deck on/off | |
 | Encoders 1–4 | push = 8-bar loop on deck 1–4; turn = loop length | skip ±2 s; push = sync |
 | Faders 1–4 | pitch ±8 % | |

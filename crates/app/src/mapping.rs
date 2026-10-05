@@ -1,5 +1,8 @@
 //! config/mappings.toml: control name -> action, plus LED feedback rules.
 
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +58,7 @@ pub enum Action {
     Loop,
     LoopLength,
     Jog,
+    Shift,
     BandFader,
     BandCrossfader,
 }
@@ -88,6 +92,7 @@ impl Action {
             "deck.loop" => Self::Loop,
             "deck.loop_length" => Self::LoopLength,
             "deck.jog" => Self::Jog,
+            "deck.shift" => Self::Shift,
             "explore.band_fader" => Self::BandFader,
             "explore.band_crossfader" => Self::BandCrossfader,
             other => bail!("unknown action {other:?}"),
@@ -138,8 +143,10 @@ pub enum Intent {
     Loop(Option<usize>),
     /// Halve (negative) or double (positive) the loop length this many times.
     LoopLength(Option<usize>, i32),
+    /// Jog ticks, and the ms of track time a slow tick jumps (`JogAccel` scales it).
+    Jog(Option<usize>, i32, f64),
     /// Smooth nudge, in milliseconds of track time.
-    Jog(Option<usize>, f64),
+    Shift(Option<usize>, f64),
     /// Fader position 0..=127 picking low / mid / high.
     BandFader(u8),
     /// The Xone:4D crossfader's CC picking low / mid / high (see `CrossfaderBand`).
@@ -209,7 +216,8 @@ impl Rule {
             // One halving/doubling per click, however fast the encoder spins.
             (Action::LoopLength, Delta(n)) if n != 0 => Intent::LoopLength(d, n.signum() as i32),
             (Action::LoopLength, Press) => Intent::LoopLength(d, a.unwrap_or(1.0) as i32),
-            (Action::Jog, Delta(n)) => Intent::Jog(d, n as f64 * a.unwrap_or(4.0)),
+            (Action::Jog, Delta(n)) if n != 0 => Intent::Jog(d, n as i32, a.unwrap_or(5.0)),
+            (Action::Shift, Delta(n)) => Intent::Shift(d, n as f64 * a.unwrap_or(2.0)),
             (Action::BandFader, Value(v)) => Intent::BandFader(v),
             (Action::BandCrossfader, Value(v)) => Intent::BandCrossfader(v),
             _ => return None,
@@ -242,7 +250,7 @@ impl Mappings {
                 Action::Rate | Action::Scroll | Action::Nudge => true,
                 Action::Trim => kind != Kind::Button,
                 Action::ExploreAim | Action::LoopLength => kind != Kind::Absolute,
-                Action::Jog => kind == Kind::Relative,
+                Action::Jog | Action::Shift => kind == Kind::Relative,
                 Action::BandFader | Action::BandCrossfader => kind == Kind::Absolute,
                 Action::ExploreStep | Action::ExploreBandStep | Action::FocusStep => kind == Kind::Relative,
                 _ => kind == Kind::Button,
@@ -283,9 +291,50 @@ impl Mappings {
     }
 }
 
+/// Jog acceleration: a slow turn jumps `amount` ms per tick, for precision; the
+/// faster the wheel spins, the further each tick goes, up to `MAX_GAIN` times.
+#[derive(Default)]
+pub struct JogAccel {
+    /// Ticks in the last `WINDOW`, with when they came.
+    recent: VecDeque<(Instant, u32)>,
+}
+
+impl JogAccel {
+    const WINDOW: Duration = Duration::from_millis(100);
+    /// Turning speed (ticks per second) at which a tick goes twice as far.
+    const KNEE: f64 = 12.0;
+    const MAX_GAIN: f64 = 300.0;
+
+    /// How many times `amount` each of these ticks moves.
+    pub fn gain(&mut self, ticks: i32, now: Instant) -> f64 {
+        while self.recent.front().is_some_and(|&(t, _)| now.duration_since(t) > Self::WINDOW) {
+            self.recent.pop_front();
+        }
+        let before: u32 = self.recent.iter().map(|&(_, n)| n).sum();
+        self.recent.push_back((now, ticks.unsigned_abs()));
+        let speed = before as f64 / Self::WINDOW.as_secs_f64();
+        (1.0 + (speed / Self::KNEE).powi(3)).min(Self::MAX_GAIN)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jog_accelerates_with_speed() {
+        let mut j = JogAccel::default();
+        let t0 = Instant::now();
+        // Slow, a tick every 200 ms: full precision.
+        assert_eq!(j.gain(1, t0), 1.0);
+        assert_eq!(j.gain(1, t0 + Duration::from_millis(200)), 1.0);
+        // Spinning, a tick every 10 ms: the gain climbs to its limit.
+        let gains: Vec<f64> = (1..=20).map(|i| j.gain(1, t0 + Duration::from_millis(400 + 10 * i))).collect();
+        assert!(gains.windows(2).all(|w| w[1] >= w[0]));
+        assert_eq!(*gains.last().unwrap(), JogAccel::MAX_GAIN);
+        // A pause starts slow again.
+        assert_eq!(j.gain(-1, t0 + Duration::from_secs(2)), 1.0);
+    }
 
     fn catalog() -> Catalog {
         Catalog::parse(include_str!("../../../config/controls.toml")).unwrap()

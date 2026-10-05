@@ -57,8 +57,10 @@ pub enum ClientCommand {
     Loop { deck: usize },
     /// Halve (negative) or double (positive) the loop length.
     LoopLength { deck: usize, steps: i32 },
-    /// Smooth nudge by this many milliseconds of track time.
+    /// Jump this many milliseconds of track time.
     Jog { deck: usize, ms: f64 },
+    /// Smooth nudge by this many milliseconds of track time.
+    Shift { deck: usize, ms: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -146,6 +148,7 @@ pub struct App {
     pub out_urbs: usize,
     pub runtime: tokio::runtime::Handle,
     pub(crate) explore: crate::exploring::ExploreState,
+    jog: [Mutex<crate::mapping::JogAccel>; DECKS],
 }
 
 impl App {
@@ -187,6 +190,7 @@ impl App {
             out_urbs,
             runtime,
             explore: Default::default(),
+            jog: Default::default(),
         });
         app.reload_config();
         // The tunnel is the main view; the decks are one button away.
@@ -339,6 +343,9 @@ impl App {
             ClientCommand::Jog { deck, ms } => {
                 self.send(Command::Jog { deck: deck_ok(deck)?, frames: ms / 1000.0 * SAMPLE_RATE as f64 })
             }
+            ClientCommand::Shift { deck, ms } => {
+                self.send(Command::Shift { deck: deck_ok(deck)?, frames: ms / 1000.0 * SAMPLE_RATE as f64 })
+            }
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
@@ -392,8 +399,13 @@ impl App {
             Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
             Intent::Loop(d) => self.toggle_loop(self.deck_or_focused(d)),
             Intent::LoopLength(d, steps) => Ok(self.send(Command::LoopLength { deck: self.deck_or_focused(d), steps })),
-            Intent::Jog(d, ms) => {
-                Ok(self.send(Command::Jog { deck: self.deck_or_focused(d), frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
+            Intent::Jog(d, ticks, ms) => {
+                let deck = self.deck_or_focused(d);
+                let ms = ticks as f64 * ms * self.jog[deck].lock().unwrap().gain(ticks, Instant::now());
+                Ok(self.send(Command::Jog { deck, frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
+            }
+            Intent::Shift(d, ms) => {
+                Ok(self.send(Command::Shift { deck: self.deck_or_focused(d), frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
             }
             Intent::BandFader(v) => Ok(self.explore_band_fader(v)),
             Intent::BandCrossfader(v) => Ok(self.explore_band_crossfader(v)),

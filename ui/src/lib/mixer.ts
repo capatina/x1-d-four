@@ -28,6 +28,7 @@ export type LegendSlot =
   | 'play'
   | 'cue'
   | 'pitch'
+  | 'jog'
   | 'sync'
   | 'focus'
   | 'loop'
@@ -37,7 +38,7 @@ export type LegendSlot =
   | 'view';
 
 /** Explore legend, in teaching order. */
-export const EXPLORE_LEGEND: readonly LegendSlot[] = ['aim', 'dive', 'band', 'focus', 'load', 'play', 'loop', 'cue', 'pitch', 'sync', 'root', 'follow', 'view'];
+export const EXPLORE_LEGEND: readonly LegendSlot[] = ['aim', 'dive', 'band', 'focus', 'jog', 'load', 'play', 'loop', 'cue', 'pitch', 'sync', 'root', 'follow', 'view'];
 
 /** Deck view legend: browse, load, play. */
 export const DECKS_LEGEND: readonly LegendSlot[] = ['scroll', 'load', 'play', 'cue', 'pitch', 'sync', 'view'];
@@ -214,6 +215,8 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
       case 'band':
         add(slot, 'explore.cycle_band', () => 'band');
         add(slot, 'explore.band_step', () => 'band');
+        add(slot, 'explore.band_fader', () => 'band');
+        add(slot, 'explore.band_crossfader', () => 'band');
         items.push(...bandItems(maps));
         break;
       case 'load':
@@ -228,6 +231,10 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
         break;
       case 'pitch':
         add(slot, 'deck.rate', (e) => `pitch ${decksText(e)}`);
+        break;
+      case 'jog':
+        add(slot, 'deck.jog', () => 'move');
+        add(slot, 'deck.shift', () => 'fix sync');
         break;
       case 'sync':
         add(slot, 'deck.sync', (e) => `sync ${decksText(e)}`);

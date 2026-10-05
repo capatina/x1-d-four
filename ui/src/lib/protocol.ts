@@ -270,8 +270,10 @@ export type Command =
   | { cmd: 'sync'; deck: number; on?: boolean }
   | { cmd: 'loop'; deck: number }
   | { cmd: 'loop_length'; deck: number; steps: number }
-  /** Smooth nudge in ± ms of track time: playing = brief speed bend, paused = glide. */
+  /** Jump ± ms of track time at once; a synced, playing deck moves in whole beats. */
   | { cmd: 'jog'; deck: number; ms: number }
+  /** Smooth nudge in ± ms of track time: playing = brief speed bend, paused = glide. */
+  | { cmd: 'shift'; deck: number; ms: number }
   /** 1-3 raw bytes to the mixer (LED tests). */
   | { cmd: 'midi_out'; bytes: number[] }
   | { cmd: 'view'; view: View }

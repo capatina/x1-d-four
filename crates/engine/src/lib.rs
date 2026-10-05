@@ -33,8 +33,12 @@ pub enum Command {
     Loop { deck: usize },
     /// Halve (negative) or double (positive) the loop length.
     LoopLength { deck: usize, steps: i32 },
-    /// Smooth nudge by this many frames of track time (+ = forward).
+    /// Jump this many frames of track time (+ = forward), at once. A synced deck
+    /// moves in whole beats, so it stays on the master's beat.
     Jog { deck: usize, frames: f64 },
+    /// Smooth nudge by this many frames: playing = brief speed bend, paused = glide.
+    /// A synced deck keeps the new offset against the master's beat.
+    Shift { deck: usize, frames: f64 },
     Trim { deck: usize, gain: f32 },
     /// Raw MIDI to the mixer (LED rings), sent one byte per packet.
     MidiOut { bytes: [u8; 3], len: u8 },
@@ -157,8 +161,8 @@ struct SyncState {
     master: Option<usize>,
     /// No phase snap on this deck before this packet (lets a jump land first).
     snap_hold: [u64; DECKS],
-    /// Until this packet the deck is being jogged: bend harder, never snap.
-    jog_until: [u64; DECKS],
+    /// Until this packet the deck is being shifted: bend harder, never snap.
+    shift_until: [u64; DECKS],
 }
 
 /// Phase errors above this many beats are fixed with a jump, smaller ones by bending speed.
@@ -264,14 +268,32 @@ impl Rt {
             Command::Jog { deck, frames } => {
                 let d = &mut self.decks[deck];
                 let following = d.sync && d.playing && self.sync.master.is_some_and(|m| m != deck);
+                let mut frames = frames;
+                if let Some(g) = d.grid().filter(|_| following) {
+                    // Synced: move in whole beats, collecting smaller turns until they
+                    // add up (turning back starts over). Shift moves it off the beat.
+                    let rest = if d.jog_rest * frames < 0.0 { 0.0 } else { d.jog_rest };
+                    let beats = rest + frames / g.beat_frames();
+                    d.jog_rest = beats.fract();
+                    frames = beats.trunc() * g.beat_frames();
+                    // Let the jump land before the phase lock looks again.
+                    self.sync.snap_hold[deck] = self.sync.snap_hold[deck].max(self.sync.packets + 10);
+                }
+                if frames != 0.0 {
+                    d.nudge(frames);
+                }
+            }
+            Command::Shift { deck, frames } => {
+                let d = &mut self.decks[deck];
+                let following = d.sync && d.playing && self.sync.master.is_some_and(|m| m != deck);
                 match d.grid() {
-                    // A synced deck keeps the nudge: move where it sits against the
+                    // A synced deck keeps the shift: move where it sits against the
                     // master's beat and let the phase lock glide it there.
                     Some(g) if following => {
                         d.phase_offset += frames / g.beat_frames();
-                        self.sync.jog_until[deck] = self.sync.packets + 60;
+                        self.sync.shift_until[deck] = self.sync.packets + 60;
                     }
-                    _ => d.jog_pending += frames,
+                    _ => d.shift_pending += frames,
                 }
             }
             Command::Sync { deck, on } => {
@@ -358,9 +380,8 @@ impl Rt {
                 continue;
             }
             let err = (master_phase + d.phase_offset - g.phase_at(d.position) + 0.5).rem_euclid(1.0) - 0.5;
-            let jogging = s.packets < s.jog_until[n];
-            if jogging {
-                // Being nudged by hand: glide there quickly (up to 8 %), no jumps.
+            if s.packets < s.shift_until[n] {
+                // Being shifted by hand: glide there quickly (up to 8 %), no jumps.
                 d.rate = target * (1.0 + (4.0 * err).clamp(-0.08, 0.08));
             } else if err.abs() > SNAP_BEATS && s.packets >= s.snap_hold[n] {
                 // Jump onto the beat; the fade-out/in hides it. Both decks already run
@@ -539,20 +560,16 @@ mod tests {
     }
 
     #[test]
-    fn jog_glides_paused_and_playing_decks() {
+    fn jog_jumps_paused_and_playing_decks() {
         let (mut control, mut rt) = new();
         let mut frames = [[0; 8]; FRAMES_PER_PACKET];
         control.send(Command::Load { deck: 0, track: Some(grid_track(120.0, 0.0)) }).ok();
         control.send(Command::Sync { deck: 0, on: Some(false) }).ok();
         control.send(Command::Seek { deck: 0, frame: 48_000.0 }).ok();
         control.send(Command::Jog { deck: 0, frames: 4_800.0 }).ok();
+        control.send(Command::Jog { deck: 0, frames: 4_800.0 }).ok();
         rt.render(&mut frames);
-        let after_one = control.shared.deck(0).position;
-        assert!(after_one > 48_000.0 && after_one < 48_000.0 + 4_800.0, "glides, doesn't jump: {after_one}");
-        for _ in 0..80 {
-            rt.render(&mut frames);
-        }
-        assert_eq!(control.shared.deck(0).position, 52_800.0);
+        assert_eq!(control.shared.deck(0).position, 57_600.0, "paused: lands at once");
         // Playing: ends up the jogged amount ahead of where it would have been.
         control.send(Command::Play { deck: 0 }).ok();
         for _ in 0..10 {
@@ -568,7 +585,35 @@ mod tests {
     }
 
     #[test]
-    fn jogging_a_synced_deck_keeps_the_new_offset() {
+    fn shift_glides_paused_and_playing_decks() {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        control.send(Command::Load { deck: 0, track: Some(grid_track(120.0, 0.0)) }).ok();
+        control.send(Command::Sync { deck: 0, on: Some(false) }).ok();
+        control.send(Command::Seek { deck: 0, frame: 48_000.0 }).ok();
+        control.send(Command::Shift { deck: 0, frames: 4_800.0 }).ok();
+        rt.render(&mut frames);
+        let after_one = control.shared.deck(0).position;
+        assert!(after_one > 48_000.0 && after_one < 48_000.0 + 4_800.0, "glides, doesn't jump: {after_one}");
+        for _ in 0..80 {
+            rt.render(&mut frames);
+        }
+        assert_eq!(control.shared.deck(0).position, 52_800.0);
+        control.send(Command::Play { deck: 0 }).ok();
+        for _ in 0..10 {
+            rt.render(&mut frames);
+        }
+        let base = control.shared.deck(0).position;
+        control.send(Command::Shift { deck: 0, frames: -960.0 }).ok();
+        for _ in 0..300 {
+            rt.render(&mut frames);
+        }
+        let expected = base + 300.0 * 80.0 - 960.0;
+        assert!((control.shared.deck(0).position - expected).abs() < 1.0, "{} vs {expected}", control.shared.deck(0).position);
+    }
+
+    #[test]
+    fn shifting_a_synced_deck_keeps_the_new_offset() {
         let (mut control, mut rt) = new();
         let mut frames = [[0; 8]; FRAMES_PER_PACKET];
         let (ga, gb) = (Grid { bpm: 124.0, first_beat: 0.0 }, Grid { bpm: 124.0, first_beat: 3_000.0 });
@@ -583,10 +628,10 @@ mod tests {
             rt.render(&mut frames);
         }
         assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01);
-        // Nudge deck 2 a tenth of a beat ahead, in small jog ticks.
+        // Shift deck 2 a tenth of a beat ahead, in small ticks.
         let tenth = gb.beat_frames() / 10.0;
         for _ in 0..10 {
-            control.send(Command::Jog { deck: 1, frames: tenth / 10.0 }).ok();
+            control.send(Command::Shift { deck: 1, frames: tenth / 10.0 }).ok();
             rt.render(&mut frames);
         }
         for _ in 0..1200 {
@@ -594,6 +639,18 @@ mod tests {
         }
         let err = phase_error(&control, 0, 1, ga, gb);
         assert!((err + 0.1).abs() < 0.01, "stays a tenth of a beat ahead: {err}");
+        // Jogging moves whole beats: further along, same place against the beat.
+        let before = control.shared.deck(1).position;
+        control.send(Command::Jog { deck: 1, frames: 0.4 * gb.beat_frames() }).ok();
+        control.send(Command::Jog { deck: 1, frames: 0.4 * gb.beat_frames() }).ok();
+        control.send(Command::Jog { deck: 1, frames: 1.5 * gb.beat_frames() }).ok();
+        for _ in 0..100 {
+            rt.render(&mut frames);
+        }
+        let jumped = control.shared.deck(1).position - before - 100.0 * FRAMES_PER_PACKET as f64;
+        assert!((jumped - 2.0 * gb.beat_frames()).abs() < 0.02 * gb.beat_frames(), "jumped {jumped} frames");
+        let err = phase_error(&control, 0, 1, ga, gb);
+        assert!((err + 0.1).abs() < 0.01, "still a tenth of a beat ahead: {err}");
     }
 
     #[test]

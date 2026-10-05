@@ -456,7 +456,8 @@ const perDeck = (control: (n: number) => string, action: string, extra: Partial<
 const MAPPINGS: Mapping[] = [
   ...perDeck((n) => `left.lit${n}`, 'deck.load_selected', { led: 'deck.loaded' }),
   ...perDeck((n) => `right.lit${n}`, 'deck.play_pause', { led: 'deck.playing' }),
-  { control: 'left.jog', action: 'explore.band_step', amount: 8 },
+  { control: 'left.jog', action: 'deck.jog', amount: 5 },
+  { control: 'xfader', action: 'explore.band_crossfader' },
   { control: 'left.browse', action: 'deck.focus_step' },
   { control: 'left.browse.push', action: 'explore.root' },
   { control: 'left.button.A', action: 'explore.band', amount: 0 },
@@ -466,11 +467,11 @@ const MAPPINGS: Mapping[] = [
   ...perDeck((n) => `left.encoder${n}`, 'deck.loop_length'),
   ...perDeck((n) => `left.encoder${n}.push`, 'deck.loop'),
   ...perDeck((n) => `left.fader${n}`, 'deck.rate'),
-  { control: 'right.jog', action: 'explore.aim' },
-  { control: 'right.browse', action: 'explore.step' },
+  { control: 'right.jog', action: 'deck.shift', amount: 2 },
+  { control: 'right.browse', action: 'explore.aim' },
   { control: 'right.browse.push', action: 'explore.dive' },
   ...perDeck((n) => `right.encoder${n}`, 'deck.nudge', { amount: 2.0 }),
-  { control: 'right.button.M', action: 'view.explore' },
+  ...perDeck((n) => `right.encoder${n}.push`, 'deck.sync'),
 ];
 
 const mappings: MappingsMsg = opts['bad-mappings']
@@ -572,6 +573,12 @@ function handle(cmd: Command): string | null {
       decks[cmd.deck].rate = Math.min(2, Math.max(0.5, cmd.rate));
       return null;
     case 'jog': {
+      const d = decks[cmd.deck];
+      if (!d.track) return null;
+      d.position = Math.min(d.track.duration ?? 0, Math.max(0, d.position + (Number(cmd.ms) || 0) / 1000));
+      return null;
+    }
+    case 'shift': {
       const d = decks[cmd.deck];
       if (!d.track) return null;
       d.jog += (Number(cmd.ms) || 0) / 1000;
