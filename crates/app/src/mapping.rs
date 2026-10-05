@@ -36,6 +36,7 @@ pub enum Action {
     LoadSelected,
     Eject,
     Focus,
+    FocusStep,
     RateReset,
     Nudge,
     Rate,
@@ -65,6 +66,7 @@ impl Action {
             "deck.load_selected" | "library.load_selected" => Self::LoadSelected,
             "deck.eject" => Self::Eject,
             "deck.focus" => Self::Focus,
+            "deck.focus_step" => Self::FocusStep,
             "deck.rate_reset" => Self::RateReset,
             "deck.nudge" => Self::Nudge,
             "deck.rate" => Self::Rate,
@@ -106,6 +108,8 @@ pub enum Intent {
     LoadSelected(Option<usize>),
     Eject(Option<usize>),
     Focus(usize),
+    /// Move the focus this many decks (stops at 1 and 4).
+    FocusStep(i32),
     RateReset(Option<usize>),
     Nudge(Option<usize>, f64),
     RateDelta(Option<usize>, f64),
@@ -165,6 +169,8 @@ impl Rule {
             (Action::LoadSelected, Press) => Intent::LoadSelected(d),
             (Action::Eject, Press) => Intent::Eject(d),
             (Action::Focus, Press) => Intent::Focus(d?),
+            // One deck per click, however fast the knob spins.
+            (Action::FocusStep, Delta(n)) if n != 0 => Intent::FocusStep(n.signum() as i32),
             (Action::RateReset, Press) => Intent::RateReset(d),
             (Action::Nudge, Press) => Intent::Nudge(d, a.unwrap_or(0.01)),
             (Action::Nudge, Delta(n)) => Intent::Nudge(d, n as f64 * a.unwrap_or(0.01)),
@@ -221,7 +227,7 @@ impl Mappings {
                 Action::Rate | Action::Scroll | Action::Nudge => true,
                 Action::Trim => kind != Kind::Button,
                 Action::ExploreAim | Action::LoopLength => kind != Kind::Absolute,
-                Action::ExploreStep | Action::ExploreBandStep => kind == Kind::Relative,
+                Action::ExploreStep | Action::ExploreBandStep | Action::FocusStep => kind == Kind::Relative,
                 _ => kind == Kind::Button,
             };
             if action == Action::ExploreBand && !matches!(m.amount, Some(a) if (0.0..=2.0).contains(&a)) {

@@ -33,9 +33,6 @@ pub struct ExploreState {
     pub data: RwLock<Option<Arc<AnalysisData>>>,
     pub status: Mutex<AnalysisStatus>,
     pub view: AtomicBool,
-    /// When each deck last started playing, to pick the root.
-    started: Mutex<[Option<Instant>; DECKS]>,
-    was_playing: Mutex<[bool; DECKS]>,
     last_tick: Mutex<Option<Instant>>,
     /// Jog ticks collected towards the next band change, and when the last came in.
     band_ticks: Mutex<(i32, Option<Instant>)>,
@@ -195,28 +192,12 @@ impl App {
             *last = Some(Instant::now());
         }
         let Some(data) = self.data() else { return };
-        // Which decks play, and which started most recently.
+        // The tree grows from the focused deck's track (playing or not).
         let (focused, tracks): (usize, [Option<String>; DECKS]) = {
             let ui = self.ui.lock().unwrap();
             (ui.focused, std::array::from_fn(|d| ui.decks[d].track.as_ref().map(|t| t.id.clone())))
         };
-        let playing: [bool; DECKS] = std::array::from_fn(|d| self.shared.deck(d).playing && tracks[d].is_some());
-        {
-            let mut was = self.explore.was_playing.lock().unwrap();
-            let mut started = self.explore.started.lock().unwrap();
-            for d in 0..DECKS {
-                if playing[d] && !was[d] {
-                    started[d] = Some(Instant::now());
-                }
-            }
-            *was = playing;
-        }
-        let started = *self.explore.started.lock().unwrap();
-        let candidate = if playing[focused] {
-            Some(focused)
-        } else {
-            (0..DECKS).filter(|&d| playing[d]).max_by_key(|&d| started[d])
-        };
+        let candidate = tracks[focused].is_some().then_some(focused);
         let exclude = self.exclusions(&data);
         let mut ex = self.explore.explorer.lock().unwrap();
         let candidate_track = candidate.and_then(|d| tracks[d].as_deref().and_then(|id| data.index.position(id)).map(|t| (d, t)));

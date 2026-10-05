@@ -284,7 +284,7 @@ const MAPPINGS: Mapping[] = [
   ...perDeck((n) => `left.lit${n}`, 'deck.load_selected', { led: 'deck.loaded' }),
   ...perDeck((n) => `right.lit${n}`, 'deck.play_pause', { led: 'deck.playing' }),
   { control: 'left.jog', action: 'explore.band_step', amount: 8 },
-  { control: 'left.browse', action: 'library.scroll', amount: 10 },
+  { control: 'left.browse', action: 'deck.focus_step' },
   { control: 'left.browse.push', action: 'explore.root' },
   { control: 'left.button.A', action: 'explore.band', amount: 0 },
   { control: 'left.button.B', action: 'explore.band', amount: 1 },

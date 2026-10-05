@@ -31,8 +31,8 @@ It's played entirely from the mixer:
 |---|---|---|
 | Lit buttons 1–4 | load the aimed track onto deck 1–4 | play/pause deck 1–4 |
 | Jog wheel | turn through low / mid / high | aim between portals |
-| JOG/SELECT | page the library; push to start the tunnel there | dive / back; push to dive |
-| Buttons | A low, B mid, C high band; E follow the playing deck | |
+| JOG/SELECT | focus deck 1–4 (the tunnel grows from it); push to start from the search selection | dive / back; push to dive |
+| Buttons | A low, B mid, C high band; E follow the focused deck on/off | |
 | Encoders 1–4 | nudge; push = cue | skip ±2 s |
 | Faders 1–4 | pitch ±8 % | |
 

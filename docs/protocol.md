@@ -142,7 +142,7 @@ The **aimed** child of `current` is also the library selection, so every "load s
 {
   type: "explore",
   band: "low" | "mid" | "high",
-  follow: boolean,                 // root follows the playing track
+  follow: boolean,                 // root follows the focused deck's track
   root: string | null,             // track id at depth 0
   root_deck: number | null,        // deck playing the root, if any
   path: string[],                  // ids from root to current, inclusive (path[0] = root)

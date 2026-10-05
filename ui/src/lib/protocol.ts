@@ -171,7 +171,7 @@ export type ExploreNode = {
 export type ExploreMsg = {
   type: 'explore';
   band: Band;
-  /** Root follows the playing track. */
+  /** Root follows the focused deck's track. */
   follow: boolean;
   /** Track id at depth 0. */
   root: string | null;

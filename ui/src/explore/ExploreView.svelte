@@ -174,7 +174,7 @@
         class="chip follow"
         class:on={ex?.follow}
         aria-pressed={ex?.follow ?? false}
-        title="Root follows the playing track{followKeys ? ` (${followKeys})` : ''}"
+        title="Root follows the focused deck{followKeys ? ` (${followKeys})` : ''}"
         onclick={() => client.send({ cmd: 'explore_follow', follow: !(ex?.follow ?? false) })}
       >
         <span class="pip"></span>Follow {ex?.follow ? 'on' : 'off'}
@@ -260,8 +260,8 @@
     <div class="center"><p class="sub">Waiting for the explorer…</p></div>
   {:else if !hasRoot}
     <div class="center">
-      <p class="big">Play a track or pick one in the library</p>
-      <p class="sub">The tunnel grows from whatever is playing, in the {pal.label.toLowerCase()} band.</p>
+      <p class="big">Load a track onto the focused deck</p>
+      <p class="sub">The tunnel grows from the focused deck's track, in the {pal.label.toLowerCase()} band.</p>
       <div class="actions">
         {#if selected}
           <button type="button" class="primary" onclick={() => client.send({ cmd: 'explore_root', id: selected })}>

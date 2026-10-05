@@ -351,6 +351,10 @@ impl App {
             Intent::LoadSelected(d) => self.load_selected(d),
             Intent::Eject(d) => Ok(self.eject(self.deck_or_focused(d))),
             Intent::Focus(d) => Ok(self.focus(d)),
+            Intent::FocusStep(n) => {
+                let current = self.ui.lock().unwrap().focused as i32;
+                Ok(self.focus((current + n).clamp(0, DECKS as i32 - 1) as usize))
+            }
             Intent::RateReset(d) => Ok(self.send(Command::Rate { deck: self.deck_or_focused(d), rate: 1.0 })),
             Intent::Nudge(d, secs) => {
                 Ok(self.send(Command::Nudge { deck: self.deck_or_focused(d), frames: secs * SAMPLE_RATE as f64 }))
@@ -403,8 +407,12 @@ impl App {
         self.send(Command::Trim { deck, gain: gain as f32 });
     }
 
+    /// Focus a deck; the tunnel re-roots on its track right away.
     fn focus(&self, deck: usize) {
-        self.ui.lock().unwrap().focused = deck;
+        let changed = std::mem::replace(&mut self.ui.lock().unwrap().focused, deck) != deck;
+        if changed {
+            self.explore_tick(true);
+        }
     }
 
     fn load_selected(self: &Arc<Self>, deck: Option<usize>) -> Result<(), String> {
