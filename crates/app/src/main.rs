@@ -22,10 +22,13 @@ use notify::{RecursiveMode, Watcher};
 use ploytec::{FRAMES_PER_PACKET, Frame, Renderer, StreamConfig, StreamStats, Xone};
 
 #[derive(Parser)]
-#[command(version, about)]
+#[command(version, about, args_conflicts_with_subcommands = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
+    /// With no subcommand, these serve options apply (`x1-d-four --open`).
+    #[command(flatten)]
+    serve: ServeArgs,
 }
 
 #[derive(Subcommand)]
@@ -88,7 +91,7 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Cmd::Serve(ServeArgs { port: 7878, urbs: 3, ..Default::default() })) {
+    match cli.command.unwrap_or(Cmd::Serve(cli.serve)) {
         Cmd::Serve(args) => serve(args),
         Cmd::Probe { pair, seconds, dbfs, urbs } => probe(pair, seconds, dbfs, urbs),
         Cmd::Analyse { query, music, top } => analyse(&query, music, top),

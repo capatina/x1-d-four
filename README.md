@@ -17,6 +17,25 @@ The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. F
 - **The mixer's MIDI controls**: buttons, encoders, faders and jog wheels, mapped in a TOML file that reloads on save, with LED feedback on the lit buttons. The UI's live MIDI monitor names every control as you touch it.
 - **Readout of the mixer's own MIDI clock BPM.**
 
+## Explore: fly through your library
+
+The main screen is a tunnel through your music.
+- Every track is analysed in three bands, like the mixer's EQ: **low** (kick, bass, groove), **mid** (harmony, key) and **high** (hats, percussion, air).
+- The tunnel shows the tracks most similar to what's playing, in the band you choose. As the track moves into a breakdown or a drop, the neighbours shift.
+- Aim at a portal, fly into it, and keep going. The walls pulse with the kick, shift colour with the harmony and sparkle with the hats, locked to the mixer's BPM clock.
+- Analysing a 2,300-track library takes about a minute on a desktop CPU; after that it's instant from a cache.
+
+It's played entirely from the mixer:
+
+| | Left pod | Right pod |
+|---|---|---|
+| Lit buttons 1–4 | load the aimed track onto deck 1–4 | play/pause deck 1–4 |
+| Jog wheel | scroll the library | aim between portals |
+| JOG/SELECT | page the library; push to start the tunnel there | dive / back; push to dive |
+| Buttons | A cycle band, B/C/D low/mid/high, E follow the playing deck | M switch to the deck view |
+| Encoders 1–4 | nudge; push = cue | skip ±2 s |
+| Faders 1–4 | pitch ±8 % | |
+
 ## Map controls by talking to your agent
 
 Every control on the mixer has a name in [`config/controls.toml`](config/controls.toml) (`left.jog`, `right.lit1`, `left.fader3`…). Mappings are plain TOML:
@@ -45,7 +64,7 @@ git clone https://github.com/capatina/x1-d-four && cd x1-d-four
 setup/install                              # udev rule: lets your user open the mixer (asks for your password once)
 (cd ui && bun install && bun run build)
 cargo build --release
-target/release/x1-d-four                    # then open http://127.0.0.1:7878
+target/release/x1-d-four --open             # or open http://127.0.0.1:7878 yourself
 ```
 
 Set each channel's source switch on the mixer to **SC**. Load tracks from the library with the 1–4 buttons, or from the mixer. The default mapping is:
