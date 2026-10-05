@@ -1,15 +1,17 @@
 import * as THREE from 'three';
 import { client } from '../lib/client.svelte';
+import { DECK_COLORS } from '../lib/decks';
 import type { ExploreMsg, ExploreNode, Track } from '../lib/protocol';
 import type { VizFrame } from '../lib/viz';
 import { waves } from '../lib/waves';
-import { runeAtlas } from './atlas';
+import { keeperAtlas, runeAtlas } from './atlas';
 import { Labels, type Obstacle } from './labels';
 import { makeGrass, makeLand, makeLife, makeSky, makeTrees, makeWater, type Wrapped } from './meshes';
 import { BAND_PALETTE, REALM_SHADER } from './palette';
 import {
   GRAND_SEGMENTS,
   makeBillboards,
+  makeKeepers,
   makeRoutes,
   makeSpires,
   MAX_CHILDREN,
@@ -18,7 +20,7 @@ import {
   SPIRE_TOP,
   TAKEN_SLOT,
 } from './realm';
-import { hashString, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW } from './shared';
+import { hashString, hexInto, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW } from './shared';
 
 export type EngineStats = {
   fps: number;
@@ -37,6 +39,8 @@ export type EngineStats = {
 export type EngineOptions = {
   canvas: HTMLCanvasElement;
   labels: HTMLElement;
+  /** Vignette edge that brightens as a gate passes overhead (CSS opacity, compositor only). */
+  gate?: HTMLElement | null;
   viz: VizFrame;
   track: (id: string) => Track | undefined;
   onAim: (id: string) => void;
@@ -71,6 +75,13 @@ const AIM_MS = 120;
 const FLOURISH_MS = 90;
 /** Course impulse of a passage: ×6, decaying with τ 220 ms. */
 const IMPULSE_TAU = 0.22;
+/** The passage: heading swing (±22° max, back to 0 by 300 ms), the gate sweep (160 ms). */
+const PASSAGE_MS = 300;
+const SWING_MAX = (22 * Math.PI) / 180;
+const SWEEP_MS = 160;
+const SWEEP_R = 40;
+/** Keepers' lantern pools and loop rings lie this far down the Current. */
+const POOL_Z = -12;
 
 /**
  * The Wayfaring: one forward render pass over a world that streams toward a
@@ -153,6 +164,30 @@ export class ExploreEngine {
   #wayX = 0;
   #beamT0 = -1e9;
 
+  // The passage (commit, scout, back) and the mist of scouting
+  #passT0 = -1e9;
+  #passDir = 0;
+  #passYaw = 0;
+  #yawFrom = 0;
+  #yaw = 0;
+  #passX = 0;
+  #passZ = 0;
+  #takenSlot = -1;
+  #mistFrom = 0;
+  #mistTo = 0;
+  #mistT0 = -1e9;
+  #routeRise = 1;
+
+  // Keepers
+  readonly #keepers: ReturnType<typeof makeKeepers>;
+  readonly #keeperX = new Float32Array(4);
+  #keeperBase = 0;
+  readonly #keeperLevel = new Float32Array(4);
+  readonly #flareAt = new Float64Array(4).fill(-1e9);
+  readonly #wasLoading = [false, false, false, false];
+  readonly #wasTrack: (string | null)[] = [null, null, null, null];
+  #vigil = 0;
+
   // Time, music, frame pacing
   #raf = 0;
   #last = 0;
@@ -200,6 +235,10 @@ export class ExploreEngine {
     runes.minFilter = THREE.LinearMipmapLinearFilter;
     runes.anisotropy = 4;
     s.uRunes.value = runes;
+    for (let i = 0; i < 4; i++) hexInto(DECK_COLORS[i], s.uDeckColor.value, i * 3);
+    const keeperTex = new THREE.CanvasTexture(keeperAtlas());
+    keeperTex.flipY = false;
+    this.#keepers = makeKeepers(s, keeperTex);
     const grass = makeGrass(s);
     const trees = makeTrees(s);
     const swallows = makeLife(s, false);
@@ -216,6 +255,7 @@ export class ExploreEngine {
       this.#routes.mesh,
       this.#spires.mesh,
       this.#bills.mesh,
+      this.#keepers.mesh,
     );
     this.#setBand(0, true);
     this.#camera.position.copy(CAMERA);
@@ -241,7 +281,7 @@ export class ExploreEngine {
     if (msg === this.#msg) return;
     const prev = this.#msg;
     this.#msg = msg;
-    const now = performance.now();
+    const now = this.#now();
     if (!msg || !msg.current) {
       this.#children = [];
       this.#labels.clear();
@@ -268,6 +308,14 @@ export class ExploreEngine {
       this.#impulseT0 = now;
       this.#impulseDir = msg.reason === 'back' ? -1 : 1;
     }
+    // Commit and scout take the route that was aimed: its slot is where current now came from.
+    const forward = moved && (msg.reason === 'commit' || msg.reason === 'dive');
+    const taken = forward ? this.#children.findIndex((c) => c.id === msg.current) : -1;
+    if (taken >= 0) {
+      this.#passX = this.#slotX[taken];
+      this.#passZ = this.#slotZ[taken];
+    }
+    this.#takenSlot = taken;
 
     const fresh = !prev || moved || banded || children.length !== this.#children.length;
     this.#children = children;
@@ -290,11 +338,68 @@ export class ExploreEngine {
       this.#layoutLabels();
     }
     this.#writeSpires(msg);
-    this.#aim(
-      children.findIndex((n) => n.id === aim),
-      now,
-      !fresh,
-    );
+    const slot = children.findIndex((n) => n.id === aim);
+    this.#routeRise = fresh && this.#reduced ? 0 : 1;
+    this.#aim(slot, now, !fresh);
+    if (forward && taken >= 0) this.#passage(1, now);
+    else if (moved && msg.reason === 'back' && slot >= 0) {
+      // Back: the gate we came through returns to its slot.
+      this.#passX = this.#slotX[slot];
+      this.#passZ = this.#slotZ[slot];
+      this.#passage(-1, now);
+    }
+    if (taken >= 0) this.#shared.uRoute.value[TAKEN_SLOT] = 1;
+    if (this.#qa) this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
+  }
+
+  /**
+   * The passage, all from the message frame: the heading swings toward the
+   * route (fastest at frame 0, level again by 300 ms), a gate ring sweeps
+   * over the camera (passing at ~110 ms, when the vignette edge brightens),
+   * and the course surges. A second one restarts from the current values.
+   */
+  #passage(dir: number, now: number) {
+    if (this.#reduced) return;
+    this.#yawFrom = this.#yaw;
+    const bearing = Math.atan2(this.#passX - CAMERA.x, CAMERA.z - this.#passZ);
+    this.#passYaw = Math.max(-SWING_MAX, Math.min(SWING_MAX, bearing)) * dir;
+    this.#passDir = dir;
+    this.#passT0 = now;
+    // The labels ride the swing (one compositor animation, written once).
+    const aspect = this.#width / this.#height;
+    const half = (this.#width / 2) / (Math.tan((FOV * Math.PI) / 360) * aspect);
+    const frames: Keyframe[] = [];
+    for (let k = 0; k <= 10; k++) {
+      const u = k / 10;
+      const yaw = this.#yawFrom * (1 - u) * (1 - u) + this.#passYaw * 6.75 * u * (1 - u) * (1 - u);
+      frames.push({ translate: `${(-Math.tan(yaw) * half).toFixed(1)}px 0`, offset: u });
+    }
+    this.#o.labels.animate(frames, { duration: PASSAGE_MS, easing: 'linear' });
+    if (dir > 0)
+      this.#o.gate?.animate(
+        [
+          { opacity: 0, offset: 0 },
+          { opacity: 0, offset: 0.27 },
+          { opacity: 0.35, offset: 0.42 },
+          { opacity: 0, offset: 1 },
+        ],
+        { duration: 260, easing: 'linear' },
+      );
+  }
+
+  /** Scouting ahead (dives since the last load): the land beyond is misted. */
+  setScouting(depth: number) {
+    const target = depth > 0 ? 1 : 0;
+    if (target === this.#mistTo) return;
+    this.#mistFrom = this.#shared.uMist.value;
+    this.#mistTo = target;
+    this.#mistT0 = this.#reduced ? -1e9 : this.#now();
+  }
+
+  /** Keepers stand above their deck cards: centre x per deck and the strip's top (viewport px). */
+  setKeepers(xs: ArrayLike<number>, baseY: number) {
+    for (let i = 0; i < 4; i++) this.#keeperX[i] = xs[i] ?? 0;
+    this.#keeperBase = baseY;
   }
 
   /** Aim from a local input (keys, wheel, click): lit in this event, reconciled by the server's echo. */
@@ -305,10 +410,11 @@ export class ExploreEngine {
     if (typeof target === 'string') slot = this.#children.findIndex((c) => c.id === target);
     else slot = ((((this.#aimSlot < 0 ? 0 : this.#aimSlot) + target) % n) + n) % n;
     if (slot < 0) return;
-    const now = performance.now();
+    const now = this.#now();
     this.#localAim = this.#children[slot].id;
     this.#localAimAt = now;
     this.#aim(slot, now, true);
+    if (this.#qa) this.#qaExpect('local-aim', performance.now(), this.#localAim, n);
   }
 
   setBottomInset(pixels: number) {
@@ -342,9 +448,10 @@ export class ExploreEngine {
     if (slot === prev) return;
     // Frame 0: the new route and ring are fully lit; the old ones decay from where they are.
     if (slot >= 0) {
-      s.uRoute.value[slot] = 1;
+      s.uRoute.value[slot] = this.#routeRise;
       s.uGate.value[slot] = 1;
     }
+    this.#routeRise = 1;
     this.#aimAt = flourish ? now : -1e9;
     // The beam snaps; its old direction fades over the aim's settle time.
     const way = s.uWay.value,
@@ -375,7 +482,7 @@ export class ExploreEngine {
     const s = this.#shared;
     this.#bandFrom = instant ? band : s.uBand.value;
     this.#bandTarget = band;
-    this.#bandT0 = instant ? -1e9 : performance.now();
+    this.#bandT0 = instant ? -1e9 : this.#now();
     s.uRealmNow.value = band;
     this.#accentFrom.copy(s.uAccent.value);
     hexVec(BAND_PALETTE[band === 1 ? 'mid' : band === 2 ? 'high' : 'low'].css, this.#accentTo);
@@ -512,8 +619,9 @@ export class ExploreEngine {
     let seg = 0;
     const n = this.#children.length;
     for (let i = 0; i < n; i++) seg = this.#route(seg, i, 0, 9, this.#slotX[i], this.#slotZ[i], ROUTE_SEGMENTS, 1.25, 1.6);
-    // The taken route keeps its own place in the buffer.
+    // The taken route keeps its own place in the buffer (full light, fading over the passage).
     seg = Math.max(seg, this.#takenAt(n));
+    if (this.#takenSlot >= 0) this.#route(seg, TAKEN_SLOT, 0, 9, this.#passX, this.#passZ, ROUTE_SEGMENTS, 1.25, 1.6);
     seg += ROUTE_SEGMENTS;
     for (let i = 0; i < n; i++) {
       const grands = this.#grandsOf(msg, this.#children[i].id);
@@ -590,14 +698,25 @@ export class ExploreEngine {
     if (!document.hidden) this.#start();
   };
 
-  #frame = (now: number) => {
+  #frame = (raf: number) => {
     if (this.#disposed) return;
     this.#raf = requestAnimationFrame(this.#frame);
-    const raw = now - this.#last;
-    const dt = Math.min(0.05, Math.max(0, raw / 1000));
-    this.#last = now;
-    this.#time += dt;
     const begin = performance.now();
+    const qa = this.#qa;
+    if (qa) this.#qaFrame(raf, begin);
+    if (qa?.frozen) {
+      this.#last = raf;
+      this.#tick(qa.clock, 0, 0, begin);
+      return;
+    }
+    const raw = raf - this.#last;
+    const dt = Math.min(0.05, Math.max(0, raw / 1000));
+    this.#last = raf;
+    this.#tick(raf, dt, raw, begin);
+  };
+
+  #tick(now: number, dt: number, raw: number, begin: number) {
+    this.#time += dt;
     const s = this.#shared;
     const viz = this.#o.viz;
     const live = viz.at > 0 && now - viz.at < 500;
@@ -632,15 +751,28 @@ export class ExploreEngine {
 
     s.uTime.value = this.#time;
     s.uMotion.value = this.#reduced ? 0 : 1;
-    s.uWind.value += (energy + this.#gust * 0.15 - s.uWind.value) * k;
+    // Vigil: nothing playing. Wind to ambient, ley lines still, runes to embers; light holds.
+    this.#vigil = this.#playing
+      ? Math.max(0, this.#vigil - dt / 0.6)
+      : Math.min(1, this.#vigil + dt / 1.5);
+    s.uVigil.value = this.#vigil;
+    s.uWind.value += (energy * (1 - this.#vigil * 0.7) + 0.06 * this.#vigil + this.#gust * 0.15 - s.uWind.value) * k;
     s.uGrowth.value = 1 - Math.exp(-this.#musicTime / 100);
     s.uLife.value += (Math.min(1, energy * 0.85 + s.uGrowth.value * 0.7) - s.uLife.value) * (1 - Math.exp(-dt / 8));
 
+    this.#passageFrame(now);
+    this.#keepersFrame(now, dt, live);
     this.#camera.position.copy(CAMERA);
-    this.#camera.lookAt(TARGET);
+    this.#camera.lookAt(
+      CAMERA.x + Math.sin(this.#yaw) * (CAMERA.z - TARGET.z),
+      TARGET.y,
+      CAMERA.z - Math.cos(this.#yaw) * (CAMERA.z - TARGET.z),
+    );
     this.#camera.updateMatrixWorld();
 
+    if (this.#qa) this.#gpuBegin();
     this.#renderer.render(this.#scene, this.#camera);
+    if (this.#qa) this.#gpuEnd();
     this.#drawEma += (performance.now() - begin - this.#drawEma) * 0.05;
     if (raw > 0) this.#frameEma += (raw - this.#frameEma) * 0.025;
     if (this.#adaptive && this.#time > 8 && this.#frameEma > 19) {
@@ -663,10 +795,154 @@ export class ExploreEngine {
       st.age = s.uAge.value;
       st.course = this.#course;
       st.speed = this.#speed;
+      st.gpuMs = this.#gpuMs;
       this.#o.onStats(st);
       this.#statsAt = now;
     }
-  };
+  }
+
+  // ---------------------------------------------------------------------------
+  // QA (?qa): a clock that can be frozen and stepped (WAAPI animations with it),
+  // message-to-frame records and GPU timer queries. Never active otherwise.
+
+  #qa: Qa | null = null;
+  #gl: WebGL2RenderingContext | null = null;
+  #timer: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null = null;
+  readonly #queries: (WebGLQuery | null)[] = [null, null, null, null];
+  #queryHead = 0;
+  #gpuMs = 0;
+
+  #now() {
+    return this.#qa?.frozen ? this.#qa.clock : performance.now();
+  }
+
+  #qaExpect(reason: string, recv: number, aim: string | null, count: number) {
+    if (!this.#qa) return;
+    this.#qa.pending = { reason, recv, handled: performance.now(), aim, count };
+  }
+
+  /** In the first animation frame after a message: are its label text and lit route there? */
+  #qaFrame(raf: number, begin: number) {
+    const qa = this.#qa!;
+    const p = qa.pending;
+    if (!p) return;
+    qa.pending = null;
+    const live = this.#o.labels.querySelectorAll<HTMLElement>('.xl:not(.xl-leaving)');
+    let labelOk = live.length === p.count;
+    if (p.aim) {
+      const el = this.#o.labels.querySelector<HTMLElement>(`.xl[data-kind="aimed"]`);
+      const expected = this.#o.track(p.aim)?.title;
+      labelOk &&= !!el && el.dataset.id === p.aim && !!el.querySelector('.xl-t')?.textContent && (!expected || el.querySelector('.xl-t')?.textContent === expected);
+    }
+    const slot = this.#aimSlot;
+    const routeOk = !p.aim || (slot >= 0 && this.#shared.uRoute.value[slot] >= 0.999 && this.#shared.uGate.value[slot] >= 1);
+    qa.records.push({ reason: p.reason, recv: p.recv, handled: p.handled, raf, frame: begin, labelOk, routeOk });
+    if (qa.records.length > 500) qa.records.shift();
+  }
+
+  #gpuBegin() {
+    const gl = this.#gl,
+      t = this.#timer;
+    if (!gl || !t) return;
+    const q = this.#queries[this.#queryHead];
+    if (q) {
+      // The query from four frames ago: read it if it's ready, else drop this frame's sample.
+      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) return;
+      const ns = gl.getQueryParameter(q, gl.QUERY_RESULT) as number;
+      if (!gl.getParameter(t.GPU_DISJOINT_EXT)) {
+        const ms = ns / 1e6;
+        this.#gpuMs = this.#gpuMs ? this.#gpuMs + (ms - this.#gpuMs) * 0.1 : ms;
+        this.#qa?.gpu.push(ms);
+        if (this.#qa && this.#qa.gpu.length > 4000) this.#qa.gpu.shift();
+      }
+    } else this.#queries[this.#queryHead] = gl.createQuery();
+    gl.beginQuery(t.TIME_ELAPSED_EXT, this.#queries[this.#queryHead]!);
+    this.#queryActive = true;
+  }
+  #queryActive = false;
+  #gpuEnd() {
+    if (!this.#queryActive || !this.#gl || !this.#timer) return;
+    this.#gl.endQuery(this.#timer.TIME_ELAPSED_EXT);
+    this.#queryActive = false;
+    this.#queryHead = (this.#queryHead + 1) % this.#queries.length;
+  }
+
+  /** The QA handle (window.__wayfaring with ?qa). */
+  qa() {
+    if (!this.#qa) {
+      this.#qa = { frozen: false, clock: 0, anims: new Map(), pending: null, records: [], gpu: [] };
+      this.#gl = this.#renderer.getContext() as WebGL2RenderingContext;
+      this.#timer = this.#gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    }
+    const qa = this.#qa;
+    const sync = () => {
+      for (const a of document.getAnimations()) {
+        if (!qa.anims.has(a)) {
+          qa.anims.set(a, qa.clock);
+          a.pause();
+        }
+        a.currentTime = qa.clock - qa.anims.get(a)!;
+      }
+    };
+    return {
+      records: qa.records,
+      gpu: qa.gpu,
+      /** Hold the world (and its CSS animations) still at this instant. */
+      freeze: () => {
+        qa.clock = performance.now();
+        qa.frozen = true;
+        qa.anims.clear();
+        for (const a of document.getAnimations()) {
+          a.pause();
+          qa.anims.set(a, qa.clock - Number(a.currentTime ?? 0));
+        }
+      },
+      /** Step the frozen world by `ms` in 1/120 s frames. */
+      advance: (ms: number) => {
+        sync();
+        let left = ms;
+        while (left > 0) {
+          const step = Math.min(1000 / 120, left);
+          qa.clock += step;
+          left -= step;
+          this.#tick(qa.clock, step / 1000, step, performance.now());
+        }
+        sync();
+      },
+      resume: () => {
+        qa.frozen = false;
+        for (const a of qa.anims.keys()) if (a.playState === 'paused') a.play();
+        qa.anims.clear();
+        this.#last = performance.now();
+      },
+      /** Diagnostics: show or hide one scene mesh (by index) to price it. */
+      meshes: () => this.#scene.children.map((m, i) => `${i}:${(m as THREE.Mesh).geometry?.type}:${m.renderOrder}`),
+      toggle: (i: number, visible: boolean) => {
+        const m = this.#scene.children[i];
+        if (m) m.visible = visible;
+      },
+      gpuMedian: async (ms = 3000) => {
+        const from = qa.gpu.length;
+        await new Promise((r) => setTimeout(r, ms));
+        const g = qa.gpu.slice(from).sort((a, b) => a - b);
+        return g.length ? { n: g.length, p50: g[g.length >> 1], p95: g[Math.floor(g.length * 0.95)] } : null;
+      },
+      state: () => ({
+        course: this.#course,
+        speed: this.#speed,
+        yaw: this.#yaw,
+        aimSlot: this.#aimSlot,
+        mist: this.#shared.uMist.value,
+        vigil: this.#vigil,
+        age: this.#shared.uAge.value,
+        anchors: Array.from(this.#anchors.slice(0, this.#children.length * 2)),
+        calls: this.#renderer.info.render.calls,
+        triangles: this.#renderer.info.render.triangles,
+        gpuMs: this.#gpuMs,
+        cpuMs: this.#drawEma,
+      }),
+    };
+  }
 
   /** Course from tempo only (never from deck position), land streaming, the seed wipe. */
   #travel(now: number, dt: number, energy: number, live: boolean) {
@@ -709,6 +985,7 @@ export class ExploreEngine {
     const c = this.#course;
     s.uCourse.value = c;
     s.uCourseW.value = mod(c, RIPPLE_PERIOD);
+    s.uCourseK.value = mod(c, 1000);
     const r0 = riverW(-c);
     s.uRiver0.value = r0;
     s.uSnap.value.set(mod(r0, LAND_DX), mod(c, LAND_DZ));
@@ -750,6 +1027,96 @@ export class ExploreEngine {
     if (this.#aimSlot >= 0) this.#beamTo(this.#aimSlot);
   }
 
+  #passageFrame(now: number) {
+    const s = this.#shared;
+    const t = now - this.#passT0;
+    if (t < PASSAGE_MS && !this.#reduced) {
+      const u = t / PASSAGE_MS;
+      this.#yaw = this.#yawFrom * (1 - u) * (1 - u) + this.#passYaw * 6.75 * u * (1 - u) * (1 - u);
+    } else this.#yaw = 0;
+    const pass = s.uPassage.value;
+    if (t < SWEEP_MS && !this.#reduced) {
+      const u = t / SWEEP_MS;
+      const e = 1 - (1 - u) * (1 - u);
+      // Forward: from the aimed gate to (just past) the camera; back: the reverse.
+      const k = this.#passDir > 0 ? e * 1.11 : 1.11 * (1 - e);
+      pass.set(
+        this.#passX + (CAMERA.x - this.#passX) * k,
+        GATE_Y + (CAMERA.y - 1 - GATE_Y) * k,
+        this.#passZ + (CAMERA.z - this.#passZ) * k,
+        GATE_R + (SWEEP_R - GATE_R) * (this.#passDir > 0 ? e : 1 - e),
+      );
+      s.uPassageA.value = (1 - smoothstep(0.72, 1, k)) * (this.#passDir > 0 ? 1 : smoothstep(0, 0.25, e));
+    } else pass.w = -1;
+    const mu = Math.min(1, (now - this.#mistT0) / PASSAGE_MS);
+    s.uMist.value = this.#mistFrom + (this.#mistTo - this.#mistFrom) * mu;
+  }
+
+  /**
+   * Keepers: flame = deck colour, brightness from the deck's level (τ 0.15 s),
+   * the lantern swinging ±9° at the deck's own beat phase (so synced decks
+   * swing together), still when paused; a load flares it 2× for 400 ms.
+   */
+  #keepersFrame(now: number, dt: number, live: boolean) {
+    const s = this.#shared;
+    const st = waves.state;
+    const K = this.#keepers;
+    const height = Math.round(Math.max(54, Math.min(92, this.#height * 0.082)));
+    const kLevel = 1 - Math.exp(-dt / 0.15);
+    const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
+    const aspect = this.#width / this.#height;
+    const reach = 2 * (CAMERA.z - POOL_Z) * Math.tan((FOV * Math.PI) / 360) * aspect;
+    const riverX = riverW(POOL_Z - this.#course) - s.uRiver0.value;
+    for (let i = 0; i < 4; i++) {
+      const d = st?.decks[i];
+      const loaded = !!d?.track_id;
+      const loading = !!d?.loading;
+      if ((loading && !this.#wasLoading[i]) || (loaded && d.track_id !== this.#wasTrack[i] && this.#wasTrack[i] !== null))
+        this.#flareAt[i] = now;
+      this.#wasLoading[i] = loading;
+      this.#wasTrack[i] = d?.track_id ?? null;
+      const v = live ? this.#o.viz.decks[i] : undefined;
+      const level = v ? (v[0] + v[1] + v[2]) / 3 : 0;
+      this.#keeperLevel[i] += (level - this.#keeperLevel[i]) * kLevel;
+      const flare = Math.max(0, 1 - (now - this.#flareAt[i]) / 400);
+      const playing = !!d?.playing && loaded;
+      let bright = loaded ? (playing ? 0.35 + Math.min(1, this.#keeperLevel[i] * 1.6) * 0.75 : 0.25) : 0.06;
+      bright *= 1 + flare;
+      let swing = K.state[i * 4 + 1];
+      const grid = loaded ? client.deckInfo[i]?.grid : null;
+      if (playing && grid && grid.bpm > 0 && !this.#reduced) {
+        const pos = d.position + d.rate * age;
+        const beats = ((pos - grid.first_beat) * grid.bpm) / 60;
+        swing = ((9 * Math.PI) / 180) * Math.cos(Math.PI * beats);
+      } else swing *= Math.exp(-dt / 0.12);
+      K.keeper[i * 4] = this.#keeperX[i];
+      K.keeper[i * 4 + 1] = this.#keeperBase + 4;
+      K.keeper[i * 4 + 2] = height;
+      K.keeper[i * 4 + 3] = st?.focused === i ? 1 : 0;
+      K.state[i * 4] = bright;
+      K.state[i * 4 + 1] = swing;
+      K.state[i * 4 + 2] = d?.master ? 1 : 0;
+      K.state[i * 4 + 3] = loaded ? 1 : 0;
+      // Their light on the water and banks ahead, and a rune ring beside a looping Keeper.
+      const x = (this.#keeperX[i] / this.#width - 0.5) * reach;
+      const pool = s.uLantern.value;
+      pool[i * 4] = x * 0.82 + riverX * 0.18;
+      pool[i * 4 + 1] = POOL_Z;
+      pool[i * 4 + 2] = loaded ? bright * (st?.focused === i ? 0.9 : 0.6) : 0;
+      pool[i * 4 + 3] = 7;
+      const ring = s.uLoop.value;
+      const loop = d?.loop;
+      const active = !!loop?.active && loop.start != null && loop.end != null && loop.end > loop.start;
+      ring[i * 4] = x * 0.82 + riverX * 0.18 + (i < 2 ? 3.6 : -3.6);
+      ring[i * 4 + 1] = POOL_Z - 1.5;
+      ring[i * 4 + 2] =
+        d && loop && active ? ((((d.position + (d.playing ? d.rate * age : 0) - loop.start!) / (loop.end! - loop.start!)) % 1) + 1) % 1 : 0;
+      ring[i * 4 + 3] = active ? 1 : 0;
+      if (this.#reduced) ring[i * 4 + 2] = 0;
+    }
+    K.view.set(this.#width, this.#height);
+  }
+
   /** Flourish decays from the message frame; nothing eases toward a response. */
   #decays(now: number, dt: number) {
     const s = this.#shared;
@@ -758,7 +1125,7 @@ export class ExploreEngine {
     const fall = this.#reduced ? dt / 0.15 : dt / (AIM_MS / 1000);
     for (let i = 0; i < MAX_CHILDREN; i++) {
       if (i === this.#aimSlot) {
-        route[i] = 1;
+        route[i] = Math.min(1, route[i] + (this.#reduced ? dt / 0.15 : 1));
         gate[i] = 1 + 0.35 * Math.max(0, 1 - (now - this.#aimAt) / FLOURISH_MS);
       } else {
         route[i] = Math.max(0, route[i] - fall);
@@ -768,7 +1135,7 @@ export class ExploreEngine {
     route[TAKEN_SLOT] = Math.max(0, route[TAKEN_SLOT] - dt / 0.3);
     const wp = s.uWayPrev.value;
     wp.z = Math.max(0, 1 - (now - this.#beamT0) / AIM_MS) * (wp.z > 0 ? 1 : 0);
-    wp.w = 1;
+    wp.w = 1 - this.#vigil * 0.55;
     if (s.uHeraldT.value >= 0) s.uHeraldT.value = Math.min(600, s.uHeraldT.value + dt);
     // Realm colours: 180 ms, the biggest change in the first frame.
     const u = Math.min(1, (now - this.#bandT0) / BAND_MS);
@@ -894,8 +1261,22 @@ export class ExploreEngine {
   }
 }
 
+type Qa = {
+  frozen: boolean;
+  clock: number;
+  anims: Map<Animation, number>;
+  pending: { reason: string; recv: number; handled: number; aim: string | null; count: number } | null;
+  records: { reason: string; recv: number; handled: number; raf: number; frame: number; labelOk: boolean; routeOk: boolean }[];
+  gpu: number[];
+};
+
 export function createExploreEngine(o: EngineOptions) {
   return new ExploreEngine(o);
+}
+
+function smoothstep(a: number, b: number, v: number) {
+  const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }
 
 function mod(a: number, p: number) {

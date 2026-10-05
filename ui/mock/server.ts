@@ -11,7 +11,8 @@
  *                      [--ticker] [--loop]
  *
  * Starts in the explore view like the real server (--view decks for the deck
- * view); --idle starts with nothing playing, so the explorer has no root.
+ * view); --idle starts with nothing playing and the focus on empty deck 4, so
+ * the explorer starts from the library selection, like the server.
  * --section-seconds 0 turns off the periodic "section" re-shuffles (steady
  * screenshots). --ticker turns the left jog every few seconds, moving the
  * library selection away from the aim so Explore shows its library ticker.
@@ -304,7 +305,7 @@ const emptyDeck = (): MockDeck => ({
 });
 
 const decks: MockDeck[] = Array.from({ length: DECKS }, emptyDeck);
-let focused = 1;
+let focused = opts.idle ? 3 : 1;
 
 function put(deck: number, track: Track, patch: Partial<MockDeck> = {}) {
   // A reload keeps the deck's sync setting, like the real decks.
@@ -520,9 +521,14 @@ function handle(cmd: Command): string | null {
   switch (cmd.cmd) {
     case 'load':
       return load(cmd.deck, cmd.track_id);
-    case 'load_selected':
+    case 'load_selected': {
       if (!browser.selected) return 'Nothing selected';
-      return load(cmd.deck ?? focused, browser.selected);
+      const id = browser.selected;
+      const error = load(cmd.deck ?? focused, id);
+      // Like the server: loading the aimed track takes its route.
+      if (!error) commit(id);
+      return error;
+    }
     case 'eject': {
       clearTimeout(loadTimers.get(cmd.deck));
       decks[cmd.deck] = emptyDeck();
@@ -944,6 +950,14 @@ function dive(id?: string): string | null {
   return null;
 }
 
+/** Loading the aimed track commits to its route (reason "commit"); anything else leaves the tree. */
+function commit(id: string) {
+  if (!childrenOfCurrent().some((k) => k.id === id)) return;
+  ex.path = [...ex.path, id];
+  ex.aim = null;
+  rebuild('commit');
+}
+
 function back(): string | null {
   if (ex.path.length < 2) return null;
   const from = ex.path[ex.path.length - 1];
@@ -953,31 +967,23 @@ function back(): string | null {
   return null;
 }
 
-/** Deck order in which decks started playing, newest last. */
-const playOrder: number[] = [];
-const wasPlaying = decks.map(() => false);
 let lastSection = performance.now();
 
+/**
+ * Like the server's explore_tick: the tree grows from the focused deck's track
+ * (playing or not); a new root *track* starts it over, so a commit stays put.
+ * With nothing focused and no root yet, it starts from the library selection.
+ */
 function followPlaying(reason: ExploreReason, force = false) {
-  decks.forEach((d, i) => {
-    if (d.playing && !wasPlaying[i]) {
-      const at = playOrder.indexOf(i);
-      if (at >= 0) playOrder.splice(at, 1);
-      playOrder.push(i);
-    }
-    wasPlaying[i] = d.playing;
-  });
-  const playingDeck = [...playOrder].reverse().find((i) => decks[i].playing && decks[i].track) ?? null;
-  if (!ex.follow) {
-    if (force) broadcastExplore(reason);
-    return;
+  const deck = decks[focused].track ? focused : null;
+  const id = deck != null ? decks[deck].track!.id : null;
+  if (id && (ex.follow || !ex.root)) {
+    if (id !== ex.root) return reroot(id, deck, reason);
+    ex.rootDeck = deck;
+  } else if (!ex.root && browser.selected && analysed.has(browser.selected)) {
+    return reroot(browser.selected, null, 'init');
   }
-  let deck = playingDeck;
-  // Nothing playing: keep the last root while it's still loaded.
-  if (deck == null && ex.rootDeck != null && decks[ex.rootDeck].track?.id === ex.root) deck = ex.rootDeck;
-  const id = deck != null ? (decks[deck].track?.id ?? null) : ex.root;
-  if (id !== ex.root || deck !== ex.rootDeck) reroot(id, deck, reason);
-  else if (force) broadcastExplore(reason);
+  if (force) broadcastExplore(reason);
 }
 
 let prevPhase = 0;

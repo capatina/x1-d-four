@@ -1,8 +1,9 @@
-/** Mineral blue, ochre, limestone and heather. Luminance and stroke patterns
- * supplement hue so deck identity survives common colour-vision deficiencies. */
-const DECK_HUES = [230, 80, 100, 335] as const;
-const DECK_LIGHTNESS = [0.72, 0.78, 0.89, 0.72] as const;
-const DECK_CHROMA = [0.075, 0.11, 0.045, 0.07] as const;
+/** Lapis, amber, moonstone and heather. Lightness spread, stroke patterns and a
+ * sigil per deck (◆ ▲ ● ■) supplement hue, so identity survives common
+ * colour-vision deficiencies. */
+const DECK_HUES = [235, 75, 110, 335] as const;
+const DECK_LIGHTNESS = [0.72, 0.78, 0.9, 0.72] as const;
+const DECK_CHROMA = [0.09, 0.12, 0.04, 0.08] as const;
 export const DECK_DASHES: number[][] = [[], [10, 4], [2, 4], [10, 3, 2, 3]];
 
 export type Rgb = [number, number, number];

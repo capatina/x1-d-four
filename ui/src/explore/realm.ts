@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ATLAS_COLS, ATLAS_ROWS } from './atlas';
+import { KEEPER_H, KEEPER_HANDS, KEEPER_W } from './atlas';
 import { common, material, PREMULTIPLIED, type Shared } from './shared';
 
 // The similarity tree, read as a quest: candidate tracks are spires on
@@ -130,7 +130,7 @@ export function makeSpires(s: Shared, capacity = MAX_CHILDREN + MAX_GRANDS) {
       vec3 c;
       float a = 1.;
       if (vPart < .5) {
-        float worn = noise(vec2(vLocalY * 3., vSeed * 40. + atan(n.z, n.x) * 2.));
+        float worn = snoise(vec2(vLocalY * 3., vSeed * 40. + atan(n.z, n.x) * 2.));
         c = lit(vec3(.36, .345, .31) * (.78 + .32 * worn), n);
       } else if (vPart < 1.5) {
         // The lit window band: its glow is the node's similarity; it flickers ±15 % with the realm's spectrum.
@@ -144,7 +144,7 @@ export function makeSpires(s: Shared, capacity = MAX_CHILDREN + MAX_GRANDS) {
       } else if (vPart < 2.5) {
         c = lit(vec3(.2, .22, .22), n);
       } else {
-        c = lit(vec3(.34, .31, .26) * (.75 + .35 * noise(vP.xz * 2.1 + vLocalY)), n);
+        c = lit(vec3(.34, .31, .26) * (.75 + .35 * snoise(vP.xz * 2.1 + vLocalY)), n);
         // The underside dissolves into haze.
         a = smoothstep(-2.75, -.7, vLocalY);
         c = mix(uHaze, c, a);
@@ -227,9 +227,10 @@ export function makeRoutes(s: Shared) {
       vec3 base = lit(stone * pat, vec3(0., 1., 0.));
       // Ley light flows along the route toward its gate.
       float flow = pow(fract(vR.y * 6. - uCourse * .3), 5.) * (1. - uVigil);
-      float leyAmt = light * (.45 + 1.1 * flow) * uMagic * (1. - .6 * uMist);
+      float leyAmt = light * (.45 + 1.1 * flow) * uMagic * (1. - .6 * uMist) * (1. - .45 * uVigil);
       vec3 ley = uAccent * leyAmt;
       float alpha = core * (grand ? .3 : .34 + .62 * min(light, 1.)) * (1. - .5 * uMist * (1. - light));
+      if (slot == 7) alpha = core * light;
       vec3 coreCol = fogged(base + ley * .9, vP);
       float halo = exp(-side * side * 5.) * leyAmt * .22 * (1. - core);
       vec3 col = coreCol * alpha + uAccent * halo * (1. - smoothstep(60., 220., length(vP - cameraPosition)));
@@ -293,17 +294,10 @@ export function makeBillboards(s: Shared) {
       fragmentShader:
         common +
         /* glsl */ `
-    uniform sampler2D uRunes;
     uniform float uPassageA;
     varying vec2 vUv;
     varying vec3 vC;
     varying float vKind, vSlot, vSeed;
-    // Coverage of rune i at local (u, v) in 0..1 (v down).
-    float rune(float i, vec2 l) {
-      vec2 cell = vec2(mod(i, ${ATLAS_COLS}.), floor(i / ${ATLAS_COLS}.));
-      vec2 uv = (cell + vec2(.18 + l.x * .64, .04 + l.y * .92)) / vec2(${ATLAS_COLS}., ${ATLAS_ROWS}.);
-      return texture2D(uRunes, uv).a;
-    }
     // A stone ring with plinths and a band of etched runes.
     vec4 gate(vec2 uv, float ign, float turn, float seed, float stoneA) {
       float r = length(uv);
@@ -319,7 +313,9 @@ export function makeBillboards(s: Shared) {
       // Ignited runes are light in the stone; at rest they are faint embers.
       float ember = mix(.12, .32, uVigil);
       vec3 emberCol = mix(uAccent, vec3(1., .55, .3), uVigil * .7);
-      vec3 light = mix(emberCol * ember, uAccent * (1.1 + .9 * max(0., ign - 1.) * 4.), clamp(ign, 0., 1.)) * runeA * uMagic;
+      // In vigil even the aimed ring burns low, like the rest.
+      vec3 lit1 = mix(uAccent * (1.1 + .9 * max(0., ign - 1.) * 4.), emberCol * .6, uVigil * .55);
+      vec3 light = mix(emberCol * ember, lit1, clamp(ign, 0., 1.)) * runeA * uMagic;
       float inner = (1. - smoothstep(.0, .67, r)) * clamp(ign, 0., 1.) * .16 * uMagic;
       float halo = exp(-pow((r - .8) * 5.5, 2.)) * clamp(ign, 0., 1.) * .25 * uMagic;
       return vec4(c * stone * stoneA + light + uAccent * (inner + halo), stone * stoneA);
@@ -349,8 +345,15 @@ export function makeBillboards(s: Shared) {
         o = vec4(c * cover + vec3(1., .78, .5) * halo * (1. - cover) * uMagic, frame);
         o.rgb = mix(o.rgb, uHaze * o.a, far * .7);
       } else {
-        // The passage gate, sweeping over the camera.
-        o = gate(uv, 1.4, 0., .5, .7) * uPassageA;
+        // The passage gate: a stone arch sweeping over the camera, lit from within. No
+        // glyphs at this size; only the ring's inner edge carries the realm's light.
+        float r = length(uv);
+        float ring = smoothstep(.7, .73, r) * (1. - smoothstep(.9, .93, r));
+        float arch = ring * smoothstep(-.35, -.1, uv.y) + step(abs(abs(uv.x) - .8), .1) * step(uv.y, -.1) * step(.6, r);
+        vec3 rock = lit(vec3(.3, .29, .27), normalize(vec3(uv * .7, .7))) * (.8 + .2 * snoise(uv * 18.));
+        float edge = exp(-pow((r - .71) * 26., 2.)) * smoothstep(-.4, 0., uv.y);
+        vec3 hot = mix(uAccent, vec3(1.), .45);
+        o = vec4(rock * arch * .85 + hot * edge * .9 + uAccent * exp(-pow((r - .8) * 4., 2.)) * .12, arch * .85) * uPassageA;
       }
       gl_FragColor = o;
     }
@@ -361,4 +364,120 @@ export function makeBillboards(s: Shared) {
   mesh.frustumCulled = false;
   mesh.renderOrder = 3;
   return { mesh, bill, aBill };
+}
+
+/**
+ * The four Keepers (decks 1–4) at the bow, above their deck cards: hooded
+ * cloaks from a canvas atlas, drawn in screen space in one call. Pole, staff,
+ * lantern (flame = deck colour) and its swing are procedural, so a beat costs
+ * one uniform write. uKeeper: x px, feet y px, height px, focused;
+ * uKeeperState: brightness, swing (rad), master, lit.
+ */
+export function makeKeepers(s: Shared, atlas: THREE.Texture) {
+  const geo = new THREE.InstancedBufferGeometry();
+  const quad = new THREE.PlaneGeometry(2, 2);
+  geo.setIndex(quad.index);
+  geo.setAttribute('position', quad.getAttribute('position'));
+  geo.setAttribute('uv', quad.getAttribute('uv'));
+  geo.setAttribute('aDeck', new THREE.InstancedBufferAttribute(new Float32Array([0, 1, 2, 3]), 1));
+  geo.instanceCount = 4;
+  const keeper = { value: new Float32Array(16) };
+  const state = { value: new Float32Array(16) };
+  const view = { value: new THREE.Vector2(1, 1) };
+  const hands = KEEPER_HANDS.map(([x, y]) => `vec2(${x}.,${y}.)`).join(',');
+  const mesh = new THREE.Mesh(
+    geo,
+    new THREE.ShaderMaterial({
+      uniforms: { ...s, uKeeperAtlas: { value: atlas }, uKeeper: keeper, uKeeperState: state, uView: view },
+      vertexShader:
+        common +
+        /* glsl */ `
+    attribute float aDeck;
+    uniform vec4 uKeeper[4];
+    uniform vec2 uView;
+    varying vec2 vCell;
+    varying float vDeck;
+    void main() {
+      int i = int(aDeck + .5);
+      vec4 k = uKeeper[i];
+      float scale = k.z / ${KEEPER_H}. * (1. + k.w * .07);
+      // The quad is wider and taller than the figure: room for the pole, lantern and staff.
+      vec2 cell = vec2((position.x * .5 + .5) * 1.6 - .3, (1. - (position.y * .5 + .5)) * 1.18 - .18) * vec2(${KEEPER_W}., ${KEEPER_H}.);
+      vec2 px = vec2(k.x + (cell.x - ${KEEPER_W / 2}.) * scale, k.y + k.w * 5. - (${KEEPER_H}. - cell.y) * scale);
+      gl_Position = vec4(px.x / uView.x * 2. - 1., 1. - px.y / uView.y * 2., 0., 1.);
+      vCell = cell; vDeck = aDeck;
+    }
+  `,
+      fragmentShader:
+        common +
+        /* glsl */ `
+    uniform sampler2D uKeeperAtlas;
+    uniform vec4 uKeeper[4];
+    uniform vec4 uKeeperState[4];
+    varying vec2 vCell;
+    varying float vDeck;
+    const vec2 HANDS[4] = vec2[4](${hands});
+    float seg(vec2 p, vec2 a, vec2 b) {
+      vec2 pa = p - a, ba = b - a;
+      return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.));
+    }
+    void main() {
+      int i = int(vDeck + .5);
+      vec4 st = uKeeperState[i];
+      float bright = st.x, swing = st.y, master = st.z;
+      vec3 deck = uDeckColor[i];
+      vec2 p = vCell;
+      vec2 hand = HANDS[i];
+      float side = hand.x > ${KEEPER_W / 2}. ? 1. : -1.;
+      // Sampled outside any branch (a branch would break mip selection at the cell's edge).
+      vec2 cp = clamp(p, vec2(1.), vec2(${KEEPER_W - 1}., ${KEEPER_H - 1}.));
+      vec4 fig = texture2D(uKeeperAtlas, vec2((cp.x + float(i) * ${KEEPER_W}.) / ${KEEPER_W * 4}., cp.y / ${KEEPER_H}.));
+      fig *= step(0., p.x) * step(p.x, ${KEEPER_W}.) * step(0., p.y) * step(p.y, ${KEEPER_H}.);
+      // Pole from the hand, or (the master) a tall staff with a gem.
+      vec2 tip = hand + vec2(side * 17., -30.);
+      float pole = seg(p, hand + vec2(-side * 3., 5.), tip);
+      vec2 staffTop = vec2(hand.x + side * 3., -14.);
+      float staff = seg(p, vec2(hand.x + side * 1., ${KEEPER_H}. - 4.), staffTop);
+      float wood = 1. - smoothstep(1.2, 2.2, mix(pole, min(pole, staff), master));
+      // The lantern hangs from the tip and swings.
+      vec2 q = p - tip;
+      float cs = cos(swing), sn = sin(swing);
+      q = vec2(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);
+      vec2 c = q - vec2(0., 17.);
+      float chain = (1. - smoothstep(.5, 1.2, abs(q.x))) * step(0., q.y) * step(q.y, 10.);
+      vec2 b = abs(c);
+      float body = step(b.x, 6.) * step(b.y, 7.5);
+      float cap = step(abs(c.x), 6. - (c.y + 7.5) * -.8) * step(c.y, -7.5) * step(-11.5, c.y);
+      float glass = step(b.x, 3.8) * step(b.y, 5.5);
+      float frame = max(max(body, cap), chain) * (1. - glass);
+      vec3 flame = mix(deck, vec3(1., .93, .8), .35) * (.35 + 1.1 * bright);
+      // Light: the lantern's halo, a pool at the feet, the gem.
+      vec2 lc = tip + vec2(-sn, cs) * 17.;
+      float halo = exp(-dot(p - lc, p - lc) / 520.) * bright;
+      vec2 f = (p - vec2(64., ${KEEPER_H}. - 3.)) / vec2(46., 7.);
+      float pool = exp(-dot(f, f) * 1.6) * bright * (.25 + uKeeper[i].w * .3);
+      vec2 g = abs(p - staffTop - vec2(0., -3.));
+      float gem = step(g.x + g.y * .6, 3.6) * master;
+      float gemGlow = exp(-dot(p - staffTop, p - staffTop) / 90.) * master * (.4 + .6 * bright);
+      // Cloaks: dark by day and darker by night, their lantern side lit.
+      vec3 cloak = vec3(.075, .085, .08) * (.55 + fig.r * 1.6) * (.45 + .55 * uLight) + deck * fig.g * bright * .5;
+      vec3 woodCol = vec3(.13, .11, .085) + deck * bright * .25;
+      float cover = max(fig.a, max(wood, frame));
+      vec3 col = cloak * fig.a;
+      col = mix(col, woodCol, wood * (1. - fig.a * .3));
+      col = mix(col, vec3(.06, .055, .05) + deck * bright * .15, frame);
+      col += flame * glass * (1. - frame);
+      col = mix(col, deck * 1.3 + .1, gem);
+      float a = max(cover, max(glass, gem));
+      vec3 light = deck * (halo * .55 + pool + gemGlow * .5) * uMagic;
+      gl_FragColor = vec4(col * a + light * (1. - a), a);
+    }
+  `,
+      ...PREMULTIPLIED,
+      depthTest: false,
+    }),
+  );
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 10;
+  return { mesh, keeper: keeper.value, state: state.value, view: view.value };
 }

@@ -39,7 +39,8 @@ export function makeSky(s: Shared) {
       s,
       /* glsl */ `
     varying vec3 vDir;
-    void main() { vDir=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }
+    // On the far plane, drawn after the land: only sky that shows is shaded.
+    void main() { vDir = position; gl_Position = (projectionMatrix * modelViewMatrix * vec4(position, 1.)).xyww; }
   `,
       /* glsl */ `
     varying vec3 vDir;
@@ -53,7 +54,7 @@ export function makeSky(s: Shared) {
       float disc = 1. - smoothstep(.018 - uNight * .004, .023 - uNight * .004, sd);
       col = mix(col, uSun * (1.02 - uNight * .1), disc);
       vec2 cp = d.xz / max(.12, d.y) * 2.2 + vec2(uTime * .002 * uMotion, -uCourse * .0006);
-      float clouds = noise(cp) * .65 + noise(cp * 2.8) * .35;
+      float clouds = snoise(cp) * .65 + snoise(cp * 2.8) * .35;
       float cover = smoothstep(.52, .78, clouds) * smoothstep(.03, .25, y) * .38;
       vec3 cloud = mix(mix(vec3(.93, .91, .82), uSun, .3) * (.55 + .45 * uLight), uHaze * 1.1, uNight * .6);
       col = mix(col, cloud, cover);
@@ -63,7 +64,7 @@ export function makeSky(s: Shared) {
       { side: THREE.BackSide, depthWrite: false },
     ),
   );
-  sky.renderOrder = -2;
+  sky.renderOrder = 1;
   return sky;
 }
 
@@ -71,17 +72,25 @@ export function makeLand(s: Shared) {
   const geo = new THREE.PlaneGeometry(560, 432, 180, 150);
   geo.rotateX(-Math.PI / 2);
   geo.translate(0, 0, -156);
+  // Near rows first: hills in front reject the ones behind before they are shaded.
+  const index = geo.index!.array as Uint16Array | Uint32Array;
+  const tris = index.length / 3;
+  const front = new (index.constructor as Uint32ArrayConstructor)(index.length);
+  for (let t = 0; t < tris; t++) front.set(index.subarray((tris - 1 - t) * 3, (tris - t) * 3), t * 3);
+  geo.setIndex(new THREE.BufferAttribute(front, 1));
   const land = new THREE.Mesh(
     geo,
     material(
       s,
       /* glsl */ `
     varying vec3 vP, vN;
+    varying float vShore;
     void main() {
       vec3 p = position;
       // Vertices sit on land points; the grid steps back a row as the land passes.
       p.x -= uSnap.x; p.z += uSnap.y;
       p.y = ground(p.xz);
+      vShore = abs(p.x - river(p.z)) - widthAt(p.z);
       float dx = ground(p.xz + vec2(.4, 0)) - p.y;
       float dz = ground(p.xz + vec2(0, .4)) - p.y;
       vN = normalize(vec3(-dx, .4, -dz)); vP = p;
@@ -91,16 +100,19 @@ export function makeLand(s: Shared) {
       realmGround +
         /* glsl */ `
     varying vec3 vP, vN;
+    varying float vShore;
     void main() {
-      vec2 L = vec2(vP.x + uRiver0, vP.z - uCourse);
+      // Periods 35.7 and 250 units both divide the 1000-unit wrap, so there is no seam.
+      vec2 L = landUV(vP);
       float far = smoothstep(30., 95., length(vP - cameraPosition));
-      float n = noise(L * .9) * .3 * (1. - far) + noise(L * .14) * (.7 + .3 * far);
+      float n = snoise(L * .896) * .3 * (1. - far) + snoise(L * .128) * (.7 + .3 * far);
       vec3 c = realmGround(n);
-      float shore = 1. - smoothstep(widthAt(vP.z), widthAt(vP.z) + 2., abs(vP.x - river(vP.z)));
+      float shore = 1. - smoothstep(0., 2., vShore);
       c = mix(c, vec3(.38, .35, .24), shore * .6);
       c = lit(c, vN);
       float b = beam(vP);
       c = mix(c, uAccent * (.6 + .4 * uMagic), b * .7) + uAccent * b * .25 + lanterns(vP);
+      c = loopRings(c, vP);
       c *= 1. - shadowAt(vP) * .45;
       gl_FragColor = vec4(fogged(c, vP) + grain(gl_FragCoord.xy), 1.);
     }
@@ -137,6 +149,7 @@ export function makeWater(s: Shared) {
       c += uSun * .28 * pow(ripple * fine, 5.) * glint * (.4 + .6 * uLight);
       float b = beam(vP);
       c = mix(c, uAccent * (.75 + .5 * uMagic), b) + uAccent * b * .45 + lanterns(vP) * 1.5;
+      c = loopRings(c, vP);
       c *= 1. - shadowAt(vP) * .4;
       gl_FragColor = vec4(fogged(c, vP), 1.);
     }
@@ -315,11 +328,11 @@ export function makeTrees(s: Shared) {
           isLeaf
             ? `
           vec2 uv = vUv * 2. - 1.;
-          if (dot(uv, uv) > .82 + noise(uv * 9.) * .18) discard;
+          if (dot(uv, uv) > .82 + snoise(uv * 9.) * .18) discard;
           vec3 c = mix(vec3(.13, .22, .11), vec3(.41, .44, .22), vSeed);
           c = mix(c, c * vec3(.76, 1.04, .87), clamp(uBand, 0., 1.));
           c = mix(c, vec3(.33, .41, .31), max(0., uBand - 1.) * .35);
-          c *= .75 + .25 * noise(vP.xz * 3.);
+          c *= .75 + .25 * snoise(vP.xz * 3.);
         `
             : 'vec3 c = vec3(.24, .20, .14);'
         }

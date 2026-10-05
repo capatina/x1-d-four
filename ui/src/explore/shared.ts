@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 
+/** The rune atlas grid (see atlas.ts). */
+export const ATLAS_COLS = 5;
+export const ATLAS_ROWS = 4;
+
 /**
  * Shared, mutable uniforms: every blade, tree, spire and route reads the same
  * ground, light and course. The engine writes them once per frame.
@@ -19,6 +23,8 @@ export function makeShared() {
     uCourse: { value: 0 },
     /** uCourse modulo a period that keeps water ripples exact over long sets. */
     uCourseW: { value: 0 },
+    /** uCourse modulo 1000: land colour detail repeats seamlessly over that. */
+    uCourseK: { value: 0 },
     /** riverW(−uCourse): the river is re-centred under the vessel. */
     uRiver0: { value: 0 },
     /** Land grid snap (x, z) so the moving height field never swims between vertices. */
@@ -74,6 +80,10 @@ export function makeShared() {
     /** Dragon shadow on the land: x, z, radius, strength. */
     uShadow: { value: new THREE.Vector4(0, 0, 1, 0) },
     uRunes: { value: null as THREE.Texture | null },
+    /** Baked tileable value noise (r: 8-texel lattice, g: 4, b: 16, a: white), 32 lattice cells across. */
+    uNoise: { value: makeNoiseTexture() },
+    /** Loop rings on the water: x, z, phase within the loop (0..1), strength. */
+    uLoop: { value: new Float32Array(16) },
   };
 }
 export type Shared = ReturnType<typeof makeShared>;
@@ -95,7 +105,7 @@ export function widthAt(z: number) {
 
 export const common = /* glsl */ `
   uniform float uTime, uWind, uGrowth, uBand, uRealmNow, uLife, uMotion;
-  uniform float uCourse, uCourseW, uRiver0, uAge, uNight, uVigil, uMist, uFog, uLight, uMagic, uBar;
+  uniform float uCourse, uCourseW, uCourseK, uRiver0, uAge, uNight, uVigil, uMist, uFog, uLight, uMagic, uBar;
   uniform vec2 uSnap, uBounds, uStarts;
   uniform vec3 uSeeds, uRealms, uSun, uSunDir, uHaze, uZenith, uAccent;
   uniform float uSpectrum[64];
@@ -106,6 +116,8 @@ export const common = /* glsl */ `
   uniform vec4 uWay, uWayPrev, uShadow;
   uniform float uRoute[8];
   uniform float uGate[8];
+  uniform vec4 uLoop[4];
+  uniform sampler2D uRunes;
   // Small inputs only (instance seeds, uv).
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
   // Integer hash: exact however far the course has run.
@@ -118,6 +130,12 @@ export const common = /* glsl */ `
     vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
     return mix(mix(ihash(i), ihash(i+vec2(1,0)), f.x), mix(ihash(i+vec2(0,1)), ihash(i+1.), f.x), f.y);
   }
+  // Cheap smooth value noise from the baked texture (period 32 lattice cells), mipmapped
+  // so distant detail never shimmers as the land streams past.
+  uniform sampler2D uNoise;
+  float snoise(vec2 p) { return texture2D(uNoise, p * (1. / 32.)).r; }
+  // Land-colour coordinates, wrapped every 1000 units (uCourseK = course mod 1000).
+  vec2 landUV(vec3 p) { return vec2(p.x + uRiver0, mod(p.z - uCourseK, 1000.)); }
   // The Current: land x at land coordinate w, and re-centred in the traveller frame.
   float riverW(float w) { return sin(w*.037)*7. + sin(w*.016+1.3)*9. + sin(w*.0063+.4)*5.; }
   float river(float z) { return riverW(z - uCourse) - uRiver0; }
@@ -161,8 +179,9 @@ export const common = /* glsl */ `
     float d = max(0., dot(n, uSunDir));
     return albedo * ((.58 + .42 * d) * uLight * mix(vec3(1.), uSun, .45) + uZenith * .1);
   }
-  // Four lantern pools of the Keepers and the Wayfinder's own.
+  // Four lantern pools of the Keepers and the Wayfinder's own (near field only).
   vec3 lanterns(vec3 p) {
+    if (p.z < -45.) return vec3(0.);
     vec3 c = vec3(0.);
     for (int i = 0; i < 4; i++) {
       vec2 v = p.xz - uLantern[i].xy;
@@ -182,14 +201,39 @@ export const common = /* glsl */ `
   // How much of the band accent the beam lays over a surface (25 % at its heart).
   float beam(vec3 p) {
     vec2 v = p.xz - uWay.xy;
+    if (dot(v, v) > 1700. || uWayPrev.w <= 0.) return 0.;
     return min(1., wedge(v, uWay.zw) + wedge(v, uWayPrev.xy) * uWayPrev.z) * .25 * uWayPrev.w;
   }
   float shadowAt(vec3 p) {
+    if (uShadow.w <= 0.) return 0.;
     vec2 v = (p.xz - uShadow.xy) / uShadow.z;
     return uShadow.w * (1. - smoothstep(.55, 1., length(v * vec2(1., 1.8))));
   }
-  // A faint fixed grain, like paper under ink.
-  float grain(vec2 fc) { return (hash(floor(fc) * .37) - .5) * .02; }
+  // Coverage of rune i (atlas cell) at local (u, v) in 0..1, v down.
+  float rune(float i, vec2 l) {
+    vec2 cell = vec2(mod(i, ${ATLAS_COLS}.), floor(i / ${ATLAS_COLS}.));
+    vec2 uv = (cell + vec2(.18 + l.x * .64, .04 + l.y * .92)) / vec2(${ATLAS_COLS}., ${ATLAS_ROWS}.);
+    return texture2D(uRunes, uv).a;
+  }
+  // Loop rings: a rune annulus by each looping Keeper, one turn per loop (deck colour at 35 %).
+  vec3 loopRings(vec3 c, vec3 p) {
+    if (p.z < -30.) return c;
+    for (int i = 0; i < 4; i++) {
+      vec4 L = uLoop[i];
+      if (L.w <= 0.) continue;
+      vec2 v = p.xz - L.xy;
+      float r = length(v);
+      if (r > 2.9) continue;
+      float band = smoothstep(1.55, 1.62, r) * (1. - smoothstep(2.3, 2.37, r));
+      float a = fract(atan(v.y, v.x) / 6.2832 + .5 - L.z);
+      float runes = rune(mod(floor(a * 12.) * 7. + float(i) * 3., 16.), vec2(fract(a * 12.), clamp((2.32 - r) / .72, 0., 1.)));
+      float rim = exp(-pow((r - 2.42) * 9., 2.)) + exp(-pow((r - 1.5) * 12., 2.)) * .6;
+      c = mix(c, uDeckColor[i] * (1.1 + .4 * uMagic), clamp(band * runes * .35 + rim * .3, 0., .6) * L.w);
+    }
+    return c;
+  }
+  // A faint fixed grain, like paper under ink (interleaved gradient noise, no sines).
+  float grain(vec2 fc) { return (fract(52.9829189 * fract(dot(floor(fc), vec2(.06711056, .00583715)))) - .5) * .02; }
 `;
 
 export function material(s: Shared, vertexShader: string, fragmentShader: string, extra: THREE.ShaderMaterialParameters = {}) {
@@ -212,6 +256,53 @@ export const PREMULTIPLIED: THREE.ShaderMaterialParameters = {
   blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
 };
 
+/**
+ * Tileable smooth value noise, baked once: r on an 8-texel lattice (32 cells
+ * across 256 px), g on 4, b on 16, a white. Sampling replaces per-pixel hashes.
+ */
+export function makeNoiseTexture() {
+  const N = 256;
+  const data = new Uint8Array(N * N * 4);
+  const r = random(97);
+  const lattice = (cells: number) => {
+    const v = new Float32Array(cells * cells);
+    for (let i = 0; i < v.length; i++) v[i] = r();
+    return (x: number, y: number) => {
+      const s = N / cells;
+      const gx = x / s,
+        gy = y / s;
+      const ix = Math.floor(gx),
+        iy = Math.floor(gy);
+      let fx = gx - ix,
+        fy = gy - iy;
+      fx = fx * fx * (3 - 2 * fx);
+      fy = fy * fy * (3 - 2 * fy);
+      const at = (a: number, b: number) => v[((b + cells) % cells) * cells + ((a + cells) % cells)];
+      const a = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * fx;
+      const b = at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * fx;
+      return a + (b - a) * fy;
+    };
+  };
+  const r8 = lattice(32),
+    r4 = lattice(64),
+    r16 = lattice(16);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const i = (y * N + x) * 4;
+      data[i] = Math.round(r8(x, y) * 255);
+      data[i + 1] = Math.round(r4(x, y) * 255);
+      data[i + 2] = Math.round(r16(x, y) * 255);
+      data[i + 3] = Math.round(r() * 255);
+    }
+  const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /** One seeded random stream at construction; animation never creates geometry. */
 export function random(seed: number) {
   return () => {
@@ -228,7 +319,7 @@ export function hashString(s: string) {
   return (h >>> 0) / 4294967296;
 }
 
-/** '#rrggbb' → linear-ish 0..1 components written into `out` (no allocation). */
+/** '#rrggbb' → 0..1 components written into `out` (no allocation). */
 export function hexInto(hex: string, out: Float32Array | number[], at = 0) {
   const n = Number.parseInt(hex.slice(1), 16);
   out[at] = ((n >> 16) & 255) / 255;

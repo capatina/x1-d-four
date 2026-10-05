@@ -329,6 +329,16 @@ impl App {
         });
     }
 
+    /// Loading the aimed track commits to its route: that track becomes `current`
+    /// (reason "commit", so the UI can tell it from scouting with `explore_dive`).
+    /// A track that isn't one of current's children leaves the tree alone.
+    pub fn explore_commit(&self, id: &str) {
+        self.with_tree("commit", |_, data, ex, exclude| {
+            let Some(track) = data.index.position(id) else { return false };
+            ex.children().any(|c| c == track) && ex.dive(&data.index, Some(track), exclude)
+        });
+    }
+
     pub fn explore_back(&self) {
         self.with_tree("back", |app, data, ex, exclude| {
             // `back` only uses the root query if it lands on the root.
@@ -499,6 +509,74 @@ fn crossfader_zone(value: u8, current: Band) -> Band {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::ClientCommand;
+    use analysis::Features;
+
+    /// Loading the aimed track (here as the mixer's left lit 2 would) moves the
+    /// explorer onto it and announces it as a commit; loading anything else
+    /// leaves the tree where it is.
+    #[test]
+    fn load_selected_commits_to_the_aimed_route() {
+        let dir = std::env::temp_dir().join(format!("x1d4-commit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ids: Vec<String> = (0..40).map(|i| format!("t{i:02}.wav")).collect();
+        for id in &ids {
+            std::fs::write(dir.join(id), b"").unwrap();
+        }
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (control, _rt) = engine::new();
+        let app = App::new(control, dir.clone(), dir.join("config"), 2, runtime.handle().clone());
+        // 40 tracks on a circle in every band: neighbours by index are similar.
+        let feats: Vec<Features> = (0..40)
+            .map(|i| {
+                let a = i as f32 / 40.0 * std::f32::consts::TAU;
+                let v = |dims: usize, phase: f32| -> Vec<f32> {
+                    (0..dims).map(|d| ((a + phase) * (1.0 + d as f32 * 0.01)).sin() + (d as f32 * 0.37).cos()).collect()
+                };
+                Features {
+                    tempo: 120.0 + i as f32,
+                    tempo_from_tag: false,
+                    duration: 300.0,
+                    bands: [v(analysis::features::DIMS[0], 0.0), v(analysis::features::DIMS[1], 1.0), v(analysis::features::DIMS[2], 2.0)],
+                    sections: vec![],
+                }
+            })
+            .collect();
+        let items: Vec<(String, &Features)> = ids.iter().cloned().zip(feats.iter()).collect();
+        *app.explore.data.write().unwrap() =
+            Some(Arc::new(AnalysisData { index: Index::build(&items), cache: analysis::Cache::default() }));
+        let current = |app: &App| {
+            let data = app.data().unwrap();
+            let ex = app.explore.explorer.lock().unwrap();
+            ex.current().map(|c| data.index.ids[c].clone())
+        };
+
+        app.explore_root("t10.wav").unwrap();
+        app.explore_aim(Some(2), None);
+        let aimed = app.ui.lock().unwrap().selected.clone().expect("the aim is the library selection");
+        let mut rx = app.tx.subscribe();
+        app.command(ClientCommand::LoadSelected { deck: Some(1) }).unwrap();
+        assert_eq!(current(&app).as_deref(), Some(aimed.as_str()), "the loaded track is where we stand now");
+        let mut reasons = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            let v: Value = serde_json::from_str(&msg).unwrap();
+            if v["type"] == "explore" {
+                reasons.push(v["reason"].as_str().unwrap().to_string());
+                assert_eq!(v["current"], aimed.as_str());
+                assert_eq!(v["path"].as_array().unwrap().len(), 2);
+            }
+        }
+        assert_eq!(reasons, ["commit"]);
+
+        // A library selection that isn't one of the routes loads without moving.
+        app.select(Some("t39.wav".into()));
+        let before = current(&app);
+        app.command(ClientCommand::LoadSelected { deck: Some(2) }).unwrap();
+        assert_eq!(current(&app), before);
+        drop(app);
+        drop(runtime);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// Plays `moves` into a crossfader decoder, ~6.5 ms per message like the
     /// mixer, resting 3 s after each move, and returns the band after each rest.

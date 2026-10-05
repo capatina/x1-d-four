@@ -452,7 +452,10 @@ impl App {
             (deck.unwrap_or(ui.focused), ui.selected.clone())
         };
         let id = selected.ok_or("nothing selected in the library")?;
-        self.load(deck, &id)
+        self.load(deck, &id)?;
+        // Loading the aimed track (from the mixer or the browser) takes its route.
+        self.explore_commit(&id);
+        Ok(())
     }
 
     fn load(self: &Arc<Self>, deck: usize, id: &str) -> Result<(), String> {

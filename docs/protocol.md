@@ -105,7 +105,7 @@ type Track = {
 
 ```ts
 { cmd: "load", deck: number, track_id: string }
-{ cmd: "load_selected", deck?: number }          // defaults to the focused deck
+{ cmd: "load_selected", deck?: number }          // defaults to the focused deck; an aimed track also commits the explorer (below)
 { cmd: "eject", deck: number }
 { cmd: "play" | "pause" | "play_pause", deck: number }
 { cmd: "cue", deck: number, pressed: boolean }    // send true on pointer down, false on pointer up
@@ -155,16 +155,18 @@ The **aimed** child of `current` is also the library selection, so every "load s
     sim: number,                   // similarity to parent in the active band, 0..1
     tempo: number | null,          // analysed BPM
   }>,                              // always contains current's children and grandchildren
-  reason: "init" | "band" | "root" | "section" | "dive" | "back" | "aim" | "follow",
+  reason: "init" | "band" | "root" | "section" | "dive" | "commit" | "back" | "aim" | "follow",
 }
 ```
+
+`commit` means a deck loaded the aimed track: `load_selected` (a left lit button, or the command) whose selection is one of current's children also moves `current` onto that track, as a dive would. `dive` (`explore_dive`, button M) moves without loading anything: the UI treats it as scouting ahead. If follow later re-roots on the loaded track, `current` stays the same and only `path` shortens.
 
 **`analysis`** reports library analysis progress, on connect and about once a second while it runs:
 ```ts
 { type: "analysis", done: number, total: number, running: boolean, error: string | null }
 ```
 
-**`viz`** is sent about 60 times a second, only while `state.view == "explore"`:
+**`viz`** is sent about 120 times a second, only while `state.view == "explore"`:
 ```ts
 {
   type: "viz",

@@ -21,6 +21,8 @@
   let labels: HTMLDivElement;
   let infoEl: HTMLElement;
   let sideEl: HTMLElement;
+  let gateEl: HTMLElement;
+  let footerEl: HTMLElement;
   let realmEl: HTMLElement | undefined = $state();
 
   let engine = $state.raw<ExploreEngine | null>(null);
@@ -54,6 +56,21 @@
   });
 
   const currentTrack = $derived(ex?.current ? client.library.get(ex.current) : undefined);
+
+  // Scouting: dives (M) walk a route without a deck; a load claims it. Tracks reached
+  // by a commit, or on a deck, are claimed; the root always is.
+  const committed = new Set<string>();
+  let commitSeq = $state(0);
+  const scouting = $derived.by(() => {
+    void commitSeq;
+    const path = ex?.path ?? [];
+    const onDecks = new Set(client.deckInfo.map((d) => d?.track.id ?? ''));
+    let last = 0;
+    path.forEach((id, i) => {
+      if (i === 0 || committed.has(id) || onDecks.has(id)) last = i;
+    });
+    return Math.max(0, path.length - 1 - last);
+  });
   const selected = $derived(client.browser.selected);
 
   // Everything is driven from the mixer; these say which control does what.
@@ -89,7 +106,13 @@
     motion.addEventListener('change', onMotion);
 
     // explore messages reach the landscape in their own task, not after an effect flush.
-    const onExplore = (msg: ExploreMsg) => engine?.setExplore(msg);
+    const onExplore = (msg: ExploreMsg) => {
+      if (msg.reason === 'commit' && msg.current) {
+        committed.add(msg.current);
+        commitSeq++;
+      }
+      engine?.setExplore(msg);
+    };
     client.exploreListeners.add(onExplore);
 
     // Labels keep clear of the header boxes; they only move when those change size.
@@ -103,6 +126,21 @@
     boxes.observe(sideEl);
     window.addEventListener('resize', obstacles);
 
+    // Keepers stand on the strip's top edge, each above its deck card.
+    const keepers = () => {
+      if (!engine) return;
+      const strip = footerEl.querySelector('.strip')?.getBoundingClientRect();
+      const cards = footerEl.querySelectorAll('.hud .deck');
+      const xs = Array.from(cards, (c) => {
+        const r = c.getBoundingClientRect();
+        return r.left + r.width / 2;
+      });
+      if (strip && xs.length === 4) engine.setKeepers(xs, strip.top);
+    };
+    const footerBox = new ResizeObserver(keepers);
+    footerBox.observe(footerEl);
+    window.addEventListener('resize', keepers);
+
     // three.js lives in its own chunk, loaded the first time Explore opens.
     import('./engine')
       .then(({ createExploreEngine }) => {
@@ -110,6 +148,7 @@
         engine = createExploreEngine({
           canvas,
           labels,
+          gate: gateEl,
           viz,
           track: (id) => client.library.get(id),
           onAim: (id) => client.send({ cmd: 'explore_aim', id }),
@@ -119,8 +158,10 @@
           onStats: showStats ? (s) => (stats = { ...s }) : undefined,
         });
         local.engine = engine;
+        if (new URLSearchParams(location.search).has('qa')) (window as unknown as { __wayfaring: unknown }).__wayfaring = engine.qa();
         engine.setExplore(client.explore);
         obstacles();
+        keepers();
       })
       .catch((err: unknown) => {
         if (!cancelled) failed = err instanceof Error ? err.message : String(err);
@@ -130,7 +171,9 @@
       cancelled = true;
       client.exploreListeners.delete(onExplore);
       boxes.disconnect();
+      footerBox.disconnect();
       window.removeEventListener('resize', obstacles);
+      window.removeEventListener('resize', keepers);
       motion.removeEventListener('change', onMotion);
       local.engine = null;
       engine?.dispose();
@@ -165,6 +208,10 @@
   });
 
   $effect(() => {
+    engine?.setScouting(scouting);
+  });
+
+  $effect(() => {
     const root = document.documentElement.style;
     if (bottomH > 0) root.setProperty('--explore-bottom', `${bottomH}px`);
     return () => root.removeProperty('--explore-bottom');
@@ -182,6 +229,7 @@
   style:--band={pal.css}
   style:--band-a={pal.a}
   style:--band-b={pal.b}
+  style:--hot={pal.hot}
   role="application"
   aria-label="Explore: the Wayfaring"
 >
@@ -191,6 +239,7 @@
   </div>
 
   <div class="vignette" aria-hidden="true"></div>
+  <div class="gate-glow" aria-hidden="true" bind:this={gateEl}></div>
 
   <!-- Top-left: band, follow, analysis, tempo, where we are -->
   <header class="info" bind:this={infoEl}>
@@ -250,6 +299,7 @@
           {#each crumbs as c, i (i)}
             <li class:last={i === crumbs.length - 1}>{c.name}</li>
           {/each}
+          {#if scouting > 0}<li class="scout">scouting · {scouting} ahead</li>{/if}
         </ol>
       {/if}
     {/if}
@@ -342,7 +392,7 @@
   {/if}
 
   <!-- Bottom: what the mixer does here, then the decks -->
-  <footer class="bottom" bind:clientHeight={bottomH}>
+  <footer class="bottom" bind:clientHeight={bottomH} bind:this={footerEl}>
     <WaveStrip onStats={showStats ? (ms) => (waveMs = ms) : undefined} />
     <MixerLegend slots={EXPLORE_LEGEND} view="explore" tone="overlay" />
     <DeckHud rootDeck={ex?.root_deck ?? null} />
@@ -376,6 +426,16 @@
   .labels {
     pointer-events: none;
     overflow: hidden;
+  }
+  /* The edge of the view brightens in the realm's hot colour as a gate passes overhead. */
+  .gate-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(ellipse 75% 70% at 50% 48%, transparent 55%, color-mix(in srgb, var(--hot) 70%, transparent) 100%);
+    mix-blend-mode: screen;
+    will-change: opacity;
   }
   .vignette {
     pointer-events: none;
@@ -584,7 +644,20 @@
     color: var(--text-4);
   }
   .crumbs li.last {
-    color: var(--text-2);
+    color: var(--parchment);
+    font-family: var(--font-display);
+    font-size: 12.5px;
+  }
+  .crumbs li.scout {
+    margin-left: 8px;
+    color: var(--band);
+    font: 400 12px/1.2 var(--font-display);
+    font-variant-caps: all-small-caps;
+    letter-spacing: 0.14em;
+  }
+  .crumbs li.scout::after,
+  .crumbs li:nth-last-child(2):has(+ .scout)::after {
+    content: none;
   }
 
   /* Side: close + minimap */

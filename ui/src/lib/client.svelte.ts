@@ -98,6 +98,7 @@ class Client {
   #toastSeq = 0;
   #rescanTimer: ReturnType<typeof setTimeout> | undefined;
   #focusIntent: { deck: number; until: number } | null = null;
+  #arrived = 0;
 
   connect(): void {
     clearTimeout(this.#retryTimer);
@@ -141,6 +142,7 @@ class Client {
     };
     sock.onmessage = (ev) => {
       if (this.#sock !== sock || typeof ev.data !== 'string') return;
+      this.#arrived = performance.now();
       let msg: ServerMsg;
       try {
         msg = JSON.parse(ev.data) as ServerMsg;
@@ -279,7 +281,7 @@ class Client {
         this.toast(msg.message);
         break;
       case 'explore':
-        this.exploreAt = performance.now();
+        this.exploreAt = this.#arrived;
         for (const listener of this.exploreListeners) listener(msg);
         this.explore = msg;
         break;

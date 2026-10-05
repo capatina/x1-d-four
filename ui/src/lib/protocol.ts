@@ -173,7 +173,8 @@ export type Band = 'low' | 'mid' | 'high';
 
 export const BANDS: readonly Band[] = ['low', 'mid', 'high'];
 
-export type ExploreReason = 'init' | 'band' | 'root' | 'section' | 'dive' | 'back' | 'aim' | 'follow';
+/** `commit`: a track was loaded from its route (load_selected); `dive`: scouting ahead without loading. */
+export type ExploreReason = 'init' | 'band' | 'root' | 'section' | 'dive' | 'commit' | 'back' | 'aim' | 'follow';
 
 export type ExploreNode = {
   id: string;
