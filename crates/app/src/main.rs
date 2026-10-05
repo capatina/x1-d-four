@@ -4,9 +4,12 @@
 mod app;
 mod audio;
 mod controls;
+mod explore;
+mod exploring;
 mod library;
 mod mapping;
 mod server;
+mod viz;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,6 +47,16 @@ enum Cmd {
     },
     /// Give the Xone:4D back to the kernel driver (after a crash).
     Release,
+    /// Analyse the library and print a track's nearest neighbours in each band.
+    Analyse {
+        /// Part of a track's path or title.
+        query: String,
+        /// Music folder (default ~/Music).
+        #[arg(long)]
+        music: Option<PathBuf>,
+        #[arg(long, default_value_t = 6)]
+        top: usize,
+    },
 }
 
 #[derive(clap::Args, Default)]
@@ -75,6 +88,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Cmd::Serve(ServeArgs { port: 7878, urbs: 3, ..Default::default() })) {
         Cmd::Serve(args) => serve(args),
         Cmd::Probe { pair, seconds, dbfs, urbs } => probe(pair, seconds, dbfs, urbs),
+        Cmd::Analyse { query, music, top } => analyse(&query, music, top),
         Cmd::Release => {
             ploytec::device::rebind_kernel_driver()?;
             println!("Xone:4D handed back to snd-usb-ozzy");
@@ -94,9 +108,11 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let config_dir = config_dir.canonicalize().with_context(|| format!("config dir {}", config_dir.display()))?;
 
     let runtime = tokio::runtime::Runtime::new()?;
-    let (control, rt) = engine::new();
+    let (mut control, rt) = engine::new();
+    let viz_feed = control.take_viz().expect("viz feed");
     let app = app::App::new(control, music, config_dir.clone(), args.urbs, runtime.handle().clone());
     let stop = Arc::new(AtomicBool::new(false));
+    app.start_analysis();
 
     // Audio thread.
     let audio = {
@@ -112,6 +128,12 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
             }
         })?
     };
+
+    // Visualiser feed for the Explore view.
+    {
+        let (app, stop) = (app.clone(), stop.clone());
+        std::thread::Builder::new().name("x1d4-viz".into()).spawn(move || viz::run(app, viz_feed, stop))?;
+    }
 
     // Event pump: MIDI from the mixer -> mappings. Polls every millisecond.
     {
@@ -161,16 +183,34 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
         let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("bind {addr}"))?;
         tracing::info!("x1-d-four on http://{addr}");
-        axum::serve(listener, server::router(app.clone()))
-            .with_graceful_shutdown(async {
+        // Stop audio as soon as a signal arrives, so the mixer is handed back
+        // cleanly even if a web client keeps its connection open.
+        let signalled = {
+            let stop = stop.clone();
+            async move {
                 let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
                     _ = term.recv() => {}
                 }
                 tracing::info!("shutting down");
-            })
-            .await?;
+                stop.store(true, Ordering::Relaxed);
+            }
+        };
+        let serve = axum::serve(listener, server::router(app.clone())).with_graceful_shutdown(signalled);
+        let deadline = {
+            let stop = stop.clone();
+            async move {
+                while !stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        };
+        tokio::select! {
+            r = serve => r?,
+            _ = deadline => tracing::warn!("web clients didn't disconnect; closing anyway"),
+        }
         anyhow::Ok(())
     })?;
 
@@ -178,6 +218,48 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
     drop(watcher);
     let _ = audio.join();
     runtime.shutdown_timeout(Duration::from_millis(500));
+    Ok(())
+}
+
+fn analyse(query: &str, music: Option<PathBuf>, top: usize) -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")?;
+    let library = library::Library::scan(&music.unwrap_or_else(|| home.join("Music")));
+    let jobs: Vec<analysis::Job> =
+        library.tracks.iter().filter_map(|t| analysis::Job::new(t.id.clone(), t.path.clone(), t.bpm)).collect();
+    let path = analysis::Cache::default_path();
+    let cache = std::sync::Mutex::new(analysis::Cache::load(&path));
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(4).max(1));
+    let t0 = Instant::now();
+    let n = analysis::analyse_library(&jobs, &cache, &path, threads, &|done, total| {
+        if total > 0 && (done % 50 == 0 || done == total) {
+            eprint!("\ranalysing {done}/{total}");
+        }
+    });
+    if n > 0 {
+        eprintln!("  ({n} analysed in {:.1?})", t0.elapsed());
+    }
+    let cache = cache.into_inner().unwrap();
+    let items: Vec<(String, &analysis::Features)> =
+        jobs.iter().filter_map(|j| cache.features(&j.id).map(|f| (j.id.clone(), f))).collect();
+    let index = analysis::Index::build(&items);
+    let q = query.to_lowercase();
+    let pick = library
+        .tracks
+        .iter()
+        .find(|t| t.id.to_lowercase().contains(&q) || t.title.to_lowercase().contains(&q))
+        .context("no track matches")?;
+    let i = index.position(&pick.id).context("that track couldn't be analysed")?;
+    let name = |id: &str| library.get(id).map_or(id.to_owned(), |t| match &t.artist {
+        Some(a) => format!("{a} - {}", t.title),
+        None => t.title.clone(),
+    });
+    println!("{}  [{:.1} BPM]", name(&pick.id), index.tempo[i]);
+    for band in analysis::Band::ALL {
+        println!("\n  {}:", band.name().to_uppercase());
+        for (j, sim) in index.nearest(band, index.vector(band, i), top, |k| k == i) {
+            println!("    {:>3.0}%  {:>5.1} BPM  {}", sim * 100.0, index.tempo[j], name(&index.ids[j]));
+        }
+    }
     Ok(())
 }
 

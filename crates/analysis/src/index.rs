@@ -66,6 +66,8 @@ fn group_weights(band: Band) -> Vec<f32> {
 pub struct Index {
     pub ids: Vec<String>,
     pub tempo: Vec<f32>,
+    /// The first track with identical features (copies of the same file share one).
+    canonical: Vec<usize>,
     mean: [Vec<f32>; 3],
     std: [Vec<f32>; 3],
     weight: [Vec<f32>; 3],
@@ -101,9 +103,19 @@ impl Index {
         }
         let std = var.map(|v| v.into_iter().map(|x| x.sqrt().max(1e-3)).collect::<Vec<_>>());
         let weight = Band::ALL.map(group_weights);
+        let mut first: std::collections::HashMap<Vec<u32>, usize> = std::collections::HashMap::new();
+        let canonical = items
+            .iter()
+            .enumerate()
+            .map(|(i, (_, f))| {
+                let key: Vec<u32> = f.bands.iter().flatten().map(|x| x.to_bits()).collect();
+                *first.entry(key).or_insert(i)
+            })
+            .collect();
         let mut index = Index {
             ids: items.iter().map(|(id, _)| id.clone()).collect(),
             tempo: items.iter().map(|(_, f)| f.tempo).collect(),
+            canonical,
             mean,
             std,
             weight,
@@ -126,6 +138,11 @@ impl Index {
 
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
+    }
+
+    /// The track this one is a copy of (itself if it's the first or only copy).
+    pub fn canonical(&self, i: usize) -> usize {
+        self.canonical[i]
     }
 
     pub fn position(&self, id: &str) -> Option<usize> {
@@ -159,12 +176,13 @@ impl Index {
     }
 
     /// The `k` most similar tracks to `query`, best first, as (index, similarity 0..1).
+    /// Only first copies are returned; `skip` sees those indices.
     pub fn nearest(&self, band: Band, query: &[f32], k: usize, skip: impl Fn(usize) -> bool) -> Vec<(usize, f32)> {
         let d = DIMS[band.index()];
         let mut scored: Vec<(usize, f32)> = self.vecs[band.index()]
             .chunks_exact(d)
             .enumerate()
-            .filter(|(i, _)| !skip(*i))
+            .filter(|(i, _)| self.canonical[*i] == *i && !skip(*i))
             .map(|(i, v)| (i, v.iter().zip(query).map(|(a, b)| a * b).sum::<f32>()))
             .collect();
         let k = k.min(scored.len());
@@ -228,6 +246,19 @@ mod tests {
             sim(&index, Band::Mid, 0, 1),
             sim(&index, Band::Mid, 0, 2)
         );
+    }
+
+    #[test]
+    fn copies_collapse_to_one() {
+        let a = track(|x| kicks(x, 125.0, 0.8));
+        let b = track(|x| hats(x, 126.0, 0.5));
+        let items: Vec<(String, &Features)> =
+            vec![("a".into(), &a), ("copy/a".into(), &a), ("b".into(), &b), ("c".into(), &b)];
+        let index = Index::build(&items);
+        assert_eq!(index.canonical(1), 0);
+        assert_eq!(index.canonical(3), 2);
+        let near = index.nearest(Band::Low, index.vector(Band::Low, 0), 4, |_| false);
+        assert_eq!(near.iter().map(|n| n.0).collect::<Vec<_>>(), vec![0, 2]);
     }
 
     #[test]

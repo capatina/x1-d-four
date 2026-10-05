@@ -11,6 +11,7 @@ name = "x1-d-four"
 path = "src/main.rs"
 
 [dependencies]
+analysis = { version = "0.1.0", path = "../analysis" }
 anyhow = "1.0.104"
 audio_thread_priority = "0.38.0"
 axum = { version = "0.8.9", features = ["ws"] }
@@ -22,6 +23,8 @@ lofty = "0.25.4"
 mime_guess = "2.0.5"
 notify = "8"
 ploytec = { version = "0.1.0", path = "../ploytec" }
+realfft = "3.5"
+rtrb = "0.4.0"
 rust-embed = "8.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

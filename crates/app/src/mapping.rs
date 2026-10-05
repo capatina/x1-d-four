@@ -41,6 +41,14 @@ pub enum Action {
     Rate,
     Trim,
     Scroll,
+    ExploreBand,
+    ExploreCycleBand,
+    ExploreAim,
+    ExploreDive,
+    ExploreBack,
+    ExploreStep,
+    ExploreFollow,
+    ViewExplore,
 }
 
 impl Action {
@@ -58,6 +66,14 @@ impl Action {
             "deck.rate" => Self::Rate,
             "deck.trim" => Self::Trim,
             "library.scroll" => Self::Scroll,
+            "explore.band" => Self::ExploreBand,
+            "explore.cycle_band" => Self::ExploreCycleBand,
+            "explore.aim" => Self::ExploreAim,
+            "explore.dive" => Self::ExploreDive,
+            "explore.back" => Self::ExploreBack,
+            "explore.step" => Self::ExploreStep,
+            "explore.follow" => Self::ExploreFollow,
+            "view.explore" => Self::ViewExplore,
             other => bail!("unknown action {other:?}"),
         })
     }
@@ -88,6 +104,14 @@ pub enum Intent {
     TrimSet(Option<usize>, f64),
     TrimDelta(Option<usize>, f64),
     Scroll(i32),
+    /// 0 = low, 1 = mid, 2 = high.
+    ExploreBand(u8),
+    ExploreCycleBand,
+    ExploreAim(i32),
+    ExploreDive,
+    ExploreBack,
+    ExploreFollow,
+    ToggleView,
 }
 
 pub struct Rule {
@@ -135,6 +159,16 @@ impl Rule {
             (Action::Trim, Delta(n)) => Intent::TrimDelta(d, n as f64 * a.unwrap_or(0.02)),
             (Action::Scroll, Delta(n)) => Intent::Scroll(n as i32 * a.unwrap_or(1.0) as i32),
             (Action::Scroll, Press) => Intent::Scroll(a.unwrap_or(1.0) as i32),
+            (Action::ExploreBand, Press) => Intent::ExploreBand(a.unwrap_or(0.0).clamp(0.0, 2.0) as u8),
+            (Action::ExploreCycleBand, Press) => Intent::ExploreCycleBand,
+            (Action::ExploreAim, Delta(n)) => Intent::ExploreAim(n as i32 * a.unwrap_or(1.0) as i32),
+            (Action::ExploreAim, Press) => Intent::ExploreAim(a.unwrap_or(1.0) as i32),
+            (Action::ExploreDive, Press) => Intent::ExploreDive,
+            (Action::ExploreBack, Press) => Intent::ExploreBack,
+            (Action::ExploreStep, Delta(n)) if n > 0 => Intent::ExploreDive,
+            (Action::ExploreStep, Delta(n)) if n < 0 => Intent::ExploreBack,
+            (Action::ExploreFollow, Press) => Intent::ExploreFollow,
+            (Action::ViewExplore, Press) => Intent::ToggleView,
             _ => return None,
         })
     }
@@ -164,8 +198,13 @@ impl Mappings {
             let fits = match action {
                 Action::Rate | Action::Scroll | Action::Nudge => true,
                 Action::Trim => kind != Kind::Button,
+                Action::ExploreAim => kind != Kind::Absolute,
+                Action::ExploreStep => kind == Kind::Relative,
                 _ => kind == Kind::Button,
             };
+            if action == Action::ExploreBand && !matches!(m.amount, Some(a) if (0.0..=2.0).contains(&a)) {
+                bail!("{}: explore.band needs amount = 0 (low), 1 (mid) or 2 (high)", at());
+            }
             if !fits {
                 bail!("{}: {} can't be driven by a {:?} control", at(), m.action, kind);
             }
@@ -215,6 +254,28 @@ mod tests {
         assert_eq!(play.led, Some((LedRule::DeckPlaying, 70)));
         let load = m.for_control("left.lit2").next().unwrap();
         assert_eq!(load.intent(ControlEvent::Press), Some(Intent::LoadSelected(Some(1))));
+    }
+
+    #[test]
+    fn explore_actions() {
+        let c = catalog();
+        let m = Mappings::parse(
+            "[[map]]\ncontrol = \"left.button.A\"\naction = \"explore.cycle_band\"\n\
+             [[map]]\ncontrol = \"left.button.C\"\naction = \"explore.band\"\namount = 1\n\
+             [[map]]\ncontrol = \"right.jog\"\naction = \"explore.aim\"\n\
+             [[map]]\ncontrol = \"right.browse\"\naction = \"explore.step\"\n\
+             [[map]]\ncontrol = \"right.button.M\"\naction = \"view.explore\"",
+            &c,
+        )
+        .unwrap();
+        assert_eq!(m.rules[0].intent(ControlEvent::Press), Some(Intent::ExploreCycleBand));
+        assert_eq!(m.rules[1].intent(ControlEvent::Press), Some(Intent::ExploreBand(1)));
+        assert_eq!(m.rules[2].intent(ControlEvent::Delta(-2)), Some(Intent::ExploreAim(-2)));
+        assert_eq!(m.rules[3].intent(ControlEvent::Delta(1)), Some(Intent::ExploreDive));
+        assert_eq!(m.rules[3].intent(ControlEvent::Delta(-1)), Some(Intent::ExploreBack));
+        assert_eq!(m.rules[4].intent(ControlEvent::Press), Some(Intent::ToggleView));
+        assert!(Mappings::parse("[[map]]\ncontrol = \"left.button.A\"\naction = \"explore.band\"", &c).is_err());
+        assert!(Mappings::parse("[[map]]\ncontrol = \"left.fader1\"\naction = \"explore.aim\"", &c).is_err());
     }
 
     #[test]

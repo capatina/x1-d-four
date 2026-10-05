@@ -25,19 +25,30 @@ pub fn run(app: Arc<App>, mut rt: Rt, stop: Arc<AtomicBool>, config: StreamConfi
         }
         Err(e) => tracing::warn!(error = %e, "could not make the audio thread real-time"),
     }
+    let mut fresh_tries = 0;
     while !stop.load(Ordering::Relaxed) {
         app.set_device(DeviceState::Connecting, None, None);
         let mut xone = match Xone::open() {
             Ok(x) => x,
             Err(e) => {
-                let missing = matches!(&e, ploytec::device::Error::Usb { source, .. } if source.kind() == std::io::ErrorKind::NotFound);
-                let state = if missing { DeviceState::Missing } else { DeviceState::Error };
+                let kind = match &e {
+                    ploytec::device::Error::Usb { source, .. } => Some(source.kind()),
+                    _ => None,
+                };
+                // Right after the mixer re-enumerates, udev hasn't granted access yet.
+                if kind == Some(std::io::ErrorKind::PermissionDenied) && fresh_tries < 12 {
+                    fresh_tries += 1;
+                    sleep_unless(&stop, Duration::from_millis(250));
+                    continue;
+                }
+                let state = if kind == Some(std::io::ErrorKind::NotFound) { DeviceState::Missing } else { DeviceState::Error };
                 tracing::warn!(error = %e, "Xone:4D not available");
                 app.set_device(state, Some(e.to_string()), None);
                 sleep_unless(&stop, Duration::from_secs(2));
                 continue;
             }
         };
+        fresh_tries = 0;
         let path = xone.path().to_owned();
         app.set_device(DeviceState::Running, None, Some(xone.firmware().to_string()));
         match xone.stream(&config, &mut rt, &stop, &app.stats) {

@@ -14,6 +14,16 @@
 #   deck.trim      pot/fader: 0..2x gain; encoder: amount per step (default 0.02)
 #   library.scroll encoder: rows per step; button: amount rows per press (default 1)
 #
+# Explore (the similarity tunnel):
+#   explore.cycle_band   on press: low -> mid -> high
+#   explore.band         on press, amount = 0 (low), 1 (mid) or 2 (high)
+#   explore.aim          encoder or jog: move between portals; button: amount portals per press
+#   explore.dive         on press: fly into the aimed portal
+#   explore.back         on press: climb back up
+#   explore.step         encoder: turn right = dive, turn left = back
+#   explore.follow       on press: toggle following the playing track
+#   view.explore         on press: switch between the decks and the tunnel
+#
 # led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused".
 # The rings toggle on each message, so they need the mixer's host-driven ring mode
 # (third illuminated button unlit in the power-on map setup).
@@ -77,3 +87,42 @@ action = "deck.load_selected"
 [[map]]
 control = "left.jog"
 action = "library.scroll"
+
+# ---- Explore ----
+# Left pod A: cycle the similarity band; B/C/D: low/mid/high directly.
+[[map]]
+control = "left.button.A"
+action = "explore.cycle_band"
+
+[[map]]
+control = "left.button.B"
+action = "explore.band"
+amount = 0
+
+[[map]]
+control = "left.button.C"
+action = "explore.band"
+amount = 1
+
+[[map]]
+control = "left.button.D"
+action = "explore.band"
+amount = 2
+
+# Right jog: aim between portals. Right JOG/SELECT: push = dive, turn = dive/back.
+[[map]]
+control = "right.jog"
+action = "explore.aim"
+
+[[map]]
+control = "right.browse.push"
+action = "explore.dive"
+
+[[map]]
+control = "right.browse"
+action = "explore.step"
+
+# Right pod M: switch between the decks and the tunnel.
+[[map]]
+control = "right.button.M"
+action = "view.explore"

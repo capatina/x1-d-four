@@ -7,7 +7,7 @@ pub mod deck;
 pub mod track;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use ploytec::{FRAMES_PER_PACKET, Frame, MidiMessage, MidiOutQueue, MidiParser, Renderer};
 
@@ -62,6 +62,8 @@ pub struct DeckSnapshot {
 #[derive(Default)]
 pub struct Shared {
     pub decks: [DeckState; DECKS],
+    /// Per deck low/mid/high RMS of the last packet (f32 bits), for visuals.
+    pub levels: [[AtomicU32; 3]; DECKS],
     /// MIDI clock ticks received (24 per beat) for a BPM readout.
     pub clock_ticks: AtomicU64,
     pub events_dropped: AtomicU64,
@@ -77,6 +79,11 @@ fn load(a: &AtomicU64) -> f64 {
 }
 
 impl Shared {
+    /// Low/mid/high RMS (0..~1) of each deck's last packet.
+    pub fn levels(&self) -> [[f32; 3]; DECKS] {
+        std::array::from_fn(|d| std::array::from_fn(|b| f32::from_bits(self.levels[d][b].load(Ordering::Relaxed))))
+    }
+
     pub fn deck(&self, n: usize) -> DeckSnapshot {
         let d = &self.decks[n];
         DeckSnapshot {
@@ -100,10 +107,22 @@ pub struct Rt {
     parser: MidiParser,
     midi_out: MidiOutQueue,
     mix: [[f32; 2]; FRAMES_PER_PACKET],
+    /// One-pole low-pass states per deck at 250 Hz and 3 kHz (the band splits).
+    split: [[f32; 2]; DECKS],
+    split_coef: [f32; 2],
+    /// Mono mix of all decks for the visualiser; pushes fail silently when nobody reads.
+    viz: rtrb::Producer<f32>,
+}
+
+/// Band-split coefficients for 250 Hz and 3 kHz one-pole low-passes.
+fn split_coefficients() -> [f32; 2] {
+    [250.0f32, 3000.0].map(|fc| 1.0 - (-std::f32::consts::TAU * fc / SAMPLE_RATE as f32).exp())
 }
 
 /// The control side.
 pub struct Control {
+    /// Mono mix samples for the visualiser (taken once by whoever draws).
+    viz: Option<rtrb::Consumer<f32>>,
     commands: rtrb::Producer<Command>,
     pub events: rtrb::Consumer<Event>,
     garbage: rtrb::Consumer<Arc<Track>>,
@@ -114,6 +133,7 @@ pub fn new() -> (Control, Rt) {
     let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(1024);
     let (ev_tx, ev_rx) = rtrb::RingBuffer::new(4096);
     let (gc_tx, gc_rx) = rtrb::RingBuffer::new(64);
+    let (viz_tx, viz_rx) = rtrb::RingBuffer::new(8192);
     let shared = Arc::new(Shared::default());
     for d in &shared.decks {
         store(&d.rate, 1.0);
@@ -127,8 +147,11 @@ pub fn new() -> (Control, Rt) {
         parser: MidiParser::default(),
         midi_out: MidiOutQueue::default(),
         mix: [[0.0; 2]; FRAMES_PER_PACKET],
+        split: [[0.0; 2]; DECKS],
+        split_coef: split_coefficients(),
+        viz: viz_tx,
     };
-    (Control { commands: cmd_tx, events: ev_rx, garbage: gc_rx, shared }, rt)
+    (Control { viz: Some(viz_rx), commands: cmd_tx, events: ev_rx, garbage: gc_rx, shared }, rt)
 }
 
 impl Control {
@@ -141,6 +164,11 @@ impl Control {
     pub fn midi_out(&mut self, msg: MidiMessage) -> Result<(), Command> {
         let (bytes, len) = msg.to_bytes();
         self.send(Command::MidiOut { bytes, len: len as u8 })
+    }
+
+    /// The visualiser's mono mix feed; `None` after the first call.
+    pub fn take_viz(&mut self) -> Option<rtrb::Consumer<f32>> {
+        self.viz.take()
     }
 
     /// Free tracks the RT thread let go of.
@@ -199,15 +227,36 @@ impl Renderer for Rt {
         for f in frames.iter_mut() {
             *f = [0; 8];
         }
+        let mut mono = [0f32; FRAMES_PER_PACKET];
         for n in 0..DECKS {
             let mut mix = self.mix;
             let outcome = self.decks[n].render(&mut mix);
-            for (f, [l, r]) in frames.iter_mut().zip(mix) {
+            let [mut lp1, mut lp2] = self.split[n];
+            let [a1, a2] = self.split_coef;
+            let mut sq = [0f32; 3];
+            for ((f, [l, r]), m) in frames.iter_mut().zip(mix).zip(mono.iter_mut()) {
                 f[2 * n] = to_s24(l);
                 f[2 * n + 1] = to_s24(r);
+                let x = 0.5 * (l + r);
+                *m += x;
+                lp1 += a1 * (x - lp1);
+                lp2 += a2 * (x - lp2);
+                sq[0] += lp1 * lp1;
+                sq[1] += (lp2 - lp1) * (lp2 - lp1);
+                sq[2] += (x - lp2) * (x - lp2);
+            }
+            self.split[n] = [lp1, lp2];
+            for (b, s) in sq.iter().enumerate() {
+                let rms = (s / FRAMES_PER_PACKET as f32).sqrt();
+                self.shared.levels[n][b].store(rms.to_bits(), Ordering::Relaxed);
             }
             if outcome.ended {
                 self.emit(Event::Ended { deck: n });
+            }
+        }
+        if self.viz.slots() >= FRAMES_PER_PACKET {
+            for m in mono {
+                let _ = self.viz.push(m);
             }
         }
         self.publish();
@@ -259,6 +308,29 @@ mod tests {
         assert_eq!(&f[6..8], &[to_s24(-0.25), to_s24(-0.25)]);
         assert!(control.shared.deck(1).playing);
         assert_eq!(control.shared.deck(1).position, 320.0);
+    }
+
+    #[test]
+    fn meters_and_viz_feed() {
+        let (mut control, mut rt) = new();
+        let mut viz = control.take_viz().unwrap();
+        assert!(control.take_viz().is_none());
+        // 60 Hz sine on deck 0: low band only.
+        let sine: Vec<f32> = (0..96_000).flat_map(|i| {
+            let v = 0.5 * (std::f32::consts::TAU * 60.0 * i as f32 / 48_000.0).sin();
+            [v, v]
+        }).collect();
+        control.send(Command::Load { deck: 0, track: Some(Arc::new(Track::from_samples(PathBuf::from("s"), sine))) }).ok();
+        control.send(Command::Play { deck: 0 }).ok();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        for _ in 0..40 {
+            rt.render(&mut frames);
+        }
+        let [low, mid, high] = control.shared.levels()[0];
+        assert!(low > 0.2 && mid < low * 0.5 && high < low * 0.05, "{low} {mid} {high}");
+        assert_eq!(control.shared.levels()[1], [0.0; 3]);
+        assert_eq!(viz.slots(), 40 * FRAMES_PER_PACKET);
+        assert!((viz.pop().unwrap()).abs() < 1e-6);
     }
 
     #[test]

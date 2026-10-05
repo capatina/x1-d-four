@@ -42,6 +42,14 @@ pub enum ClientCommand {
     Rescan,
     /// Raw MIDI to the mixer, e.g. [0x9F, 38, 127] toggles the left.lit1 ring.
     MidiOut { bytes: Vec<u8> },
+    View { view: String },
+    ExploreBand { band: String },
+    ExploreCycleBand,
+    ExploreAim { delta: Option<i32>, id: Option<String> },
+    ExploreDive { id: Option<String> },
+    ExploreBack,
+    ExploreFollow { follow: bool },
+    ExploreRoot { id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -62,20 +70,20 @@ pub struct DeviceStatus {
 }
 
 #[derive(Default, Clone)]
-struct DeckMeta {
-    track: Option<LibTrack>,
+pub(crate) struct DeckMeta {
+    pub(crate) track: Option<LibTrack>,
     loading: bool,
     trim: f64,
     peaks: Vec<u8>,
     length: f64,
 }
 
-struct Ui {
+pub(crate) struct Ui {
     query: String,
     ids: Vec<String>,
-    selected: Option<String>,
-    focused: usize,
-    decks: [DeckMeta; DECKS],
+    pub(crate) selected: Option<String>,
+    pub(crate) focused: usize,
+    pub(crate) decks: [DeckMeta; DECKS],
 }
 
 struct Config {
@@ -93,10 +101,10 @@ struct Leds {
 }
 
 #[derive(Default)]
-struct Clock {
+pub(crate) struct Clock {
     last_ticks: u64,
     last_at: Option<Instant>,
-    bpm: Option<f64>,
+    pub(crate) bpm: Option<f64>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -110,10 +118,10 @@ pub struct App {
     pub shared: Arc<engine::Shared>,
     pub stats: Arc<StreamStats>,
     pub library: RwLock<Library>,
-    ui: Mutex<Ui>,
+    pub(crate) ui: Mutex<Ui>,
     config: Mutex<Config>,
     leds: Mutex<Leds>,
-    clock: Mutex<Clock>,
+    pub(crate) clock: Mutex<Clock>,
     window: Mutex<(Instant, Window)>,
     device: Mutex<DeviceStatus>,
     midi_log: Mutex<VecDeque<Value>>,
@@ -124,6 +132,7 @@ pub struct App {
     pub config_dir: PathBuf,
     pub out_urbs: usize,
     pub runtime: tokio::runtime::Handle,
+    pub(crate) explore: crate::exploring::ExploreState,
 }
 
 impl App {
@@ -164,12 +173,13 @@ impl App {
             config_dir,
             out_urbs,
             runtime,
+            explore: Default::default(),
         });
         app.reload_config();
         app
     }
 
-    fn broadcast(&self, msg: Value) {
+    pub(crate) fn broadcast(&self, msg: Value) {
         let _ = self.tx.send(Arc::from(msg.to_string()));
     }
 
@@ -292,6 +302,20 @@ impl App {
                 b[..bytes.len()].copy_from_slice(&bytes);
                 self.send(Command::MidiOut { bytes: b, len: bytes.len() as u8 });
             }
+            ClientCommand::View { view } => match view.as_str() {
+                "explore" => self.set_view(true),
+                "decks" => self.set_view(false),
+                other => return Err(format!("unknown view {other:?}")),
+            },
+            ClientCommand::ExploreBand { band } => {
+                self.explore_band(analysis::Band::parse(&band).ok_or_else(|| format!("unknown band {band:?}"))?)
+            }
+            ClientCommand::ExploreCycleBand => self.explore_cycle_band(),
+            ClientCommand::ExploreAim { delta, id } => self.explore_aim(delta, id.as_deref()),
+            ClientCommand::ExploreDive { id } => self.explore_dive(id.as_deref()),
+            ClientCommand::ExploreBack => self.explore_back(),
+            ClientCommand::ExploreFollow { follow } => self.explore_follow(Some(follow)),
+            ClientCommand::ExploreRoot { id } => self.explore_root(&id)?,
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
@@ -330,6 +354,13 @@ impl App {
                 Ok(self.set_trim(deck, gain))
             }
             Intent::Scroll(n) => Ok(self.scroll(n)),
+            Intent::ExploreBand(b) => Ok(self.explore_band(analysis::Band::ALL[b.min(2) as usize])),
+            Intent::ExploreCycleBand => Ok(self.explore_cycle_band()),
+            Intent::ExploreAim(n) => Ok(self.explore_aim(Some(n), None)),
+            Intent::ExploreDive => Ok(self.explore_dive(None)),
+            Intent::ExploreBack => Ok(self.explore_back()),
+            Intent::ExploreFollow => Ok(self.explore_follow(None)),
+            Intent::ToggleView => Ok(self.set_view(self.view_name() == "decks")),
         };
         if let Err(e) = result {
             self.broadcast(json!({ "type": "error", "message": e }));
@@ -417,12 +448,27 @@ impl App {
         self.broadcast(msg);
     }
 
-    fn select(&self, id: Option<String>) {
+    /// Set the library selection without telling the explorer (it's the one asking).
+    pub(crate) fn select_from_explorer(&self, id: String) {
         let mut ui = self.ui.lock().unwrap();
-        ui.selected = id;
+        if ui.selected.as_deref() == Some(&id) {
+            return;
+        }
+        ui.selected = Some(id);
         let msg = browser_json(&ui);
         drop(ui);
         self.broadcast(msg);
+    }
+
+    pub(crate) fn select(&self, id: Option<String>) {
+        let mut ui = self.ui.lock().unwrap();
+        ui.selected = id.clone();
+        let msg = browser_json(&ui);
+        drop(ui);
+        self.broadcast(msg);
+        if let Some(id) = id {
+            self.explore_follow_selection(&id);
+        }
     }
 
     fn scroll(&self, delta: i32) {
@@ -436,12 +482,14 @@ impl App {
             None => 0,
         };
         ui.selected = Some(ui.ids[next].clone());
+        let id = ui.ids[next].clone();
         let msg = browser_json(&ui);
         drop(ui);
         self.broadcast(msg);
+        self.explore_follow_selection(&id);
     }
 
-    pub fn rescan(&self) {
+    pub fn rescan(self: &Arc<Self>) {
         let library = Library::scan(&self.music_dir);
         let count = library.tracks.len();
         *self.library.write().unwrap() = library;
@@ -449,6 +497,7 @@ impl App {
         self.browse(query);
         tracing::info!(tracks = count, "library rescanned");
         self.broadcast(json!({ "type": "library_changed", "tracks": count }));
+        self.start_analysis();
     }
 
     // ---- MIDI --------------------------------------------------------------
@@ -636,6 +685,7 @@ impl App {
             "type": "state",
             "decks": decks,
             "focused": focused,
+            "view": self.view_name(),
             "device": {
                 "state": device.state,
                 "message": device.message,
@@ -655,6 +705,7 @@ impl App {
     /// Runs ~30 times a second: state broadcast and LED sync.
     pub fn tick(&self) {
         self.sync_leds();
+        self.explore_tick(false);
         if self.tx.receiver_count() > 0 {
             self.broadcast(self.state_json());
         }
@@ -675,6 +726,9 @@ impl App {
         drop(ui);
         let cfg = self.config.lock().unwrap();
         out.push(Self::mappings_status(&cfg, &self.mappings_path()));
+        drop(cfg);
+        out.push(self.analysis_json());
+        out.extend(self.explore_json());
         out
     }
 
