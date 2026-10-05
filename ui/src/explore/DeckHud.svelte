@@ -4,6 +4,7 @@
   import { fmtLoop, fmtRatePct, idToName } from '../lib/format';
   import { deckKey, keyText } from '../lib/mixer';
   import { DECK_COUNT } from '../lib/protocol';
+  import { search, TRACK_DRAG } from '../lib/search.svelte';
 
   let { rootDeck }: { rootDeck: number | null } = $props();
 
@@ -44,6 +45,24 @@
       };
     }),
   );
+  // Drop a search result on a deck to load it there.
+  let dropTarget = $state<number | null>(null);
+  const isTrackDrag = (e: DragEvent) => e.dataTransfer?.types.includes(TRACK_DRAG) ?? false;
+  function dragOver(e: DragEvent, i: number) {
+    if (!isTrackDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    dropTarget = i;
+  }
+  function drop(e: DragEvent, i: number) {
+    const id = e.dataTransfer?.getData(TRACK_DRAG);
+    dropTarget = null;
+    if (!id) return;
+    e.preventDefault();
+    search.dropped = id;
+    client.send({ cmd: 'load', deck: i, track_id: id });
+  }
+
   // Turning a loop encoder while not looping: show the new length briefly.
   let lengthShown = $state(DECKS.map(() => false));
   const lastBeats: (number | null)[] = DECKS.map(() => null);
@@ -70,8 +89,13 @@
       class:focused={client.focused === d.i}
       class:playing={d.playing}
       class:empty={d.id == null}
+      class:drop={dropTarget === d.i}
       style:--accent={deckColor(d.i)}
       onclick={() => client.focus(d.i)}
+      ondragenter={(e) => dragOver(e, d.i)}
+      ondragover={(e) => dragOver(e, d.i)}
+      ondragleave={() => dropTarget === d.i && (dropTarget = null)}
+      ondrop={(e) => drop(e, d.i)}
       title={d.title ? `Deck ${d.i + 1}: ${d.title}` : `Deck ${d.i + 1} is empty`}
       aria-pressed={client.focused === d.i}
     >
@@ -127,6 +151,11 @@
   }
   .deck:hover {
     background: rgba(18, 20, 26, 0.75);
+  }
+  .deck.drop {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 22%, rgba(8, 9, 12, 0.8));
+    box-shadow: 0 0 26px -4px var(--accent);
   }
   .deck.focused {
     border-color: color-mix(in srgb, var(--accent) 70%, transparent);

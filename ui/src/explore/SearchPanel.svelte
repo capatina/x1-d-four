@@ -6,7 +6,7 @@
   import { client } from '../lib/client.svelte';
   import { fmtBpm, fmtLength, idToName } from '../lib/format';
   import { keysFor } from '../lib/mixer';
-  import { search } from '../lib/search.svelte';
+  import { search, TRACK_DRAG } from '../lib/search.svelte';
 
   /**
    * Type anywhere in the tunnel to search. Results come ranked from the server
@@ -55,7 +55,10 @@
       loadedAtOpen = loaded;
       return;
     }
-    if (loaded !== loadedAtOpen && selected && loaded.split('|').includes(selected)) search.close();
+    // Drag-and-drop loads keep the panel open, so several decks can be filled.
+    if (loaded !== loadedAtOpen && selected && selected !== search.dropped && loaded.split('|').includes(selected)) {
+      search.close();
+    }
   });
 
   function onKey(e: KeyboardEvent) {
@@ -117,6 +120,12 @@
               aria-selected={r.id === selected}
               onclick={() => pick(r.id)}
               ondblclick={() => fly_(r.id)}
+              draggable="true"
+              ondragstart={(e) => {
+                e.dataTransfer?.setData(TRACK_DRAG, r.id);
+                e.dataTransfer?.setData('text/plain', r.title);
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+              }}
             >
               <span class="title">{r.title}</span>
               <span class="artist">{r.artist ?? ''}</span>
@@ -134,6 +143,7 @@
       <span><kbd>Enter</kbd> fly the tunnel here</span>
       {#if loadKeys.length}<span>{#each loadKeys as k, i (i)}{#if i}/{/if}<MixerKey {k} />{/each} load</span>{/if}
       {#if rootKeys.length}<span>{#each rootKeys as k, i (i)}{#if i}/{/if}<MixerKey {k} />{/each} fly here</span>{/if}
+      <span>drag onto a deck to load</span>
       <span><kbd>Esc</kbd> close</span>
     </footer>
   </div>
@@ -210,6 +220,12 @@
     color: var(--text-2);
     text-align: left;
     cursor: pointer;
+  }
+  .row[draggable='true'] {
+    cursor: grab;
+  }
+  .row:active {
+    cursor: grabbing;
   }
   .row:hover {
     background: rgba(255, 255, 255, 0.04);
