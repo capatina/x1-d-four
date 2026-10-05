@@ -49,4 +49,6 @@ The user asks for mappings in plain words ("make the left pod's first lit button
 3. Edit `config/mappings.toml` using the action vocabulary in its header comment.
 4. Saving reloads the file. Check `curl -s localhost:7878/api/mappings | jq '{ok, error, count}'`; the UI's MIDI panel shows the same status.
 
-LED rings toggle on every Note On; the mixer has no absolute on/off. `led = "deck.playing"` etc. only works with the mixer's host-driven ring mode (third illuminated button unlit in the power-on map setup).
+Holding the left JOG/SELECT encoder (above the left jog wheel) for about half a second toggles the mixer's shift layer: the BPM display shows SFT and every control sends on channel 15 (`shift.*`). Unmapped shift controls look like "nothing works".
+
+LED rings toggle on every Note On; the mixer has no absolute on/off. Confirmed working 2026-10-04 on channel 16, with the user's mixer set to host-driven rings. `led = "deck.playing"` etc. only works with the mixer's host-driven ring mode (third illuminated button unlit in the power-on map setup).
