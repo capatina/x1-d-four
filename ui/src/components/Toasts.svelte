@@ -2,7 +2,7 @@
   import { client } from '../lib/client.svelte';
 </script>
 
-<div class="toasts" role="region" aria-label="Notifications" aria-live="assertive">
+<div class="toasts" class:explore={client.view === 'explore'} role="region" aria-label="Notifications" aria-live="assertive">
   {#each client.toasts as toast (toast.id)}
     <div class="toast {toast.kind}" role={toast.kind === 'error' ? 'alert' : 'status'}>
       <span class="icon" aria-hidden="true">{toast.kind === 'error' ? '!' : 'i'}</span>
@@ -26,6 +26,10 @@
     width: min(560px, calc(100vw - 32px));
     transform: translateX(-50%);
     pointer-events: none;
+  }
+  /* Clear the explore view's deck HUD and shortcut line. */
+  .toasts.explore {
+    bottom: 104px;
   }
   .toast {
     display: grid;

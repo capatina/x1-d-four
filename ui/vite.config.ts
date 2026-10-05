@@ -20,5 +20,7 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'es2022',
     reportCompressedSize: false,
+    // three.js is one lazy chunk (~575 kB) loaded only when Explore opens.
+    chunkSizeWarningLimit: 700,
   },
 });

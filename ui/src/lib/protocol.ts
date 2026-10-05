@@ -53,6 +53,8 @@ export type DeviceStatus = {
   max_gap_us: number | null;
 };
 
+export type View = 'decks' | 'explore';
+
 export type StateMsg = {
   type: 'state';
   decks: DeckState[];
@@ -61,6 +63,8 @@ export type StateMsg = {
   device: DeviceStatus;
   /** From the mixer's MIDI clock (its BPM display). */
   bpm: number | null;
+  /** Which view is up. The mixer can switch it, so the UI follows this. */
+  view: View;
 };
 
 export type BrowserMsg = {
@@ -113,6 +117,73 @@ export type LibraryChangedMsg = { type: 'library_changed'; tracks: number };
 
 export type ErrorMsg = { type: 'error'; message: string };
 
+// --- Explore (similarity tunnel) -------------------------------------------
+
+/** Frequency band the similarity tree is built in. */
+export type Band = 'low' | 'mid' | 'high';
+
+export const BANDS: readonly Band[] = ['low', 'mid', 'high'];
+
+export type ExploreReason = 'init' | 'band' | 'root' | 'section' | 'dive' | 'back' | 'aim' | 'follow';
+
+export type ExploreNode = {
+  id: string;
+  /** null only for the root. */
+  parent: string | null;
+  /** 0 = root. */
+  depth: number;
+  /** Similarity to parent in the active band, 0..1. */
+  sim: number;
+  /** Analysed BPM. */
+  tempo: number | null;
+};
+
+export type ExploreMsg = {
+  type: 'explore';
+  band: Band;
+  /** Root follows the playing track. */
+  follow: boolean;
+  /** Track id at depth 0. */
+  root: string | null;
+  /** Deck playing the root, if any. */
+  root_deck: number | null;
+  /** Ids from root to current, inclusive (path[0] = root). */
+  path: string[];
+  /** Node whose children are shown ahead. */
+  current: string | null;
+  /** Aimed child of current (= library selection). */
+  aim: string | null;
+  /** Always contains current's children and grandchildren. */
+  nodes: ExploreNode[];
+  reason: ExploreReason;
+};
+
+export type AnalysisMsg = {
+  type: 'analysis';
+  done: number;
+  total: number;
+  running: boolean;
+  error: string | null;
+};
+
+/** About 60 per second, only while `state.view == "explore"`. */
+export type VizMsg = {
+  type: 'viz';
+  /** ms since server start. */
+  t: number;
+  /** 64 log-spaced bins, 0..255, of what the decks are sending. */
+  spectrum: number[];
+  /** Overall low/mid/high level, 0..1. */
+  bands: [number, number, number];
+  /** Per deck low/mid/high, 0..1. */
+  decks: Array<[number, number, number]>;
+  /** A transient (kick) in this frame. */
+  onset: boolean;
+  /** 0..1 phase within the beat, from the mixer's MIDI clock. */
+  beat: number | null;
+  bpm: number | null;
+};
+
 export type ServerMsg =
   | StateMsg
   | BrowserMsg
@@ -121,7 +192,10 @@ export type ServerMsg =
   | MidiMsg
   | MappingsMsg
   | LibraryChangedMsg
-  | ErrorMsg;
+  | ErrorMsg
+  | ExploreMsg
+  | AnalysisMsg
+  | VizMsg;
 
 export type Command =
   | { cmd: 'load'; deck: number; track_id: string }
@@ -143,4 +217,21 @@ export type Command =
   | { cmd: 'select'; track_id: string }
   /** Move the selection within the filtered list. */
   | { cmd: 'scroll'; delta: number }
-  | { cmd: 'rescan' };
+  | { cmd: 'rescan' }
+  /** 1-3 raw bytes to the mixer (LED tests). */
+  | { cmd: 'midi_out'; bytes: number[] }
+  | { cmd: 'view'; view: View }
+  | { cmd: 'explore_band'; band: Band }
+  /** low → mid → high → low. */
+  | { cmd: 'explore_cycle_band' }
+  /** Rotate the aim among current's children. */
+  | { cmd: 'explore_aim'; delta: number }
+  /** Aim at a specific child (click on a portal). */
+  | { cmd: 'explore_aim'; id: string }
+  /** Dive into the aimed (or given) child. */
+  | { cmd: 'explore_dive'; id?: string }
+  /** Climb one step back up the path. */
+  | { cmd: 'explore_back' }
+  | { cmd: 'explore_follow'; follow: boolean }
+  /** Re-root on any library track (follow turns off). */
+  | { cmd: 'explore_root'; id: string };

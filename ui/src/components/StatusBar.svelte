@@ -2,6 +2,8 @@
   import { client } from '../lib/client.svelte';
   import { fmtBpm } from '../lib/format';
 
+  let { inert = false }: { inert?: boolean } = $props();
+
   const device = $derived(client.state?.device ?? null);
   const devState = $derived(device?.state ?? null);
   const tone = $derived(
@@ -33,7 +35,7 @@
   );
 </script>
 
-<header class="status" class:stale={client.ws !== 'open'}>
+<header class="status" class:stale={client.ws !== 'open'} {inert}>
   <span class="brand">X1 D<span>·</span>FOUR</span>
 
   <span class="item device {tone}" title={device?.message ?? ''}>
@@ -74,6 +76,21 @@
   <span class="item ws {wsTone}">
     <span class="dot"></span><span class="k">Server</span><b>{wsLabel}</b>
   </span>
+
+  <button
+    type="button"
+    class="explore"
+    onclick={() => client.setView('explore')}
+    disabled={client.ws !== 'open'}
+    title="Explore similar tracks in a 3D tunnel (E)"
+  >
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="8" />
+      <circle cx="10" cy="10" r="4.6" />
+      <circle cx="10" cy="10" r="1.6" />
+    </svg>
+    Explore <kbd>E</kbd>
+  </button>
 </header>
 
 <style>
@@ -189,6 +206,35 @@
   }
   .item.ws {
     border-left: 0;
+  }
+  .explore {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    margin-left: 8px;
+    padding: 0 8px 0 10px;
+    border: 1px solid color-mix(in srgb, #d66bff 45%, var(--line-2));
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, rgba(214, 107, 255, 0.14), rgba(60, 232, 176, 0.08) 60%, rgba(166, 227, 255, 0.1));
+    font: 650 13px/1 var(--font-ui);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .explore:hover:not(:disabled) {
+    border-color: #d66bff;
+    box-shadow: 0 0 16px -6px #d66bff;
+  }
+  .explore:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .explore svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: #d66bff;
+    stroke-width: 1.5;
   }
   @media (max-width: 1500px) {
     .wide-only {

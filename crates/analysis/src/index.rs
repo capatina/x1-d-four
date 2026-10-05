@@ -103,6 +103,8 @@ impl Index {
         }
         let std = var.map(|v| v.into_iter().map(|x| x.sqrt().max(1e-3)).collect::<Vec<_>>());
         let weight = Band::ALL.map(group_weights);
+        // Byte-identical copies first; near-identical ones (same recording, other
+        // file) are merged after embedding.
         let mut first: std::collections::HashMap<Vec<u32>, usize> = std::collections::HashMap::new();
         let canonical = items
             .iter()
@@ -129,7 +131,35 @@ impl Index {
             }
             index.vecs[b] = all;
         }
+        let durations: Vec<f32> = items.iter().map(|(_, f)| f.duration).collect();
+        index.merge_near_copies(&durations);
         index
+    }
+
+    /// Treat tracks of nearly the same length that match in every band as copies
+    /// of one recording (other encodes, re-downloads, renamed files).
+    fn merge_near_copies(&mut self, durations: &[f32]) {
+        const SAME: f32 = 0.99;
+        let mut order: Vec<usize> = (0..self.ids.len()).collect();
+        order.sort_by(|&a, &b| durations[a].total_cmp(&durations[b]));
+        for (pos, &i) in order.iter().enumerate() {
+            if self.canonical[i] != i {
+                continue;
+            }
+            for &j in order[..pos].iter().rev() {
+                if durations[i] - durations[j] > 2.0 {
+                    break;
+                }
+                let j = self.canonical[j];
+                let same = Band::ALL.iter().all(|&band| {
+                    self.vector(band, i).iter().zip(self.vector(band, j)).map(|(x, y)| x * y).sum::<f32>() >= SAME
+                });
+                if same {
+                    self.canonical[i] = j;
+                    break;
+                }
+            }
+        }
     }
 
     pub fn len(&self) -> usize {

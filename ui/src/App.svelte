@@ -4,6 +4,8 @@
   import MidiPanel from './components/MidiPanel.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import Toasts from './components/Toasts.svelte';
+  import ExploreView from './explore/ExploreView.svelte';
+  import { handleExploreKey } from './explore/keys';
   import { client } from './lib/client.svelte';
   import { DECK_COUNT } from './lib/protocol';
 
@@ -23,12 +25,23 @@
     return () => clearInterval(timer);
   });
   const retryIn = $derived(client.retryAt == null ? 0 : Math.max(0, Math.ceil((client.retryAt - now) / 1000)));
+  const exploring = $derived(client.view === 'explore');
 
   // Keyboard shortcuts. Capture phase, so they win over a focused button or
   // slider; ignored while typing in the search box (it handles Esc itself).
   $effect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+
+      if (client.view === 'explore') {
+        if (handleExploreKey(e)) e.preventDefault();
+        return;
+      }
+      if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        if (!e.repeat) client.setView('explore');
+        return;
+      }
 
       const digit = deckDigit(e.code);
       if (digit != null) {
@@ -102,8 +115,8 @@
   }
 </script>
 
-<div class="app" class:offline>
-  <StatusBar />
+<div class="app" class:offline class:exploring>
+  <StatusBar inert={exploring} />
 
   {#if offline}
     <div class="banner" role="alert">
@@ -116,7 +129,7 @@
     </div>
   {/if}
 
-  <main>
+  <main inert={exploring}>
     <div class="decks">
       {#each DECKS as i (i)}
         <Deck index={i} />
@@ -127,6 +140,10 @@
       <MidiPanel bind:collapsed={midiCollapsed} />
     </div>
   </main>
+
+  {#if exploring}
+    <ExploreView />
+  {/if}
 
   <Toasts />
 </div>
@@ -160,6 +177,11 @@
   .offline .decks {
     opacity: 0.45;
     filter: saturate(0.4);
+  }
+  /* Explore covers everything; skip painting the deck view underneath. */
+  .exploring > main,
+  .exploring > .banner {
+    visibility: hidden;
   }
 
   .banner {

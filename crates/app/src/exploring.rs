@@ -94,10 +94,8 @@ impl App {
         *self.explore.data.write().unwrap() = Some(Arc::new(AnalysisData { index, cache }));
         {
             let mut st = self.explore.status.lock().unwrap();
+            // Unreadable files are skipped, not an error; `failed` is in the log.
             st.running = false;
-            if failed > 0 {
-                st.error = Some(format!("{failed} tracks couldn't be analysed"));
-            }
         }
         self.broadcast(self.analysis_json());
         // A rescan can change indices: start the tree over.

@@ -2122,6 +2122,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "x1-d-four"
 version = "0.1.0"
 dependencies = [
+ "analysis",
  "anyhow",
  "audio_thread_priority",
  "axum",
@@ -2133,6 +2134,8 @@ dependencies = [
  "mime_guess",
  "notify",
  "ploytec",
+ "realfft",
+ "rtrb",
  "rust-embed",
  "serde",
  "serde_json",

@@ -1,14 +1,18 @@
 import {
   DECK_COUNT,
+  type AnalysisMsg,
   type BrowserMsg,
   type Command,
   type DeckLoadedMsg,
+  type ExploreMsg,
   type MappingsMsg,
   type MidiMsg,
   type ServerMsg,
   type StateMsg,
   type Track,
+  type View,
 } from './protocol';
+import { applyViz } from './viz';
 
 export type WsStatus = 'connecting' | 'open' | 'closed';
 export type LibraryStatus = 'loading' | 'ready' | 'error';
@@ -31,13 +35,21 @@ const emptyDecks = (): (DeckInfo | null)[] => Array.from({ length: DECK_COUNT },
  *
  * The 30 Hz `state` stream is coalesced to one update per animation frame and
  * lives in its own signal, so components that don't read it (the library
- * table) never re-render on deck ticks.
+ * table) never re-render on deck ticks. The 60 Hz `viz` stream never touches
+ * reactivity at all: it lands in the plain `viz` object (lib/viz.ts).
  */
 class Client {
   /** Latest `state` message (deck positions, device, clock). Updated once per frame. */
   state = $state.raw<StateMsg | null>(null);
   /** Focused deck as its own signal, so readers only update when it changes. */
   focused = $derived(this.state?.focused ?? 0);
+  /** Server-owned view (the mixer can switch it too). */
+  view = $derived<View>(this.state?.view === 'explore' ? 'explore' : 'decks');
+
+  /** Similarity tree for the explore view; null until the server sends one. */
+  explore = $state.raw<ExploreMsg | null>(null);
+  /** Library analysis progress. */
+  analysis = $state.raw<AnalysisMsg | null>(null);
 
   browser = $state.raw<BrowserMsg>({ type: 'browser', query: '', ids: [], selected: null });
   library = $state.raw<Map<string, Track>>(new Map());
@@ -134,6 +146,15 @@ class Client {
     if (!sock || sock.readyState !== WebSocket.OPEN) return false;
     sock.send(JSON.stringify(cmd));
     return true;
+  }
+
+  /** Ask the server to switch views; the UI follows `state.view` when it does. */
+  setView(view: View): void {
+    this.send({ cmd: 'view', view });
+  }
+
+  toggleView(): void {
+    this.setView(this.view === 'explore' ? 'decks' : 'explore');
   }
 
   /** Focus a deck. Remembered briefly so shortcuts right after it target the new deck. */
@@ -233,6 +254,15 @@ class Client {
         break;
       case 'error':
         this.toast(msg.message);
+        break;
+      case 'explore':
+        this.explore = msg;
+        break;
+      case 'analysis':
+        this.analysis = msg;
+        break;
+      case 'viz':
+        applyViz(msg);
         break;
     }
   }

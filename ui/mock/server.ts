@@ -6,21 +6,34 @@
  *   bun mock/server.ts [--port 7878] [--tracks 48] [--empty]
  *                      [--device running|connecting|stalled|missing|error]
  *                      [--bad-mappings] [--glitches] [--quiet]
+ *                      [--view decks|explore] [--band low|mid|high]
+ *                      [--idle] [--analysis-seconds 4] [--section-seconds 12]
+ *
+ * --view explore starts in the explore view (for screenshots); --idle starts
+ * with nothing playing, so the explorer has no root. --section-seconds 0
+ * turns off the periodic "section" re-shuffles (steady screenshots).
  */
 import { existsSync, statSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type {
+  AnalysisMsg,
+  Band,
   BrowserMsg,
   Command,
   DeckLoadedMsg,
   DeviceStateName,
   DeviceStatus,
+  ExploreMsg,
+  ExploreNode,
+  ExploreReason,
   MappingsMsg,
   MidiMsg,
   ServerMsg,
   StateMsg,
   Track,
+  View,
+  VizMsg,
 } from '../src/lib/protocol';
 
 const { values: opts } = parseArgs({
@@ -33,6 +46,11 @@ const { values: opts } = parseArgs({
     'bad-mappings': { type: 'boolean', default: false },
     glitches: { type: 'boolean', default: false },
     quiet: { type: 'boolean', default: false },
+    view: { type: 'string', default: 'decks' },
+    band: { type: 'string', default: 'low' },
+    idle: { type: 'boolean', default: false },
+    'analysis-seconds': { type: 'string', default: '4' },
+    'section-seconds': { type: 'string', default: '12' },
   },
 });
 
@@ -176,10 +194,10 @@ function put(deck: number, track: Track, patch: Partial<MockDeck> = {}) {
 }
 
 if (tracks.length > 20) {
-  put(0, tracks[3], { playing: true, position: 62.4, cue: 0.5, rate: 1.0 });
+  put(0, tracks[3], { playing: !opts.idle, position: 62.4, cue: 0.5, rate: 1.0 });
   put(1, tracks[10], { position: 16.2, cue: 16.2, rate: 1.012 });
   const t2 = tracks[17];
-  put(2, t2, { playing: true, position: (t2.duration ?? 240) - 27, cue: 31.9, rate: 0.985 });
+  put(2, t2, { playing: !opts.idle, position: (t2.duration ?? 240) - 27, cue: 31.9, rate: 0.985 });
 }
 
 const allIds = () => tracks.map((t) => t.id);
@@ -201,6 +219,9 @@ function setBrowser(query: string, selected: string | null) {
   browser = { type: 'browser', query, ids, selected: selected && ids.includes(selected) ? selected : (ids[0] ?? null) };
   broadcast(browser);
 }
+
+const CLOCK_BPM = 126;
+let view: View = opts.view === 'explore' ? 'explore' : 'decks';
 
 const deviceState = opts.device as DeviceStateName;
 const DEVICE_MESSAGES: Record<DeviceStateName, string | null> = {
@@ -240,7 +261,8 @@ function stateMsg(): StateMsg {
     })),
     focused,
     device,
-    bpm: deviceState === 'running' ? 126 : null,
+    bpm: deviceState === 'running' ? CLOCK_BPM : null,
+    view,
   };
 }
 
@@ -359,6 +381,7 @@ function handle(cmd: Command): string | null {
       if (!browser.ids.includes(cmd.track_id)) return 'Track is not in the current list';
       browser = { ...browser, selected: cmd.track_id };
       broadcast(browser);
+      aimFromSelection();
       return null;
     case 'scroll': {
       if (!browser.ids.length) return null;
@@ -366,11 +389,44 @@ function handle(cmd: Command): string | null {
       const next = Math.min(browser.ids.length - 1, Math.max(0, i + Math.trunc(cmd.delta)));
       browser = { ...browser, selected: browser.ids[next] };
       broadcast(browser);
+      aimFromSelection();
       return null;
     }
     case 'rescan':
       void rescan();
       return null;
+    case 'midi_out':
+      return null;
+    case 'view':
+      if (cmd.view !== 'decks' && cmd.view !== 'explore') return `Bad view: ${String(cmd.view)}`;
+      view = cmd.view;
+      broadcast(stateMsg());
+      return null;
+    case 'explore_band':
+      if (!BANDS.includes(cmd.band)) return `Bad band: ${String(cmd.band)}`;
+      setBand(cmd.band);
+      return null;
+    case 'explore_cycle_band':
+      setBand(BANDS[(BANDS.indexOf(ex.band) + 1) % BANDS.length]);
+      return null;
+    case 'explore_aim':
+      return 'id' in cmd ? aimAt(cmd.id) : aimBy(cmd.delta);
+    case 'explore_dive':
+      return dive(cmd.id);
+    case 'explore_back':
+      return back();
+    case 'explore_follow':
+      ex.follow = !!cmd.follow;
+      if (ex.follow) followPlaying('follow', true);
+      else broadcastExplore('follow');
+      return null;
+    case 'explore_root': {
+      if (!index.has(cmd.id)) return `No such track: ${cmd.id}`;
+      ex.follow = false;
+      const deck = decks.findIndex((d) => d.track?.id === cmd.id);
+      reroot(cmd.id, deck >= 0 ? deck : null, 'root');
+      return null;
+    }
     default:
       return `Unknown command: ${JSON.stringify(cmd)}`;
   }
@@ -385,7 +441,352 @@ async function rescan(): Promise<number> {
   index = byId();
   broadcast({ type: 'library_changed', tracks: tracks.length });
   setBrowser(browser.query, browser.selected);
+  startAnalysis();
   return tracks.length;
+}
+
+// ---------------------------------------------------------------------------
+// Explore: fake per-band features, a similarity tree, analysis, viz
+
+const BANDS: readonly Band[] = ['low', 'mid', 'high'];
+const FEATURE_DIM = 8;
+const CLUSTERS = 5;
+const CHILDREN = 6;
+const GRANDCHILDREN = 4;
+const ANALYSIS_MS = Math.max(0.5, Number(opts['analysis-seconds'])) * 1000;
+const SECTION_MS = Number(opts['section-seconds']) * 1000;
+
+const ex = {
+  band: (BANDS.includes(opts.band as Band) ? opts.band : 'low') as Band,
+  follow: true,
+  root: null as string | null,
+  rootDeck: null as number | null,
+  path: [] as string[],
+  aim: null as string | null,
+  nodes: [] as ExploreNode[],
+  /** Changes on every fake "section" of the root track; nudges similarities. */
+  section: 0,
+};
+
+/** Deterministic feature vector per track and band: clustered, so neighbours make sense. */
+const featureCache = new Map<string, number[]>();
+function features(id: string, band: Band): number[] {
+  const key = `${band}|${id}`;
+  let f = featureCache.get(key);
+  if (f) return f;
+  const r = mulberry32(hash(key));
+  const cluster = Math.floor(r() * CLUSTERS);
+  const c = mulberry32(hash(`${band}#${cluster}`));
+  f = Array.from({ length: FEATURE_DIM }, () => (c() * 2 - 1) * 0.9 + (r() * 2 - 1) * 0.55);
+  const len = Math.hypot(...f) || 1;
+  f = f.map((v) => v / len);
+  featureCache.set(key, f);
+  return f;
+}
+
+function similarity(a: string, b: string): number {
+  const fa = features(a, ex.band);
+  const fb = features(b, ex.band);
+  let dot = 0;
+  for (let i = 0; i < FEATURE_DIM; i++) dot += fa[i] * fb[i];
+  // Sections shift what the root sounds like for a while.
+  const jitter = (mulberry32(hash(`${ex.section}|${a}|${b}`))() - 0.5) * 0.12;
+  return Math.min(0.98, Math.max(0.05, 0.1 + 0.88 * ((dot + 1) / 2) ** 1.6 + jitter));
+}
+
+/** Tracks analysed so far, in analysis order. */
+let analysed = new Set<string>();
+let analysisOrder: string[] = [];
+let analysisStarted = 0;
+let analysisRunning = false;
+let lastAnalysisMsg = 0;
+
+function startAnalysis() {
+  const r = mulberry32(hash(`order${tracks.length}`));
+  analysisOrder = tracks.map((t) => t.id).sort(() => r() - 0.5);
+  analysed = new Set();
+  analysisStarted = performance.now();
+  analysisRunning = analysisOrder.length > 0;
+  broadcast(analysisMsg());
+}
+
+function analysisMsg(): AnalysisMsg {
+  return { type: 'analysis', done: analysed.size, total: tracks.length, running: analysisRunning, error: null };
+}
+
+function stepAnalysis() {
+  if (!analysisRunning) return;
+  const now = performance.now();
+  const want = Math.min(analysisOrder.length, Math.floor(((now - analysisStarted) / ANALYSIS_MS) * analysisOrder.length));
+  let changed = false;
+  while (analysed.size < want) {
+    analysed.add(analysisOrder[analysed.size]);
+    changed = true;
+  }
+  if (analysed.size >= analysisOrder.length) analysisRunning = false;
+  if (changed || !analysisRunning || now - lastAnalysisMsg > 1000) {
+    if (!analysisRunning || now - lastAnalysisMsg > 1000) {
+      lastAnalysisMsg = now;
+      broadcast(analysisMsg());
+    }
+  }
+  if (changed) rebuild('section');
+}
+
+function topSimilar(of: string, k: number, used: Set<string>): Array<{ id: string; sim: number }> {
+  if (!analysed.has(of)) return [];
+  const out: Array<{ id: string; sim: number }> = [];
+  for (const id of analysed) {
+    if (used.has(id) || id === of) continue;
+    out.push({ id, sim: similarity(of, id) });
+  }
+  return out.sort((a, b) => b.sim - a.sim).slice(0, k);
+}
+
+/**
+ * Rebuild `nodes` for the current band/root/path: each path node's children
+ * (so the minimap shows where you came from) plus current's grandchildren.
+ * Every track appears at most once.
+ */
+function buildTree() {
+  ex.nodes = [];
+  if (!ex.root) {
+    ex.path = [];
+    ex.aim = null;
+    return;
+  }
+  if (ex.path[0] !== ex.root) ex.path = [ex.root];
+  const used = new Set(ex.path);
+  ex.nodes.push({ id: ex.root, parent: null, depth: 0, sim: 1, tempo: tempoOf(ex.root) });
+  for (let i = 0; i < ex.path.length; i++) {
+    const node = ex.path[i];
+    const next = ex.path[i + 1];
+    const kids = topSimilar(node, next ? CHILDREN - 1 : CHILDREN, used);
+    if (next) {
+      kids.push({ id: next, sim: similarity(node, next) });
+      kids.sort((a, b) => b.sim - a.sim);
+    }
+    for (const kid of kids) {
+      used.add(kid.id);
+      if (kid.id !== next) ex.nodes.push({ id: kid.id, parent: node, depth: i + 1, sim: kid.sim, tempo: tempoOf(kid.id) });
+    }
+    if (next) ex.nodes.push({ id: next, parent: node, depth: i + 1, sim: similarity(node, next), tempo: tempoOf(next) });
+  }
+  // Keep each level in similarity order (the order explore_aim rotates through).
+  const current = ex.path[ex.path.length - 1];
+  const depth = ex.path.length;
+  const children = ex.nodes.filter((n) => n.parent === current).sort((a, b) => b.sim - a.sim);
+  ex.nodes = ex.nodes.filter((n) => n.parent !== current).concat(children);
+  for (const child of children) {
+    for (const g of topSimilar(child.id, GRANDCHILDREN, used)) {
+      used.add(g.id);
+      ex.nodes.push({ id: g.id, parent: child.id, depth: depth + 1, sim: g.sim, tempo: tempoOf(g.id) });
+    }
+  }
+  if (!ex.aim || !children.some((c) => c.id === ex.aim)) ex.aim = children[0]?.id ?? null;
+}
+
+function tempoOf(id: string): number | null {
+  if (!analysed.has(id)) return null;
+  const t = index.get(id);
+  const r = mulberry32(hash(`tempo${id}`))();
+  // Analysis mostly agrees with the tags, sometimes finds a tempo they lack.
+  return Math.round(((t?.bpm ?? 118 + r * 14) + (r - 0.5) * 0.4) * 10) / 10;
+}
+
+function childrenOfCurrent(): ExploreNode[] {
+  const current = ex.path[ex.path.length - 1];
+  return ex.nodes.filter((n) => n.parent === current);
+}
+
+function exploreMsg(reason: ExploreReason): ExploreMsg {
+  return {
+    type: 'explore',
+    band: ex.band,
+    follow: ex.follow,
+    root: ex.root,
+    root_deck: ex.rootDeck,
+    path: ex.path.slice(),
+    current: ex.path[ex.path.length - 1] ?? null,
+    aim: ex.aim,
+    nodes: ex.nodes,
+    reason,
+  };
+}
+
+/** Last aim pushed into the library selection (the aim *is* the selection). */
+let syncedAim: string | null = null;
+function broadcastExplore(reason: ExploreReason) {
+  broadcast(exploreMsg(reason));
+  if (ex.aim === syncedAim) return;
+  syncedAim = ex.aim;
+  if (!ex.aim || ex.aim === browser.selected) return;
+  if (browser.ids.includes(ex.aim)) {
+    browser = { ...browser, selected: ex.aim };
+    broadcast(browser);
+  } else {
+    setBrowser('', ex.aim);
+  }
+}
+
+function rebuild(reason: ExploreReason) {
+  const before = JSON.stringify([ex.nodes, ex.aim, ex.path]);
+  buildTree();
+  if (reason === 'section' && JSON.stringify([ex.nodes, ex.aim, ex.path]) === before) return;
+  broadcastExplore(reason);
+}
+
+function reroot(id: string | null, deck: number | null, reason: ExploreReason) {
+  ex.root = id;
+  ex.rootDeck = deck;
+  ex.path = id ? [id] : [];
+  ex.aim = null;
+  rebuild(reason);
+}
+
+function setBand(band: Band) {
+  ex.band = band;
+  // A new band is a new tree: start over from the root.
+  ex.path = ex.root ? [ex.root] : [];
+  ex.aim = null;
+  rebuild('band');
+}
+
+function aimBy(delta: number): string | null {
+  const kids = childrenOfCurrent();
+  if (!kids.length) return 'Nothing to aim at';
+  const i = Math.max(0, kids.findIndex((k) => k.id === ex.aim));
+  const n = kids.length;
+  ex.aim = kids[(((i + Math.trunc(delta)) % n) + n) % n].id;
+  broadcastExplore('aim');
+  return null;
+}
+
+function aimAt(id: string): string | null {
+  if (!childrenOfCurrent().some((k) => k.id === id)) return 'Not a child of the current node';
+  if (ex.aim !== id) {
+    ex.aim = id;
+    broadcastExplore('aim');
+  }
+  return null;
+}
+
+function aimFromSelection() {
+  const sel = browser.selected;
+  if (sel && sel !== ex.aim && childrenOfCurrent().some((k) => k.id === sel)) {
+    ex.aim = sel;
+    syncedAim = sel;
+    broadcast(exploreMsg('aim'));
+  }
+}
+
+function dive(id?: string): string | null {
+  const target = id ?? ex.aim;
+  if (!target) return 'Nothing to dive into';
+  if (!childrenOfCurrent().some((k) => k.id === target)) return 'Not a child of the current node';
+  ex.path = [...ex.path, target];
+  ex.aim = null;
+  rebuild('dive');
+  return null;
+}
+
+function back(): string | null {
+  if (ex.path.length < 2) return null;
+  const from = ex.path[ex.path.length - 1];
+  ex.path = ex.path.slice(0, -1);
+  ex.aim = from;
+  rebuild('back');
+  return null;
+}
+
+/** Deck order in which decks started playing, newest last. */
+const playOrder: number[] = [];
+const wasPlaying = decks.map(() => false);
+let lastSection = performance.now();
+
+function followPlaying(reason: ExploreReason, force = false) {
+  decks.forEach((d, i) => {
+    if (d.playing && !wasPlaying[i]) {
+      const at = playOrder.indexOf(i);
+      if (at >= 0) playOrder.splice(at, 1);
+      playOrder.push(i);
+    }
+    wasPlaying[i] = d.playing;
+  });
+  const playingDeck = [...playOrder].reverse().find((i) => decks[i].playing && decks[i].track) ?? null;
+  if (!ex.follow) {
+    if (force) broadcastExplore(reason);
+    return;
+  }
+  let deck = playingDeck;
+  // Nothing playing: keep the last root while it's still loaded.
+  if (deck == null && ex.rootDeck != null && decks[ex.rootDeck].track?.id === ex.root) deck = ex.rootDeck;
+  const id = deck != null ? (decks[deck].track?.id ?? null) : ex.root;
+  if (id !== ex.root || deck !== ex.rootDeck) reroot(id, deck, reason);
+  else if (force) broadcastExplore(reason);
+}
+
+let prevPhase = 0;
+function vizMsg(): VizMsg {
+  const t = uptimeMs();
+  const bpm = deviceState === 'running' ? CLOCK_BPM : null;
+  const beats = (t / 1000) * (CLOCK_BPM / 60);
+  const phase = beats % 1;
+  const bar = Math.floor(beats / 4);
+  const deckLevels = decks.map((d) => {
+    if (!d.playing || !d.track) return 0;
+    const len = d.track.duration || 1;
+    const peak = d.peaks[Math.min(1023, Math.floor((d.position / len) * 1024))] ?? 128;
+    return Math.min(1, (peak / 255) * d.trim);
+  });
+  const energy = Math.min(1, deckLevels.reduce((a, b) => a + b, 0));
+  const playing = energy > 0.01;
+  const kick = playing ? Math.exp(-phase * 7) : 0;
+  const offbeat = (phase + 0.5) % 1;
+  const hat = playing ? Math.exp(-offbeat * 16) * 0.8 + Math.exp(-((beats * 4) % 1) * 22) * 0.35 : 0;
+  const chord = mulberry32(hash(`chord${Math.floor(bar / 2)}`));
+  const notes = [chord(), chord(), chord()].map((v) => 14 + Math.floor(v * 24));
+  const swell = 0.55 + 0.45 * Math.sin(t / 900);
+  const r = mulberry32(t);
+  const spectrum = Array.from({ length: 64 }, (_, i) => {
+    let v = 0;
+    // Sub + kick, then a bassline, a few chord partials, and hats/air up top.
+    v += Math.exp(-(((i - 3) / 3.2) ** 2)) * (0.35 + 0.65 * kick);
+    v += Math.exp(-(((i - 9) / 3) ** 2)) * 0.45 * (0.6 + 0.4 * Math.sin(beats * Math.PI));
+    for (const n of notes) v += Math.exp(-(((i - n) / 1.6) ** 2)) * 0.42 * swell;
+    v += Math.max(0, (i - 34) / 30) * (0.15 + hat * 0.85) * (0.75 + 0.25 * r());
+    v += 0.05 * r();
+    return Math.round(Math.min(1, v * energy * 1.1) * 255);
+  });
+  const low = playing ? Math.min(1, energy * (0.3 + 0.7 * kick)) : 0;
+  const mid = playing ? Math.min(1, energy * 0.55 * swell + 0.1) : 0;
+  const high = playing ? Math.min(1, energy * (0.15 + 0.75 * hat)) : 0;
+  const onset = playing && phase < prevPhase;
+  prevPhase = phase;
+  return {
+    type: 'viz',
+    t,
+    spectrum,
+    bands: [low, mid, high],
+    decks: deckLevels.map((lvl) => [lvl * (0.3 + 0.7 * kick), lvl * 0.55 * swell, lvl * (0.15 + 0.75 * hat)]),
+    onset,
+    beat: bpm != null ? phase : null,
+    bpm,
+  };
+}
+
+function tickExplore() {
+  followPlaying('root');
+  stepAnalysis();
+  const rootPlaying = ex.rootDeck != null && decks[ex.rootDeck].playing;
+  const now = performance.now();
+  if (rootPlaying && SECTION_MS > 0 && now - lastSection > SECTION_MS) {
+    lastSection = now;
+    ex.section++;
+    rebuild('section');
+  } else if (!rootPlaying) {
+    lastSection = now;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +813,8 @@ function fakeMidi() {
       value: delta,
       action: `browser.scroll delta=${delta}`,
     });
-    handle({ cmd: 'scroll', delta });
+    // Leave the aim alone in the explore view (keeps screenshots stable).
+    if (view === 'decks') handle({ cmd: 'scroll', delta });
   } else if (roll < 0.55) {
     const lit = 1 + Math.floor(rnd() * 4);
     const note = (0x23 + lit).toString(16).toUpperCase();
@@ -493,6 +895,8 @@ const server = Bun.serve<undefined>({
       }
       send(ws, mappings);
       send(ws, stateMsg());
+      send(ws, exploreMsg('init'));
+      send(ws, analysisMsg());
       log('[ws] client connected');
     },
     message(ws, data) {
@@ -575,6 +979,17 @@ setInterval(() => {
   if (device.state === 'running') device.packets_out += Math.round(dt * 600);
   if (device.state === 'running') device.max_gap_us = 980 + Math.round(rnd() * 120);
   broadcast(stateMsg());
+  tickExplore();
 }, 1000 / TICK_HZ);
 
-console.log(`X1 D. Four mock on http://127.0.0.1:${server.port} (${tracks.length} tracks, device ${device.state})`);
+// 60 Hz viz, only while the explore view is up.
+setInterval(() => {
+  if (view === 'explore') broadcast(vizMsg());
+}, 1000 / 60);
+
+followPlaying('init');
+startAnalysis();
+
+console.log(
+  `X1 D. Four mock on http://127.0.0.1:${server.port} (${tracks.length} tracks, device ${device.state}, view ${view}, band ${ex.band})`,
+);

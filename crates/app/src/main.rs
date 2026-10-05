@@ -256,7 +256,7 @@ fn analyse(query: &str, music: Option<PathBuf>, top: usize) -> anyhow::Result<()
     println!("{}  [{:.1} BPM]", name(&pick.id), index.tempo[i]);
     for band in analysis::Band::ALL {
         println!("\n  {}:", band.name().to_uppercase());
-        for (j, sim) in index.nearest(band, index.vector(band, i), top, |k| k == i) {
+        for (j, sim) in index.nearest(band, index.vector(band, i), top, |k| index.canonical(k) == index.canonical(i)) {
             println!("    {:>3.0}%  {:>5.1} BPM  {}", sim * 100.0, index.tempo[j], name(&index.ids[j]));
         }
     }
