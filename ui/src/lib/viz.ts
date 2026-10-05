@@ -3,10 +3,10 @@ import type { VizMsg } from './protocol';
 export const SPECTRUM_BINS = 64;
 
 /**
- * Latest `viz` frame, mutated in place ~60 times a second.
+ * Latest `viz` frame, mutated in place ~120 times a second.
  *
  * Deliberately not reactive: only the explore render loop reads it, once per
- * animation frame, so the 60 Hz stream never re-renders Svelte components.
+ * animation frame, so the 120 Hz stream never re-renders Svelte components.
  */
 export type VizFrame = {
   /** Incremented on every `viz` message. */

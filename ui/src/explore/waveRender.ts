@@ -13,8 +13,11 @@ export const WINDOW_S = 4;
 /** Envelope sample spacing, CSS px (blocks are ~2.4 px apart at 1920 px). */
 const STEP = 2;
 
-/** Position error (track seconds) above which we jump instead of easing. */
-const SNAP_S = 0.3;
+/**
+ * Position error (track seconds) above which we jump instead of easing: a jog
+ * or cue shows in the next frame; only clock jitter (≤ 25 ms) is eased.
+ */
+const SNAP_S = 0.025;
 /** Time constant for easing a playing deck onto the server's clock. */
 const CORRECT_TAU = 0.15;
 /** Time constant for a paused deck gliding to its new position (jog, cue). */
@@ -173,7 +176,7 @@ export class WaveRenderer {
   };
 
   // -------------------------------------------------------------------------
-  // Dead reckoning: follow the 30 Hz `state` at 60 fps without visible jumps.
+  // Dead reckoning: follow the 60 Hz `state` at display rate without visible jumps.
 
   #advance(st: StateMsg | null, now: number, dt: number): void {
     const age = Math.min(MAX_AGE_S, Math.max(0, (now - waves.stateAt) / 1000));

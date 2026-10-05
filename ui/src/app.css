@@ -23,6 +23,11 @@
   --focus: #e8d8a8;
 
   --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Display serif for realm names, the aimed title and the breadcrumb's current place. */
+  --font-display: 'Georgia', 'Noto Serif', 'DejaVu Serif', 'Liberation Serif', serif;
+  --ink: #121e17;
+  --parchment: #f0e7d2;
+  --stone: #615d54;
   --font-mono: 'JetBrains Mono', 'JetBrainsMono Nerd Font', 'SF Mono', 'Cascadia Mono', ui-monospace, Menlo,
     Consolas, 'Liberation Mono', monospace;
 

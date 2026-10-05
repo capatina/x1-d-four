@@ -215,7 +215,7 @@ export type AnalysisMsg = {
   error: string | null;
 };
 
-/** About 60 per second, only while `state.view == "explore"`. */
+/** About 120 per second, only while `state.view == "explore"`. */
 export type VizMsg = {
   type: 'viz';
   /** ms since server start. */

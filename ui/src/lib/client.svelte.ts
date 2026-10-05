@@ -38,10 +38,12 @@ const emptyDecks = (): (DeckInfo | null)[] => Array.from({ length: DECK_COUNT },
 /**
  * Single connection to the X1 D. Four server plus everything the UI renders.
  *
- * The 30 Hz `state` stream is coalesced to one update per animation frame and
+ * The 60 Hz `state` stream is coalesced to one update per animation frame and
  * lives in its own signal, so components that don't read it (the library
- * table) never re-render on deck ticks. The 60 Hz `viz` stream never touches
+ * table) never re-render on deck ticks. The 120 Hz `viz` stream never touches
  * reactivity at all: it lands in the plain `viz` object (lib/viz.ts).
+ * `explore` messages also go straight to listeners (the landscape), in the
+ * message's own task, so the next frame already shows them.
  */
 class Client {
   /** Latest `state` message (deck positions, device, clock). Updated once per frame. */
@@ -79,6 +81,11 @@ class Client {
   retryAt = $state<number | null>(null);
 
   toasts = $state.raw<Toast[]>([]);
+
+  /** Called synchronously for every `explore` message (no effect scheduling in between). */
+  readonly exploreListeners = new Set<(msg: ExploreMsg) => void>();
+  /** performance.now() when the latest `explore` message arrived (for latency checks). */
+  exploreAt = 0;
 
   #sock: WebSocket | null = null;
   #attempt = 0;
@@ -272,6 +279,8 @@ class Client {
         this.toast(msg.message);
         break;
       case 'explore':
+        this.exploreAt = performance.now();
+        for (const listener of this.exploreListeners) listener(msg);
         this.explore = msg;
         break;
       case 'analysis':

@@ -5,7 +5,7 @@
   import { client } from '../lib/client.svelte';
   import { fmtBpm, idToName } from '../lib/format';
   import { backKey, bandKey, diveHint, EXPLORE_LEGEND, keysText, keyText } from '../lib/mixer';
-  import { BANDS, type Band } from '../lib/protocol';
+  import { BANDS, type Band, type ExploreMsg } from '../lib/protocol';
   import { viz } from '../lib/viz';
   import DeckHud from './DeckHud.svelte';
   import type { EngineStats, ExploreEngine } from './engine';
@@ -14,10 +14,14 @@
   import WaveStrip from './WaveStrip.svelte';
   import { search } from '../lib/search.svelte';
   import Minimap from './Minimap.svelte';
+  import { local } from './local';
   import { BAND_PALETTE, bandPalette } from './palette';
 
   let canvas: HTMLCanvasElement;
   let labels: HTMLDivElement;
+  let infoEl: HTMLElement;
+  let sideEl: HTMLElement;
+  let realmEl: HTMLElement | undefined = $state();
 
   let engine = $state.raw<ExploreEngine | null>(null);
   /** Height of the legend + deck HUD, so toasts can sit above it. */
@@ -84,6 +88,21 @@
     const onMotion = () => engine?.setReducedMotion(motion.matches);
     motion.addEventListener('change', onMotion);
 
+    // explore messages reach the landscape in their own task, not after an effect flush.
+    const onExplore = (msg: ExploreMsg) => engine?.setExplore(msg);
+    client.exploreListeners.add(onExplore);
+
+    // Labels keep clear of the header boxes; they only move when those change size.
+    const obstacles = () => {
+      if (!engine) return;
+      const rects = [infoEl, sideEl, realmEl].filter((el): el is HTMLElement => !!el).map((el) => el.getBoundingClientRect());
+      engine.setObstacles(rects.map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
+    };
+    const boxes = new ResizeObserver(obstacles);
+    boxes.observe(infoEl);
+    boxes.observe(sideEl);
+    window.addEventListener('resize', obstacles);
+
     // three.js lives in its own chunk, loaded the first time Explore opens.
     import('./engine')
       .then(({ createExploreEngine }) => {
@@ -97,8 +116,11 @@
           onDive: (id) => client.send({ cmd: 'explore_dive', id }),
           onAimDelta: (delta) => client.send({ cmd: 'explore_aim', delta }),
           reducedMotion: motion.matches,
-          onStats: showStats ? (s) => (stats = s) : undefined,
+          onStats: showStats ? (s) => (stats = { ...s }) : undefined,
         });
+        local.engine = engine;
+        engine.setExplore(client.explore);
+        obstacles();
       })
       .catch((err: unknown) => {
         if (!cancelled) failed = err instanceof Error ? err.message : String(err);
@@ -106,10 +128,26 @@
 
     return () => {
       cancelled = true;
+      client.exploreListeners.delete(onExplore);
+      boxes.disconnect();
+      window.removeEventListener('resize', obstacles);
       motion.removeEventListener('change', onMotion);
+      local.engine = null;
       engine?.dispose();
       engine = null;
     };
+  });
+
+  // The realm cartouche comes and goes with the root.
+  $effect(() => {
+    const el = realmEl;
+    if (!el || !engine) return;
+    const ro = new ResizeObserver(() => {
+      const rects = [infoEl, sideEl, el].map((e) => e.getBoundingClientRect());
+      engine?.setObstacles(rects.map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   });
 
   $effect(() => {
@@ -145,7 +183,7 @@
   style:--band-a={pal.a}
   style:--band-b={pal.b}
   role="application"
-  aria-label="Explore: living river valley"
+  aria-label="Explore: the Wayfaring"
 >
   <div class="stage">
     <canvas bind:this={canvas} aria-hidden="true"></canvas>
@@ -155,7 +193,7 @@
   <div class="vignette" aria-hidden="true"></div>
 
   <!-- Top-left: band, follow, analysis, tempo, where we are -->
-  <header class="info">
+  <header class="info" bind:this={infoEl}>
     <div class="row">
       <span class="brand">X1 D<span>·</span>FOUR</span>
       <div class="bands" role="radiogroup" aria-label="Band">
@@ -218,18 +256,20 @@
   </header>
 
   {#if hasRoot}
-    <div class="place-name" aria-live="polite">
-      <span>EXPLORE / {pal.detail}</span>
+    <div class="realm" aria-live="polite" bind:this={realmEl}>
+      <span class="eyebrow">{pal.detail.toLowerCase()}</span>
       <h1>{pal.place}</h1>
-      <p>{children.length} paths from here <i>·</i> let the music lead</p>
-      {#if (ex?.path.length ?? 0) > 1}
-        <button type="button" class="upstream" onclick={() => client.send({ cmd: 'explore_back' })}>← Upstream</button>
-      {/if}
+      <p>
+        {children.length} {children.length === 1 ? 'route' : 'routes'} from here <i>·</i> let the music lead
+        {#if (ex?.path.length ?? 0) > 1}
+          <button type="button" class="upstream" onclick={() => client.send({ cmd: 'explore_back' })}>← Upstream</button>
+        {/if}
+      </p>
     </div>
   {/if}
 
   <!-- Top-right: tree + way out -->
-  <aside class="side">
+  <aside class="side" bind:this={sideEl}>
     <div
       class="device"
       class:ok={device?.state === 'running'}
@@ -241,13 +281,14 @@
     {#if ex?.root}
       <Minimap msg={ex} />
     {/if}
-    {#if showStats && stats}
-      <div class="stats" role="status">
-        {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr.toFixed(2)} · world {stats.frameMs.toFixed(2)} ms · wave {waveMs.toFixed(2)} ms
-        <span class="growth">growth {Math.round(stats.growth * 100)}% · evening {Math.round(stats.day * 100)}%</span>
-      </div>
-    {/if}
   </aside>
+
+  {#if showStats && stats}
+    <div class="stats" role="status">
+      {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr.toFixed(2)} · world {stats.frameMs.toFixed(2)} ms · wave {waveMs.toFixed(2)} ms
+      <span class="growth">growth {Math.round(stats.growth * 100)}% · age {stats.age.toFixed(2)} · course {stats.course.toFixed(0)} · {stats.speed.toFixed(2)} u/s{stats.gpuMs ? ` · gpu ${stats.gpuMs.toFixed(2)} ms` : ''}</span>
+    </div>
+  {/if}
 
   {#if !search.open}<LibraryTicker />{/if}
   <SearchPanel />
@@ -343,34 +384,39 @@
       linear-gradient(to top, #14251ef5, #1b3028b0 140px, transparent 32%);
   }
 
-  .place-name { position: absolute; top: 18%; left: 3.4%; pointer-events: none; color: #f0edda; text-shadow: 0 2px 18px #26393070; }
-  .place-name > span { font-size: 10px; letter-spacing: .19em; text-transform: uppercase; }
-  .place-name h1 { margin: 8px 0; font: 400 clamp(32px, 3.2vw, 58px)/1.08 Georgia, serif; letter-spacing: -.04em; }
-  .place-name p { margin: 10px 0; font-size: 12px; color: #e3e4cc; }
-  .place-name i { margin: 0 8px; font-style: normal; }
-  .upstream { pointer-events: auto; margin-top: 12px; padding: 6px 10px; border: 1px solid #dedbb966; background: #1b3028cc; color: #eee9d3; font-size: 12px; cursor: pointer; }
+  /* The realm's name: lore lives in place names only. */
+  .realm { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; max-width: min(40vw, 520px); pointer-events: none; color: var(--parchment); text-align: center; text-shadow: 0 2px 16px #121e17a0; }
+  .realm .eyebrow { font: 400 10px/1.2 var(--font-display); font-variant-caps: all-small-caps; letter-spacing: .18em; font-size: 12px; color: color-mix(in srgb, var(--band) 70%, var(--parchment)); }
+  .realm h1 { margin: 2px 0 0; font: 400 clamp(24px, 2.25vw, 40px)/1.05 var(--font-display); letter-spacing: -.02em; white-space: nowrap; }
+  .realm p { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; font-size: 11.5px; color: #e3e0cc; }
+  .realm i { font-style: normal; color: var(--band); }
+  .upstream { pointer-events: auto; padding: 3px 8px; border: 1px solid #dedbb955; border-radius: 6px; background: #121e17cc; color: #eee9d3; font-size: 11.5px; cursor: pointer; }
   .growth { display: block; opacity: .8; }
+
+  /* Route labels: ink and parchment; the aimed one gains a band rule and grows upward only. */
   .labels :global(.xl) {
-    position: absolute; left: 0; top: 0; padding: 10px 12px 12px;
-    border: 0; border-top: 1px solid #e9ddaf45; border-radius: 0;
-    color: #f3efdc; background: linear-gradient(#1f2c25c9, #1f2c259c);
+    position: absolute; left: 0; top: 0; padding: 9px 11px 10px;
+    border: 0; border-top: 1px solid #e9ddaf40; border-radius: 0;
+    color: var(--parchment); background: #121e17cc;
     text-align: center; pointer-events: auto; cursor: pointer;
-    box-shadow: 0 5px 20px #1b281c14;
+    box-shadow: 0 6px 22px #0c140f2e;
+    will-change: transform;
   }
   .labels :global(.xl)::after {
     content: ''; position: absolute; height: var(--stem, 19px); width: 1px;
-    top: 100%; left: 50%; background: #e6d8a788;
+    top: 100%; left: 50%; background: linear-gradient(#e6d8a788, #e6d8a720);
   }
-  .labels :global(.xl:hover), .labels :global(.xl:focus-visible) { background: #233228ec; }
+  .labels :global(.xl:hover), .labels :global(.xl:focus-visible) { background: #182a20ee; }
+  .labels :global(.xl-leaving) { pointer-events: none; }
   .labels :global(.xl-t), .labels :global(.xl-a), .labels :global(.xl-m) { display: block; }
-  .labels :global(.xl-t) { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; font: 550 clamp(12px, .86vw, 15px)/1.3 var(--font-ui); text-wrap: balance; }
-  .labels :global(.xl-a) { font-size: 11px; color: #c9cdb8; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .labels :global(.xl-m) { margin-top: 8px; font: 500 10px/1.4 var(--font-mono); color: #dfd7b7; white-space: pre; }
-  .labels :global(.xl[data-kind='aimed']) { z-index: 2; padding: 18px 20px; border-top: 2px solid var(--band); background: linear-gradient(#213329ed,#1c3025ce); }
-  .labels :global(.xl[data-kind='aimed'])::before { content: 'AIMED · NEXT PATH'; display: block; color: var(--band); font-size: 9px; letter-spacing: .22em; margin-bottom: 10px; }
-  .labels :global(.xl[data-kind='aimed'] .xl-t) { font: 400 clamp(21px, 1.85vw, 32px)/1.08 Georgia, serif; letter-spacing: -.02em; }
-  .labels :global(.xl[data-kind='aimed'] .xl-a) { font-size: 13px; margin-top: 8px; }
-  .labels :global(.xl[data-kind='aimed'] .xl-m) { color: var(--band); font-size: 11px; }
+  .labels :global(.xl-t) { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; font: 560 clamp(12px, .84vw, 15px)/1.28 var(--font-ui); text-wrap: balance; }
+  .labels :global(.xl-a) { font-size: 11px; color: #cfcab3; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .labels :global(.xl-m) { margin-top: 6px; font: 500 10px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; color: #ddd3b4; white-space: pre; }
+  .labels :global(.xl[data-kind='aimed']) { z-index: 2; border-top: 2px solid var(--band); background: #121e17e6; box-shadow: 0 8px 26px #0c140f40, inset 0 1px 0 color-mix(in srgb, var(--band) 30%, transparent); }
+  .labels :global(.xl[data-kind='aimed'])::before { content: 'aimed · next gate'; display: block; margin-bottom: 4px; font: 400 12px/1.2 var(--font-display); font-variant-caps: all-small-caps; letter-spacing: .18em; color: var(--band); }
+  .labels :global(.xl[data-kind='aimed'] .xl-t) { font-family: var(--font-display); font-weight: 400; letter-spacing: -.01em; font-size: clamp(13px, .95vw, 17px); }
+  .labels :global(.xl[data-kind='aimed'])::after { background: linear-gradient(var(--band), color-mix(in srgb, var(--band) 20%, transparent)); }
+  .labels :global(.xl[data-kind='aimed'] .xl-m) { color: var(--band); }
 
   /* Info strip */
   .info {
@@ -542,12 +588,14 @@
   }
 
   /* Side: close + minimap */
+  /* Device chip beside the minimap, so the corner stays short and labels keep their places. */
   .side {
     position: absolute;
     top: 22px;
     right: 24px;
-    display: grid;
-    justify-items: end;
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: flex-start;
     gap: 10px;
   }
   .device {
@@ -592,6 +640,10 @@
     color: #c0c5b0;
   }
   .stats {
+    position: absolute;
+    right: 24px;
+    bottom: calc(var(--explore-bottom, 300px) + 22px);
+    pointer-events: none;
     padding: 3px 8px;
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.6);

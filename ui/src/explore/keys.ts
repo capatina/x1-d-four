@@ -1,4 +1,5 @@
 import { client } from '../lib/client.svelte';
+import { local } from './local';
 
 /**
  * Explore-view keys; letters and digits type into the search instead. Returns
@@ -9,7 +10,7 @@ export function handleExploreKey(e: KeyboardEvent): boolean {
   switch (e.key) {
     case 'ArrowLeft':
     case 'ArrowRight':
-      client.send({ cmd: 'explore_aim', delta: e.key === 'ArrowLeft' ? -1 : 1 });
+      local.aimBy(e.key === 'ArrowLeft' ? -1 : 1);
       return true;
     case 'ArrowUp':
     case 'Enter':

@@ -70,7 +70,9 @@ const { values: opts } = parseArgs({
 
 const PORT = Number(opts.port);
 const DIST = resolve(import.meta.dir, '../dist');
-const TICK_HZ = 30;
+/** Like the real server: `state` 60 times a second, and ~2 ms after every deck command. */
+const TICK_HZ = 60;
+const VIZ_HZ = 120;
 const DECKS = 4;
 const started = performance.now();
 const uptimeMs = () => Math.round(performance.now() - started);
@@ -1157,6 +1159,7 @@ const server = Bun.serve<undefined>({
         case 'POST /api/command': {
           const cmd = (await req.json()) as Command;
           const error = handle(cmd);
+          kickState();
           return json(error ? { ok: false, error } : { ok: true });
         }
       }
@@ -1188,6 +1191,7 @@ const server = Bun.serve<undefined>({
       }
       log(`[cmd +${uptimeMs()}ms]`, JSON.stringify(cmd));
       const error = handle(cmd);
+      kickState();
       if (error) send(ws, { type: 'error', message: error });
     },
     close() {
@@ -1240,9 +1244,18 @@ for (let i = 0; i < 6; i++) fakeMidi();
   }, 1200 + rnd() * 1800);
 })();
 
-// 30 Hz state ticks with real elapsed time.
+/** Push `state` about 2 ms after a command, so a jog, play or loop shows at once. */
+let kick: ReturnType<typeof setTimeout> | undefined;
+function kickState() {
+  kick ??= setTimeout(() => {
+    kick = undefined;
+    tick();
+  }, 2);
+}
+
+// State ticks with real elapsed time.
 let last = performance.now();
-setInterval(() => {
+function tick() {
   const t = performance.now();
   const dt = (t - last) / 1000;
   last = t;
@@ -1274,12 +1287,13 @@ setInterval(() => {
   if (device.state === 'running') device.max_gap_us = 980 + Math.round(rnd() * 120);
   broadcast(stateMsg());
   tickExplore();
-}, 1000 / TICK_HZ);
+}
+setInterval(tick, 1000 / TICK_HZ);
 
-// 60 Hz viz, only while the explore view is up.
+// 120 Hz viz, only while the explore view is up.
 setInterval(() => {
   if (view === 'explore') broadcast(vizMsg());
-}, 1000 / 60);
+}, 1000 / VIZ_HZ);
 
 followPlaying('init');
 startAnalysis();

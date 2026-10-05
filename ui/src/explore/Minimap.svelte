@@ -2,6 +2,7 @@
   import { client } from '../lib/client.svelte';
   import { idToName } from '../lib/format';
   import type { ExploreMsg } from '../lib/protocol';
+  import { local } from './local';
 
   let { msg }: { msg: ExploreMsg } = $props();
 
@@ -74,7 +75,7 @@
   }
 
   function aim(id: string) {
-    client.send({ cmd: 'explore_aim', id });
+    local.aimAt(id);
   }
 </script>
 
@@ -143,8 +144,8 @@
   }
   svg {
     display: block;
-    width: 132px;
-    height: 132px;
+    width: clamp(84px, 12vh, 132px);
+    height: clamp(84px, 12vh, 132px);
     overflow: visible;
   }
   .guide {
