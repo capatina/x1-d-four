@@ -22,6 +22,10 @@ pub struct LibTrack {
     pub duration: Option<f64>,
     #[serde(skip)]
     search: String,
+    #[serde(skip)]
+    search_title: String,
+    #[serde(skip)]
+    search_artist: String,
 }
 
 #[derive(Default)]
@@ -58,15 +62,46 @@ impl Library {
         self.by_id.get(id).map(|&i| &self.tracks[i])
     }
 
-    /// Ids matching every word of `query` (case-insensitive, any field), in library order.
+    /// Ids matching every word of `query` (case-insensitive, any field). With a
+    /// query, best matches come first: words that start the title, then words at a
+    /// word start in title or artist, then anywhere (album, file path).
     pub fn filter(&self, query: &str) -> Vec<String> {
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-        self.tracks
+        if words.is_empty() {
+            return self.tracks.iter().map(|t| t.id.clone()).collect();
+        }
+        let mut hits: Vec<(u32, usize)> = self
+            .tracks
             .iter()
-            .filter(|t| words.iter().all(|w| t.search.contains(w.as_str())))
-            .map(|t| t.id.clone())
-            .collect()
+            .enumerate()
+            .filter(|(_, t)| words.iter().all(|w| t.search.contains(w.as_str())))
+            .map(|(i, t)| (words.iter().map(|w| word_score(t, w)).sum(), i))
+            .collect();
+        hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        hits.into_iter().map(|(_, i)| self.tracks[i].id.clone()).collect()
     }
+}
+
+/// How well one query word matches a track.
+fn word_score(t: &LibTrack, w: &str) -> u32 {
+    let title = &t.search_title;
+    let artist = &t.search_artist;
+    if title.starts_with(w) {
+        8
+    } else if at_word_start(title, w) {
+        5
+    } else if artist.starts_with(w) || at_word_start(artist, w) {
+        4
+    } else if title.contains(w) || artist.contains(w) {
+        2
+    } else {
+        1
+    }
+}
+
+/// `w` appears in `text` right after a non-alphanumeric character.
+fn at_word_start(text: &str, w: &str) -> bool {
+    text.match_indices(w).any(|(i, _)| i == 0 || !text[..i].chars().next_back().is_some_and(char::is_alphanumeric))
 }
 
 /// macOS Finder aliases and AppleDouble files copied along with real tracks:
@@ -94,6 +129,8 @@ fn read_track(root: &Path, path: &Path) -> LibTrack {
         bpm: None,
         duration: None,
         search: String::new(),
+        search_title: String::new(),
+        search_artist: String::new(),
     };
     if let Ok(tagged) = lofty::read_from_path(path) {
         let secs = tagged.properties().duration().as_secs_f64();
@@ -111,6 +148,8 @@ fn read_track(root: &Path, path: &Path) -> LibTrack {
                 .filter(|b| *b > 0.0);
         }
     }
+    track.search_title = track.title.to_lowercase();
+    track.search_artist = track.artist.as_deref().unwrap_or("").to_lowercase();
     track.search = format!(
         "{} {} {} {}",
         track.title,
@@ -120,4 +159,47 @@ fn read_track(root: &Path, path: &Path) -> LibTrack {
     )
     .to_lowercase();
     track
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lib(items: &[(&str, &str, Option<&str>)]) -> Library {
+        let tracks: Vec<LibTrack> = items
+            .iter()
+            .map(|(id, title, artist)| {
+                let mut t = LibTrack {
+                    id: id.to_string(),
+                    path: PathBuf::from(id),
+                    title: title.to_string(),
+                    artist: artist.map(str::to_string),
+                    album: None,
+                    bpm: None,
+                    duration: None,
+                    search: String::new(),
+                    search_title: title.to_lowercase(),
+                    search_artist: artist.unwrap_or("").to_lowercase(),
+                };
+                t.search = format!("{} {} {}", t.search_title, t.search_artist, id.to_lowercase());
+                t
+            })
+            .collect();
+        let by_id = tracks.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
+        Library { tracks, by_id }
+    }
+
+    #[test]
+    fn ranks_title_starts_then_word_starts_then_anywhere() {
+        let l = lib(&[
+            ("a.mp3", "Planet Jump", Some("Someone")),
+            ("b.mp3", "Long Jump (Original Mix)", Some("Marco Carola")),
+            ("jump/c.mp3", "Other", Some("X")),
+            ("d.mp3", "Jumpstart", Some("Y")),
+        ]);
+        assert_eq!(l.filter("jump"), vec!["d.mp3", "a.mp3", "b.mp3", "jump/c.mp3"]);
+        assert_eq!(l.filter("carola jump"), vec!["b.mp3"]);
+        assert_eq!(l.filter("").len(), 4);
+        assert!(l.filter("zzz").is_empty());
+    }
 }

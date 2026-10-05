@@ -450,7 +450,10 @@ impl App {
     fn browse(&self, query: String) {
         let ids = self.library.read().unwrap().filter(&query);
         let mut ui = self.ui.lock().unwrap();
-        if !ui.selected.as_ref().is_some_and(|s| ids.contains(s)) {
+        // A search selects its best match, so the mixer's load buttons act on it;
+        // clearing the search keeps whatever was selected.
+        let searching = !query.trim().is_empty() && query.trim() != ui.query.trim();
+        if searching || !ui.selected.as_ref().is_some_and(|s| ids.contains(s)) {
             ui.selected = ids.first().cloned();
         }
         ui.query = query;

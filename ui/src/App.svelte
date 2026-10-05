@@ -7,6 +7,7 @@
   import ExploreView from './explore/ExploreView.svelte';
   import { handleExploreKey } from './explore/keys';
   import { client } from './lib/client.svelte';
+  import { search } from './lib/search.svelte';
   import { DECK_COUNT } from './lib/protocol';
 
   const DECKS = Array.from({ length: DECK_COUNT }, (_, i) => i);
@@ -34,7 +35,18 @@
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
 
       if (client.view === 'explore') {
+        // Any character starts a search (Space stays play/pause).
+        if (isCharacter(e)) {
+          e.preventDefault();
+          search.start(e.key);
+          return;
+        }
         if (handleExploreKey(e)) e.preventDefault();
+        return;
+      }
+      // Deck view: letters go straight into the library search box.
+      if (isCharacter(e) && /\p{L}/u.test(e.key) && e.key.toLowerCase() !== 'e') {
+        document.getElementById('library-search')?.focus();
         return;
       }
       if (e.key === 'e' || e.key === 'E') {
@@ -86,6 +98,11 @@
       window.removeEventListener('keyup', up, true);
     };
   });
+
+  /** A printable character other than Space. */
+  function isCharacter(e: KeyboardEvent): boolean {
+    return e.key.length === 1 && e.key !== ' ' && !e.repeat;
+  }
 
   function deckDigit(code: string): number | null {
     const m = /^(?:Digit|Numpad)([1-4])$/.exec(code);

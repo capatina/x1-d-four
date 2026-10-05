@@ -10,6 +10,8 @@
   import DeckHud from './DeckHud.svelte';
   import type { EngineStats, ExploreEngine } from './engine';
   import LibraryTicker from './LibraryTicker.svelte';
+  import SearchPanel from './SearchPanel.svelte';
+  import { search } from '../lib/search.svelte';
   import Minimap from './Minimap.svelte';
   import { BAND_PALETTE, bandPalette } from './palette';
 
@@ -229,7 +231,8 @@
     {/if}
   </aside>
 
-  <LibraryTicker />
+  {#if !search.open}<LibraryTicker />{/if}
+  <SearchPanel />
 
   <!-- Empty / waiting states -->
   {#if failed}
