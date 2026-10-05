@@ -1,4 +1,4 @@
-# baredeck
+# ginkodeck
 
 A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the mixer through its own userspace USB driver: raw usbfs ioctls, no libusb, ALSA or PipeWire. Deck n plays into USB pair 2n+1/2n+2, which feeds mixer channel n+1 when that channel's source switch is on SC (USB).
 
@@ -9,7 +9,7 @@ A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the 
   - `device.rs`: bring-up, streaming loop and hand-back.
   - `midi.rs`: MIDI parser and the out-queue.
 - `crates/engine`: decks and track loading (symphonia + rubato). `Rt` renders on the USB thread; `Control` is the other side.
-- `crates/app`: the `baredeck` binary.
+- `crates/app`: the `ginkodeck` binary.
   - axum server (`server.rs`, protocol in `docs/protocol.md`).
   - Application logic (`app.rs`).
   - Control catalog (`controls.rs`) and mappings (`mapping.rs`).
@@ -21,16 +21,16 @@ A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the 
 ## Running
 - One-time setup: `setup/install` (pkexec) installs a udev rule so the user can open the device.
 - Build: `(cd ui && bun install && bun run build) && cargo build --release`.
-- `target/release/baredeck`: serves http://127.0.0.1:7878 and takes the Xone (from snd-usb-ozzy, if bound) until it quits. Ctrl-C hands it back.
-- `baredeck serve --no-device`: the same, without hardware.
-- `baredeck probe --pair N`: test tone.
-- `baredeck release`: rebind the kernel driver after a crash.
+- `target/release/ginkodeck`: serves http://127.0.0.1:7878 and takes the Xone (from snd-usb-ozzy, if bound) until it quits. Ctrl-C hands it back.
+- `ginkodeck serve --no-device`: the same, without hardware.
+- `ginkodeck probe --pair N`: test tone.
+- `ginkodeck release`: rebind the kernel driver after a crash.
 - `cargo test`: codec golden packets (captured from the kernel driver), MIDI parser, decks, mappings.
 
 ## Hardware rules (learned the hard way)
 - **Never reset the device, and never cancel a PCM URB mid-packet.** Either one wedges the 4D's audio engine until the mixer is power-cycled. The symptoms: EP5 OUT completes with -71 (EPROTO) and EP6 IN never completes.
   - Our shutdown lets PCM URBs finish and only cancels the MIDI reads.
-  - snd-usb-ozzy must drain before it unbinds. That needs the drain + `soft_unbind` fix (capatina/Ozzy, branch `ginkomarchy`); older builds can wedge the mixer when baredeck takes it over.
+  - snd-usb-ozzy must drain before it unbinds. That needs the drain + `soft_unbind` fix (capatina/Ozzy, branch `ginkomarchy`); older builds can wedge the mixer when ginkodeck takes it over.
 - Just after streaming, the 4D stalls SET_INTERFACE for a while. The hand-back switches both interfaces to alt 0 itself, retrying, before releasing them. Otherwise the kernel defers the switch to snd-usb-ozzy's probe, which then fails with -32.
 - Bring-up follows `ploytec.c` exactly. Control transfers time out after 300 ms and retry, because the device drops the transfer that follows a cancelled URB.
 - **Firmware 1.4.1 only:** PCM is on interrupt endpoints there.

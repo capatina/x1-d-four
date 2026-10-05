@@ -1,4 +1,4 @@
-//! baredeck: a browser-controlled 4-deck player that drives the Allen & Heath
+//! ginkodeck: a browser-controlled 4-deck player that drives the Allen & Heath
 //! Xone:4D through its own userspace USB driver.
 
 mod app;
@@ -103,7 +103,7 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let (app, stop) = (app.clone(), stop.clone());
         let config = StreamConfig { out_urbs: args.urbs, ..Default::default() };
         let no_device = args.no_device;
-        std::thread::Builder::new().name("baredeck-audio".into()).spawn(move || {
+        std::thread::Builder::new().name("ginkodeck-audio".into()).spawn(move || {
             if no_device {
                 app.set_device(app::DeviceState::Missing, Some("running without the mixer (--no-device)".into()), None);
                 audio::run_virtual(rt, stop);
@@ -116,7 +116,7 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Event pump: MIDI from the mixer -> mappings. Polls every millisecond.
     {
         let (app, stop) = (app.clone(), stop.clone());
-        std::thread::Builder::new().name("baredeck-events".into()).spawn(move || {
+        std::thread::Builder::new().name("ginkodeck-events".into()).spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 if app.pump_events() == 0 {
                     std::thread::sleep(Duration::from_millis(1));
@@ -160,7 +160,7 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
         let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("bind {addr}"))?;
-        tracing::info!("baredeck on http://{addr}");
+        tracing::info!("ginkodeck on http://{addr}");
         axum::serve(listener, server::router(app.clone()))
             .with_graceful_shutdown(async {
                 let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();

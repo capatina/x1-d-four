@@ -1,5 +1,5 @@
 [package]
-name = "baredeck"
+name = "ginkodeck"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 description = "Bare-metal decks for the Allen & Heath Xone:4D: a userspace USB driver and a browser UI"
 
 [[bin]]
-name = "baredeck"
+name = "ginkodeck"
 path = "src/main.rs"
 
 [dependencies]

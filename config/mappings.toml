@@ -1,4 +1,4 @@
-# baredeck mappings: Xone:4D control (names in controls.toml) -> action.
+# ginkodeck mappings: Xone:4D control (names in controls.toml) -> action.
 # Saving this file applies it immediately; GET /api/mappings shows any error.
 #
 # Actions (deck = 1-4; leave it out to act on the focused deck):

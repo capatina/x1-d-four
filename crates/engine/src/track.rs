@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn loads_mono_44k1_as_48k_stereo() {
-        let dir = std::env::temp_dir().join(format!("baredeck-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ginkodeck-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("tone.wav");
         write_wav(&path, 44_100, 1, 44_100);
