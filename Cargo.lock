@@ -1961,6 +1961,7 @@ dependencies = [
  "clap",
  "engine",
  "futures-util",
+ "libc",
  "lofty",
  "mime_guess",
  "notify",

@@ -210,9 +210,11 @@ mod tests {
     fn shipped_mappings_parse() {
         let m = Mappings::parse(include_str!("../../../config/mappings.toml"), &catalog()).unwrap();
         assert!(!m.rules.is_empty());
-        let play = m.for_control("left.lit1").next().unwrap();
+        let play = m.for_control("right.lit1").next().unwrap();
         assert_eq!(play.intent(ControlEvent::Press), Some(Intent::PlayPause(Some(0))));
-        assert_eq!(play.led, Some((LedRule::DeckPlaying, 38)));
+        assert_eq!(play.led, Some((LedRule::DeckPlaying, 70)));
+        let load = m.for_control("left.lit2").next().unwrap();
+        assert_eq!(load.intent(ControlEvent::Press), Some(Intent::LoadSelected(Some(1))));
     }
 
     #[test]
