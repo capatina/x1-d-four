@@ -27,7 +27,8 @@ pub enum Command {
     Seek { deck: usize, frame: f64 },
     Nudge { deck: usize, frames: f64 },
     Rate { deck: usize, rate: f64 },
-    /// Turn sync on/off; `None` toggles.
+    /// Turn sync on/off; `None` toggles. Either way the deck goes back onto the
+    /// master's beat (a shift's offset is dropped).
     Sync { deck: usize, on: Option<bool> },
     /// Start a loop at the nearest beat, or leave the active one.
     Loop { deck: usize },
@@ -300,6 +301,8 @@ impl Rt {
                 let d = &mut self.decks[deck];
                 d.sync = on.unwrap_or(!d.sync);
                 d.phase_offset = 0.0;
+                d.jog_rest = 0.0;
+                d.shift_pending = 0.0;
                 if !d.sync {
                     d.rate = d.base_rate;
                 }
@@ -651,6 +654,13 @@ mod tests {
         assert!((jumped - 2.0 * gb.beat_frames()).abs() < 0.02 * gb.beat_frames(), "jumped {jumped} frames");
         let err = phase_error(&control, 0, 1, ga, gb);
         assert!((err + 0.1).abs() < 0.01, "still a tenth of a beat ahead: {err}");
+        // Sync reset: back on the master's beat.
+        control.send(Command::Sync { deck: 1, on: Some(true) }).ok();
+        for _ in 0..1200 {
+            rt.render(&mut frames);
+        }
+        let err = phase_error(&control, 0, 1, ga, gb);
+        assert!(err.abs() < 0.01, "back on the beat: {err}");
     }
 
     #[test]

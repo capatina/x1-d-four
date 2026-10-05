@@ -7,10 +7,11 @@
 #   deck.load_selected                       on press: load the library selection
 #   deck.eject, deck.rate_reset              on press
 #   deck.sync                                on press: beat sync on/off (locks to the master deck)
+#   deck.sync_reset                          on press: sync on and back on the master's beat (undoes deck.shift)
 #   deck.loop                                on press: loop from the nearest beat (8 bars by default), press again to leave
 #   deck.loop_length                         encoder: halve/double the loop (1/8 bar .. 32 bars), live while looping
 #   deck.jog       jog/encoder: jump through the track at once; amount = ms per tick when turning
-#                  slowly (default 5), spinning faster jumps further per tick (up to 300x).
+#                  slowly (default 5); the faster the turn, the further each tick jumps (up to 40x).
 #                  A synced, playing deck moves in whole beats so it stays on the master's beat
 #   deck.shift     jog/encoder: smooth nudge to fix a sync that's off, amount = ms per tick
 #                  (default 2); playing = speed bend, paused = glide; a synced deck keeps the new
@@ -48,9 +49,9 @@
 # lit 1-4         load aimed track -> deck 1-4        play/pause deck 1-4
 # jog             move through the focused deck       shift the focused deck to fix its sync
 #                 (spin faster to go further)
-# SELECT          turn: focus deck 1-4, push: fly     turn: aim between portals, push: dive
-#                 the library selection
-# buttons         A low, B mid, C high band,
+# SELECT          turn: focus deck 1-4, push: fly     turn: aim between portals, push: reset the
+#                 the library selection               focused deck's sync
+# buttons         A low, B mid, C high band,          M dive into the aimed portal
 #                 E follow the focused deck
 # encoders 1-4    loop length, push = loop deck 1-4   skip deck 1-4 by 2 s, push = sync
 # faders 1-4      pitch deck 1-4 (+/-8 %)
@@ -215,6 +216,10 @@ action = "explore.aim"
 
 [[map]]
 control = "right.browse.push"
+action = "deck.sync_reset"
+
+[[map]]
+control = "right.button.M"
 action = "explore.dive"
 
 [[map]]

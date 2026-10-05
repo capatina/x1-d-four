@@ -469,7 +469,8 @@ const MAPPINGS: Mapping[] = [
   ...perDeck((n) => `left.fader${n}`, 'deck.rate'),
   { control: 'right.jog', action: 'deck.shift', amount: 2 },
   { control: 'right.browse', action: 'explore.aim' },
-  { control: 'right.browse.push', action: 'explore.dive' },
+  { control: 'right.browse.push', action: 'deck.sync_reset' },
+  { control: 'right.button.M', action: 'explore.dive' },
   ...perDeck((n) => `right.encoder${n}`, 'deck.nudge', { amount: 2.0 }),
   ...perDeck((n) => `right.encoder${n}.push`, 'deck.sync'),
 ];

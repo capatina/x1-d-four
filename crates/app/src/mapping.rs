@@ -1,8 +1,5 @@
 //! config/mappings.toml: control name -> action, plus LED feedback rules.
 
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
-
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +52,7 @@ pub enum Action {
     ExploreFollow,
     ExploreRoot,
     Sync,
+    SyncReset,
     Loop,
     LoopLength,
     Jog,
@@ -89,6 +87,7 @@ impl Action {
             "explore.follow" => Self::ExploreFollow,
             "explore.root" => Self::ExploreRoot,
             "deck.sync" => Self::Sync,
+            "deck.sync_reset" => Self::SyncReset,
             "deck.loop" => Self::Loop,
             "deck.loop_length" => Self::LoopLength,
             "deck.jog" => Self::Jog,
@@ -140,10 +139,12 @@ pub enum Intent {
     /// Start the tree at the library selection.
     ExploreRootSelected,
     Sync(Option<usize>),
+    /// Sync on, back on the master's beat (drops a shift's offset).
+    SyncReset(Option<usize>),
     Loop(Option<usize>),
     /// Halve (negative) or double (positive) the loop length this many times.
     LoopLength(Option<usize>, i32),
-    /// Jog ticks, and the ms of track time a slow tick jumps (`JogAccel` scales it).
+    /// Jog ticks, and the ms of track time a slow tick jumps (`jog_gain` scales it).
     Jog(Option<usize>, i32, f64),
     /// Smooth nudge, in milliseconds of track time.
     Shift(Option<usize>, f64),
@@ -212,6 +213,7 @@ impl Rule {
             (Action::ExploreFollow, Press) => Intent::ExploreFollow,
             (Action::ExploreRoot, Press) => Intent::ExploreRootSelected,
             (Action::Sync, Press) => Intent::Sync(d),
+            (Action::SyncReset, Press) => Intent::SyncReset(d),
             (Action::Loop, Press) => Intent::Loop(d),
             // One halving/doubling per click, however fast the encoder spins.
             (Action::LoopLength, Delta(n)) if n != 0 => Intent::LoopLength(d, n.signum() as i32),
@@ -291,30 +293,13 @@ impl Mappings {
     }
 }
 
-/// Jog acceleration: a slow turn jumps `amount` ms per tick, for precision; the
-/// faster the wheel spins, the further each tick goes, up to `MAX_GAIN` times.
-#[derive(Default)]
-pub struct JogAccel {
-    /// Ticks in the last `WINDOW`, with when they came.
-    recent: VecDeque<(Instant, u32)>,
-}
-
-impl JogAccel {
-    const WINDOW: Duration = Duration::from_millis(100);
-    /// Turning speed (ticks per second) at which a tick goes twice as far.
-    const KNEE: f64 = 12.0;
-    const MAX_GAIN: f64 = 300.0;
-
-    /// How many times `amount` each of these ticks moves.
-    pub fn gain(&mut self, ticks: i32, now: Instant) -> f64 {
-        while self.recent.front().is_some_and(|&(t, _)| now.duration_since(t) > Self::WINDOW) {
-            self.recent.pop_front();
-        }
-        let before: u32 = self.recent.iter().map(|&(_, n)| n).sum();
-        self.recent.push_back((now, ticks.unsigned_abs()));
-        let speed = before as f64 / Self::WINDOW.as_secs_f64();
-        (1.0 + (speed / Self::KNEE).powi(3)).min(Self::MAX_GAIN)
-    }
+/// Jog acceleration. The Xone:4D reports a turn every 40 ms with a tick count
+/// that already grows with speed (1, 2, 4, 7, 11, 16, 20, 30), so the gain
+/// follows it: a slow turn jumps `amount` ms per tick, a gentle one ~8x as far
+/// per message, a fast spin seconds at a time.
+pub fn jog_gain(ticks: i32) -> f64 {
+    const MAX_GAIN: f64 = 40.0;
+    (1.0 + (ticks as f64 / 4.0).powi(2)).min(MAX_GAIN)
 }
 
 #[cfg(test)]
@@ -322,18 +307,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jog_accelerates_with_speed() {
-        let mut j = JogAccel::default();
-        let t0 = Instant::now();
-        // Slow, a tick every 200 ms: full precision.
-        assert_eq!(j.gain(1, t0), 1.0);
-        assert_eq!(j.gain(1, t0 + Duration::from_millis(200)), 1.0);
-        // Spinning, a tick every 10 ms: the gain climbs to its limit.
-        let gains: Vec<f64> = (1..=20).map(|i| j.gain(1, t0 + Duration::from_millis(400 + 10 * i))).collect();
-        assert!(gains.windows(2).all(|w| w[1] >= w[0]));
-        assert_eq!(*gains.last().unwrap(), JogAccel::MAX_GAIN);
-        // A pause starts slow again.
-        assert_eq!(j.gain(-1, t0 + Duration::from_secs(2)), 1.0);
+    fn jog_gain_follows_the_mixers_speed() {
+        // ms per message at the default 5 ms per tick, for the values the mixer sends.
+        let ms = |t: i32| t as f64 * 5.0 * jog_gain(t);
+        assert!((ms(1) - 5.3).abs() < 0.1, "slow: precise");
+        assert!(ms(4) > 30.0 && ms(4) < 50.0);
+        assert!(ms(11) > 300.0 && ms(11) < 600.0);
+        assert!(ms(30) <= 30.0 * 5.0 * 40.0, "capped");
+        assert_eq!(jog_gain(-7), jog_gain(7));
     }
 
     fn catalog() -> Catalog {

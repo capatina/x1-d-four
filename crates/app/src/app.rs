@@ -148,7 +148,6 @@ pub struct App {
     pub out_urbs: usize,
     pub runtime: tokio::runtime::Handle,
     pub(crate) explore: crate::exploring::ExploreState,
-    jog: [Mutex<crate::mapping::JogAccel>; DECKS],
 }
 
 impl App {
@@ -190,7 +189,6 @@ impl App {
             out_urbs,
             runtime,
             explore: Default::default(),
-            jog: Default::default(),
         });
         app.reload_config();
         // The tunnel is the main view; the decks are one button away.
@@ -397,11 +395,12 @@ impl App {
             Intent::ExploreFollow => Ok(self.explore_follow(None)),
             Intent::ExploreRootSelected => self.explore_root_selected(),
             Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
+            Intent::SyncReset(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: Some(true) })),
             Intent::Loop(d) => self.toggle_loop(self.deck_or_focused(d)),
             Intent::LoopLength(d, steps) => Ok(self.send(Command::LoopLength { deck: self.deck_or_focused(d), steps })),
             Intent::Jog(d, ticks, ms) => {
                 let deck = self.deck_or_focused(d);
-                let ms = ticks as f64 * ms * self.jog[deck].lock().unwrap().gain(ticks, Instant::now());
+                let ms = ticks as f64 * ms * crate::mapping::jog_gain(ticks);
                 Ok(self.send(Command::Jog { deck, frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
             }
             Intent::Shift(d, ms) => {

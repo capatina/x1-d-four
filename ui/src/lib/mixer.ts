@@ -238,6 +238,7 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
         break;
       case 'sync':
         add(slot, 'deck.sync', (e) => `sync ${decksText(e)}`);
+        add(slot, 'deck.sync_reset', () => 'reset sync');
         break;
       case 'focus':
         add(slot, 'deck.focus_step', () => 'focus deck');
