@@ -2,19 +2,21 @@
   import { onMount } from 'svelte';
   import { WaveRenderer } from './waveRender';
 
-  let { onStats }: { onStats?: (drawMs: number) => void } = $props();
+  let { onStats, accent }: { onStats?: (drawMs: number) => void; accent: string } = $props();
 
   let canvas: HTMLCanvasElement;
+  let renderer = $state.raw<WaveRenderer | null>(null);
+  $effect(() => renderer?.setAccent(accent));
 
   onMount(() => {
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    let renderer: WaveRenderer | null = null;
     try {
       renderer = new WaveRenderer(canvas, motion.matches);
     } catch {
       return;
     }
     const r = renderer;
+    r.setAccent(accent);
     const onMotion = () => r.setReducedMotion(motion.matches);
     motion.addEventListener('change', onMotion);
     const stats = onStats ? setInterval(() => onStats(r.drawMs), 500) : undefined;
@@ -22,12 +24,13 @@
       clearInterval(stats);
       motion.removeEventListener('change', onMotion);
       r.dispose();
+      renderer = null;
     };
   });
 </script>
 
-<div class="strip" role="img" aria-label="Riverbank waveforms: four decks, four seconds before and after the playhead">
-  <div class="caption"><span>THE CURRENT / −4 s</span><b>NOW</b><span>+4 s / FOUR DECKS · ONE RIVER</span></div>
+<div class="strip" role="img" aria-label="The Current: four deck waveforms, four seconds before and after the playhead">
+  <div class="caption"><span>THE CURRENT / −4 s</span><b>NOW</b><span>+4 s / FOUR KEEPERS · ONE CURRENT</span></div>
   <canvas bind:this={canvas}></canvas>
 </div>
 

@@ -5,6 +5,7 @@
   import { deckKey, keyText } from '../lib/mixer';
   import { DECK_COUNT } from '../lib/protocol';
   import { search, TRACK_DRAG } from '../lib/search.svelte';
+  import { SIGIL_PATHS } from '../lib/runes';
 
   let { rootDeck }: { rootDeck: number | null } = $props();
 
@@ -99,7 +100,7 @@
       title={d.title ? `Deck ${d.i + 1}: ${d.title}` : `Deck ${d.i + 1} is empty`}
       aria-pressed={client.focused === d.i}
     >
-      <span class="num">{d.i + 1}</span>
+      <span class="num">{d.i + 1}<svg class="sigil" viewBox="0 0 24 24" aria-hidden="true"><path d={SIGIL_PATHS[d.i]} /></svg></span>
       <span class="meta">
         <span class="title">
           <span class="tt">{#if d.loading}<i>loading…</i>{:else}{d.title ?? 'Empty'}{/if}</span>
@@ -162,6 +163,7 @@
     box-shadow: 0 0 18px -6px var(--accent);
   }
   .num {
+    position: relative;
     display: grid;
     place-items: center;
     width: 30px;
@@ -174,6 +176,18 @@
   .focused .num {
     background: var(--accent);
     color: var(--bg-0);
+  }
+  /* The deck's sigil (◆ ▲ ● ■), as on the strip and the Keepers' lanterns. */
+  .sigil {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 11px;
+    height: 11px;
+    fill: var(--accent);
+    stroke: var(--bg-0);
+    stroke-width: 3px;
+    paint-order: stroke;
   }
   .meta {
     display: grid;

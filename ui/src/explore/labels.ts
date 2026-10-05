@@ -66,7 +66,7 @@ export class Labels {
           reduced
             ? [{ opacity: 0.4 }, { opacity: 1 }]
             : [
-                { translate: rise, opacity: 0.7 },
+                { translate: rise, opacity: 0.85 },
                 { translate: '0 0', opacity: 1 },
               ],
           { duration: reduced ? 150 : 180, easing: 'cubic-bezier(.2,.7,.3,1)' },
@@ -190,7 +190,8 @@ export class Labels {
       reduced
         ? [{ opacity: 1 }, { opacity: 0 }]
         : [
-            { translate: '0 0', opacity: 1 },
+            // The new fan reads first: the old one steps back at once, then slides away.
+            { translate: '0 0', opacity: 0.4 },
             { translate: `${dx}px 0`, opacity: 0 },
           ],
       { duration: reduced ? 150 : 180, easing: 'cubic-bezier(.3,.5,.4,1)', fill: 'forwards' },

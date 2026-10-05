@@ -1,0 +1,327 @@
+{
+  "checks": [
+    "Hardware GPU in use (ANGLE (AMD, Vulkan 1.4.354 (AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO) (0x000013C0)), radv-26.2.2))",
+    "Budget: 15 draw calls (≤ 18), 243k triangles (≤ 270k)",
+    "Synced deck bar ticks align within one CSS pixel (the waveform timing is untouched)",
+    "1920×1080: six labels (title, artist, BPM, similarity) clear each other and the footer",
+    "Travel: 12.04 units of course in 4 s, clocked to the tempo",
+    "Aim 1: every label keeps its place (the aimed one only grows upward)",
+    "Aim 2: every label keeps its place (the aimed one only grows upward)",
+    "Aim 3: every label keeps its place (the aimed one only grows upward)",
+    "Aim moves along the routes",
+    "Aim moves no spire or gate",
+    "localAimKey: label text and lit route present in the first frame (20/20)",
+    "aimFromServer: label text and lit route present in the first frame (40/40)",
+    "band: label text and lit route present in the first frame (6/6)",
+    "commitFromMixerLoad: label text and lit route present in the first frame (6/6)",
+    "Dive (M) is a scout: the breadcrumb says so and the land is misted",
+    "Scouting mists the land beyond",
+    "A load claims the scouted route: the mist lifts",
+    "Band mid is the Greenwold",
+    "Band high is the Highreach",
+    "1280×800: six labels (title, artist, BPM, similarity) clear each other and the footer",
+    "Loop and its length show on deck 2",
+    "1280×800 with a loop: six labels (title, artist, BPM, similarity) clear each other and the footer",
+    "Typing anywhere opens search",
+    "A search result can be dragged onto deck 4",
+    "Search keeps its typed filter after a drop",
+    "Vigil: travel drifts to a stop (0.02 u/s) and the realm keeps watch",
+    "Reduced motion switches on without reloading",
+    "Reduced motion: the course holds and the heading never swings",
+    "Reduced motion: an earned drop perches the dragon instead of a flyover",
+    "Empty library: the no-root prompt",
+    "Analysis progress shows while the library is analysed",
+    "No browser errors or external network requests"
+  ],
+  "latency": {
+    "localAimKey": {
+      "samples": 20,
+      "toFirstFrameMs": {
+        "n": 20,
+        "p50": 8.7,
+        "p95": 15.6,
+        "p99": 15.6,
+        "max": 15.6
+      },
+      "toRafTimestampMs": {
+        "n": 20,
+        "p50": 8,
+        "p95": 15,
+        "p99": 15,
+        "max": 15
+      },
+      "handlerMs": {
+        "n": 20,
+        "p50": 0,
+        "p95": 0.1,
+        "p99": 0.1,
+        "max": 0.1
+      },
+      "firstFrameComplete": 20
+    },
+    "aimFromServer": {
+      "samples": 40,
+      "toFirstFrameMs": {
+        "n": 40,
+        "p50": 15.3,
+        "p95": 15.8,
+        "p99": 15.9,
+        "max": 15.9
+      },
+      "toRafTimestampMs": {
+        "n": 40,
+        "p50": 14.3,
+        "p95": 14.9,
+        "p99": 15,
+        "max": 15
+      },
+      "handlerMs": {
+        "n": 40,
+        "p50": 0.4,
+        "p95": 1.1,
+        "p99": 1.1,
+        "max": 1.1
+      },
+      "firstFrameComplete": 40
+    },
+    "band": {
+      "samples": 6,
+      "toFirstFrameMs": {
+        "n": 6,
+        "p50": 14,
+        "p95": 16.6,
+        "p99": 16.6,
+        "max": 16.6
+      },
+      "toRafTimestampMs": {
+        "n": 6,
+        "p50": 10.8,
+        "p95": 13.3,
+        "p99": 13.3,
+        "max": 13.3
+      },
+      "handlerMs": {
+        "n": 6,
+        "p50": 2.1,
+        "p95": 3.1,
+        "p99": 3.1,
+        "max": 3.1
+      },
+      "firstFrameComplete": 6
+    },
+    "commitFromMixerLoad": {
+      "samples": 6,
+      "toFirstFrameMs": {
+        "n": 6,
+        "p50": 12.2,
+        "p95": 16.3,
+        "p99": 16.3,
+        "max": 16.3
+      },
+      "toRafTimestampMs": {
+        "n": 6,
+        "p50": 10.9,
+        "p95": 14.8,
+        "p99": 14.8,
+        "max": 14.8
+      },
+      "handlerMs": {
+        "n": 6,
+        "p50": 2,
+        "p95": 3.5,
+        "p99": 3.5,
+        "max": 3.5
+      },
+      "firstFrameComplete": 6
+    },
+    "back": {
+      "samples": 6,
+      "toFirstFrameMs": {
+        "n": 6,
+        "p50": 11.1,
+        "p95": 16.2,
+        "p99": 16.2,
+        "max": 16.2
+      },
+      "toRafTimestampMs": {
+        "n": 6,
+        "p50": 9.8,
+        "p95": 14.9,
+        "p99": 14.9,
+        "max": 14.9
+      },
+      "handlerMs": {
+        "n": 6,
+        "p50": 2,
+        "p95": 2.3,
+        "p99": 2.3,
+        "max": 2.3
+      },
+      "firstFrameComplete": 6
+    },
+    "note": "ms from message arrival (or keydown handling) to the first rAF callback; photons follow one display frame later"
+  },
+  "measurements": [
+    {
+      "label": "1280×800 / four decks / loop / low",
+      "fps": 60,
+      "frameInterval": {
+        "n": 600,
+        "p50": 16.7,
+        "p95": 16.7,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 601,
+        "p50": 4.11,
+        "p95": 4.35,
+        "p99": 4.4,
+        "max": 4.47
+      },
+      "worldCpuMs": {
+        "n": 601,
+        "p50": 0.1,
+        "p95": 0.2,
+        "p99": 0.3,
+        "max": 0.3
+      },
+      "stripCpuMs": {
+        "n": 601,
+        "p50": 0.3,
+        "p95": 0.4,
+        "p99": 0.5,
+        "max": 0.5
+      },
+      "calls": 15,
+      "triangles": 242698
+    },
+    {
+      "label": "1920×1080 / four decks / low",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.7,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 7.89,
+        "p95": 8.81,
+        "p99": 9.61,
+        "max": 11.11
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.2,
+        "p95": 0.3,
+        "p99": 0.3,
+        "max": 0.5
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.4,
+        "p95": 0.5,
+        "p99": 0.6,
+        "max": 2.3
+      },
+      "calls": 15,
+      "triangles": 242698
+    },
+    {
+      "label": "1920×1080 / after a 180 s soak",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.8,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 8.2,
+        "p95": 9.29,
+        "p99": 10.63,
+        "max": 13.3
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.2,
+        "p95": 0.3,
+        "p99": 1.1,
+        "max": 4.5
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.4,
+        "p95": 0.6,
+        "p99": 0.6,
+        "max": 2.8
+      },
+      "calls": 15,
+      "triangles": 242698
+    }
+  ],
+  "progress": [
+    {
+      "elapsed": 30,
+      "course": 187.07,
+      "gpuMs": 7.4,
+      "cpuMs": 0.1,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.11 ms · wave 0.42 ms\ngrowth 29% · age 0.00 · course 186 · 2.89 u/s · gpu 7.70 ms"
+    },
+    {
+      "elapsed": 60,
+      "course": 273.74,
+      "gpuMs": 8.11,
+      "cpuMs": 0.2,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.20 ms · wave 0.45 ms\ngrowth 40% · age 0.00 · course 273 · 2.90 u/s · gpu 8.10 ms"
+    },
+    {
+      "elapsed": 90,
+      "course": 360.38,
+      "gpuMs": 7.08,
+      "cpuMs": 0.13,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.15 ms · wave 0.41 ms\ngrowth 49% · age 0.00 · course 360 · 2.87 u/s · gpu 7.86 ms"
+    },
+    {
+      "elapsed": 120,
+      "course": 447.01,
+      "gpuMs": 7.4,
+      "cpuMs": 0.13,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.12 ms · wave 0.40 ms\ngrowth 56% · age 0.00 · course 446 · 2.88 u/s · gpu 7.02 ms"
+    },
+    {
+      "elapsed": 150,
+      "course": 533.73,
+      "gpuMs": 7.82,
+      "cpuMs": 0.14,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.14 ms · wave 0.39 ms\ngrowth 63% · age 0.00 · course 532 · 2.90 u/s · gpu 8.15 ms"
+    },
+    {
+      "elapsed": 180,
+      "course": 620.41,
+      "gpuMs": 8.06,
+      "cpuMs": 0.13,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.14 ms · wave 0.42 ms\ngrowth 68% · age 0.00 · course 620 · 2.88 u/s · gpu 8.00 ms"
+    }
+  ],
+  "errors": [],
+  "gpu": "ANGLE (AMD, Vulkan 1.4.354 (AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO) (0x000013C0)), radv-26.2.2)",
+  "allocations": {
+    "seconds": 8,
+    "bytesPerSecond": {
+      "page": 1266268,
+      "engineFrameLoop": 0,
+      "stripFrameLoop": 0
+    },
+    "frameLoopSites": [],
+    "note": "sampled every 256 bytes, garbage included; function names need the unminified dev server (WAYFARING_PAGE)"
+  }
+}

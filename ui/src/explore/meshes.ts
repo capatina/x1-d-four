@@ -61,8 +61,9 @@ export function makeSky(s: Shared) {
         float tw = .75 + .25 * sin(uTime * 1.3 * uMotion + star * 50.);
         float mag = .35 + .65 * fract(star * 37.31);
         col += vec3(.95, .93, .86) * step(.993, star) * mag * (1. - smoothstep(.08, .34, length(f))) * smoothstep(.05, .3, y) * uNight * tw;
-        float band = y - .17 - (snoise(vec2(d.x * 2.2 + uTime / 20., 1.7)) - .5) * .14;
-        float curtain = exp(-band * band / .014) * smoothstep(.25, .7, snoise(vec2(d.x * 9. + uTime / 20. * 3., uTime / 20.)));
+        float at = uTime * uMotion / 20.;
+        float band = y - .17 - (snoise(vec2(d.x * 2.2 + at, 1.7)) - .5) * .14;
+        float curtain = exp(-band * band / .014) * smoothstep(.25, .7, snoise(vec2(d.x * 9. + at * 3., at)));
         col = mix(col, uAccent * 1.1, min(.18, curtain * .18) * uAurora);
       }
       vec2 cp = d.xz / max(.12, d.y) * 2.2 + vec2(uTime * .002 * uMotion, -uCourse * .0006);
@@ -195,7 +196,7 @@ export function makeGrass(s: Shared, count = 44000) {
         common +
         /* glsl */ `
     attribute vec4 aBlade;
-    uniform vec2 uWrap;
+    #define uWrap uWrapGrass
     varying vec3 vP;
     varying float vY, vSeed;
     const float P = 160., ZN = 30.;
@@ -293,7 +294,7 @@ export function makeTrees(s: Shared) {
           /* glsl */ `
       attribute vec4 aTree;
       ${isLeaf ? 'attribute vec4 aLeaf;' : ''}
-      uniform vec2 uWrap;
+      #define uWrap uWrapTrees
       varying vec3 vP, vN;
       varying float vSeed;
       varying vec2 vUv;
@@ -391,9 +392,7 @@ export function makeLife(s: Shared, butterfly: boolean) {
         common +
         /* glsl */ `
     attribute vec4 aLife;
-    uniform vec2 uWrap;
-    uniform vec4 uHerald;
-    uniform float uHeraldY, uHeraldT;
+    #define uWrap uWrapLife
     varying vec3 vP;
     varying float vSeed;
     const float P = 120., ZN = 8.;

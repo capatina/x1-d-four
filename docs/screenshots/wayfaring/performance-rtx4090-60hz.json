@@ -1,0 +1,143 @@
+{
+  "checks": [
+    "Hardware GPU in use (ANGLE (NVIDIA, Vulkan 1.4.341 (NVIDIA NVIDIA GeForce RTX 4090 (0x00002684)), NVIDIA-610.57.4.0))",
+    "Budget: 15 draw calls (≤ 18), 243k triangles (≤ 270k)",
+    "No browser errors or external network requests"
+  ],
+  "latency": {},
+  "measurements": [
+    {
+      "label": "1920×1080 / four decks / low",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.7,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 4.6,
+        "p95": 6.3,
+        "p99": 6.74,
+        "max": 8.03
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.1,
+        "p95": 0.2,
+        "p99": 0.3,
+        "max": 0.4
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.4,
+        "p95": 0.5,
+        "p99": 0.6,
+        "max": 0.8
+      },
+      "calls": 15,
+      "triangles": 242698
+    },
+    {
+      "label": "2560×1440 / four decks / low",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.8,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 5.28,
+        "p95": 6.25,
+        "p99": 6.86,
+        "max": 9.54
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.1,
+        "p95": 0.2,
+        "p99": 0.3,
+        "max": 0.4
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.5,
+        "p95": 0.6,
+        "p99": 0.6,
+        "max": 1.7
+      },
+      "calls": 15,
+      "triangles": 242698
+    },
+    {
+      "label": "1920×1080 / after a 60 s soak",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.7,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 4.62,
+        "p95": 6.51,
+        "p99": 8.75,
+        "max": 16.5
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.2,
+        "p95": 0.3,
+        "p99": 0.5,
+        "max": 3.1
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.5,
+        "p95": 0.6,
+        "p99": 0.9,
+        "max": 3.6
+      },
+      "calls": 15,
+      "triangles": 242698
+    }
+  ],
+  "progress": [
+    {
+      "elapsed": 30,
+      "course": 242.99,
+      "gpuMs": 4.74,
+      "cpuMs": 0.15,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.12 ms · wave 0.40 ms\ngrowth 36% · age 0.00 · course 242 · 2.87 u/s · gpu 4.08 ms"
+    },
+    {
+      "elapsed": 60,
+      "course": 329.63,
+      "gpuMs": 4.35,
+      "cpuMs": 0.14,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.13 ms · wave 0.44 ms\ngrowth 46% · age 0.00 · course 329 · 2.90 u/s · gpu 4.31 ms"
+    }
+  ],
+  "errors": [],
+  "gpu": "ANGLE (NVIDIA, Vulkan 1.4.341 (NVIDIA NVIDIA GeForce RTX 4090 (0x00002684)), NVIDIA-610.57.4.0)",
+  "allocations": {
+    "seconds": 8,
+    "bytesPerSecond": {
+      "page": 1255443,
+      "engineFrameLoop": 0,
+      "stripFrameLoop": 0
+    },
+    "frameLoopSites": [],
+    "note": "sampled every 256 bytes, garbage included; function names need the unminified dev server (WAYFARING_PAGE)"
+  }
+}

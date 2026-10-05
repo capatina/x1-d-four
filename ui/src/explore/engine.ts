@@ -21,7 +21,7 @@ import {
   SPIRE_TOP,
   TAKEN_SLOT,
 } from './realm';
-import { hashString, hexInto, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW } from './shared';
+import { framePacker, hashString, hexInto, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW } from './shared';
 
 export type EngineStats = {
   fps: number;
@@ -238,6 +238,7 @@ export class ExploreEngine {
   readonly #sunA = new THREE.Vector3();
   readonly #sunB = new THREE.Vector3();
   readonly #tmp = new THREE.Vector3();
+  #pack: () => void = () => {};
 
   // Time, music, frame pacing
   #raf = 0;
@@ -297,20 +298,36 @@ export class ExploreEngine {
     const swallows = makeLife(s, false);
     const butterflies = makeLife(s, true);
     this.#wrapped.push(grass, trees[0], trees[1], butterflies);
+    // Added in draw order, and three's per-frame sort is off (it allocated every frame):
+    // opaque front to back with the sky last on the far plane, then routes, gates, Keepers.
+    this.#renderer.sortObjects = false;
     this.#scene.add(
-      makeSky(s),
       makeLand(s),
       makeWater(s),
       grass,
       ...trees,
       swallows,
       butterflies,
-      this.#routes.mesh,
       this.#spires.mesh,
-      this.#bills.mesh,
-      this.#keepers.mesh,
       ...this.#props.meshes,
       this.#dragon.mesh,
+      makeSky(s),
+      this.#routes.mesh,
+      this.#bills.mesh,
+      this.#keepers.mesh,
+    );
+    this.#pack = framePacker(
+      {
+        ...s,
+        uWrapGrass: grass.userData.wrap,
+        uWrapTrees: trees[0].userData.wrap,
+        uWrapLife: butterflies.userData.wrap,
+        uWrapProps: this.#props.wrap,
+        uDragon: { value: this.#dragon.dragon },
+        uAges: { value: this.#props.ages },
+        uView: { value: this.#keepers.view },
+      },
+      s.uFrame.value,
     );
     this.#setBand(0, true);
     this.#camera.position.copy(CAMERA);
@@ -404,7 +421,17 @@ export class ExploreEngine {
       this.#passage(-1, now);
     }
     if (taken >= 0) this.#shared.uRoute.value[TAKEN_SLOT] = 1;
-    if (this.#qa) this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
+    if (this.#qa) {
+      this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
+      // A frozen clock holds the CSS animations this message just started, too.
+      if (this.#qa.frozen)
+        for (const a of document.getAnimations())
+          if (!this.#qa.anims.has(a)) {
+            a.pause();
+            a.currentTime = 0;
+            this.#qa.anims.set(a, this.#qa.clock);
+          }
+    }
   }
 
   /**
@@ -770,7 +797,7 @@ export class ExploreEngine {
     this.#tick(raf, dt, raw, begin);
   };
 
-  #tick(now: number, dt: number, raw: number, begin: number) {
+  #tick(now: number, dt: number, raw: number, begin: number, draw = true) {
     this.#time += dt;
     const s = this.#shared;
     const viz = this.#o.viz;
@@ -832,10 +859,17 @@ export class ExploreEngine {
     );
     this.#camera.updateMatrixWorld();
 
+    if (!draw) return;
+    this.#pack();
     if (this.#qa) this.#gpuBegin();
     this.#renderer.render(this.#scene, this.#camera);
     if (this.#qa) this.#gpuEnd();
-    this.#drawEma += (performance.now() - begin - this.#drawEma) * 0.05;
+    const cpu = performance.now() - begin;
+    this.#drawEma += (cpu - this.#drawEma) * 0.05;
+    if (this.#qa && !this.#qa.frozen) {
+      this.#qa.cpu[this.#qa.cpuAt] = cpu;
+      this.#qa.cpuAt = (this.#qa.cpuAt + 1) % this.#qa.cpu.length;
+    }
     if (raw > 0) this.#frameEma += (raw - this.#frameEma) * 0.025;
     if (this.#adaptive && this.#time > 8 && this.#frameEma > 19) {
       this.#slow += dt;
@@ -932,7 +966,7 @@ export class ExploreEngine {
   /** The QA handle (window.__wayfaring with ?qa). */
   qa() {
     if (!this.#qa) {
-      this.#qa = { frozen: false, clock: 0, anims: new Map(), pending: null, records: [], gpu: [] };
+      this.#qa = { frozen: false, clock: 0, anims: new Map(), pending: null, records: [], gpu: [], cpu: new Float64Array(2048).fill(-1), cpuAt: 0 };
       this.#gl = this.#renderer.getContext() as WebGL2RenderingContext;
       this.#timer = this.#gl.getExtension('EXT_disjoint_timer_query_webgl2');
     }
@@ -949,6 +983,10 @@ export class ExploreEngine {
     return {
       records: qa.records,
       gpu: qa.gpu,
+      /** Frame CPU samples (ms) since `from` = cpuMark(). */
+      cpuMark: () => qa.cpu.fill(-1),
+      gpuMark: () => (qa.gpu.length = 0),
+      cpuSamples: () => Array.from(qa.cpu).filter((v) => v >= 0),
       /** Hold the world (and its CSS animations) still at this instant. */
       freeze: () => {
         qa.clock = performance.now();
@@ -959,7 +997,11 @@ export class ExploreEngine {
           qa.anims.set(a, qa.clock - Number(a.currentTime ?? 0));
         }
       },
-      /** Step the frozen world by `ms` in 1/120 s frames. */
+      /**
+       * Step the frozen world by `ms` in 1/120 s steps, simulating without drawing
+       * (a burst of renders in one task would queue seconds of GPU work); the
+       * animation frames draw the result.
+       */
       advance: (ms: number) => {
         sync();
         let left = ms;
@@ -967,7 +1009,7 @@ export class ExploreEngine {
           const step = Math.min(1000 / 120, left);
           qa.clock += step;
           left -= step;
-          this.#tick(qa.clock, step / 1000, step, performance.now());
+          this.#tick(qa.clock, step / 1000, step, performance.now(), false);
         }
         sync();
       },
@@ -999,9 +1041,9 @@ export class ExploreEngine {
         if (m) m.visible = visible;
       },
       gpuMedian: async (ms = 3000) => {
-        const from = qa.gpu.length;
+        qa.gpu.length = 0;
         await new Promise((r) => setTimeout(r, ms));
-        const g = qa.gpu.slice(from).sort((a, b) => a - b);
+        const g = qa.gpu.slice().sort((a, b) => a - b);
         return g.length ? { n: g.length, p50: g[g.length >> 1], p95: g[Math.floor(g.length * 0.95)] } : null;
       },
       state: () => ({
@@ -1250,7 +1292,8 @@ export class ExploreEngine {
     const wp = s.uWayPrev.value;
     wp.z = Math.max(0, 1 - (now - this.#beamT0) / AIM_MS) * (wp.z > 0 ? 1 : 0);
     wp.w = 1 - this.#vigil * 0.55;
-    if (s.uHeraldT.value >= 0) s.uHeraldT.value = Math.min(600, s.uHeraldT.value + dt);
+    // The herald flies and circles; with reduced motion it waits at the gate.
+    if (s.uHeraldT.value >= 0) s.uHeraldT.value = this.#reduced ? 0.95 : Math.min(600, s.uHeraldT.value + dt);
     // Realm colours: 180 ms, the biggest change in the first frame.
     const u = Math.min(1, (now - this.#bandT0) / BAND_MS);
     const e = 1 - (1 - u) * (1 - u);
@@ -1279,9 +1322,9 @@ export class ExploreEngine {
     let age = 4;
     for (let i = 1; i < AGE_KEYS.length; i++)
       if (minutes <= AGE_KEYS[i][0]) {
-        const [m0, a0] = AGE_KEYS[i - 1],
-          [m1, a1] = AGE_KEYS[i];
-        age = a0 + (a1 - a0) * ((minutes - m0) / (m1 - m0));
+        const p = AGE_KEYS[i - 1],
+          q = AGE_KEYS[i];
+        age = p[1] + (q[1] - p[1]) * ((minutes - p[0]) / (q[0] - p[0]));
         break;
       }
     s.uAge.value = age;
@@ -1552,6 +1595,9 @@ type Qa = {
   pending: { reason: string; recv: number; handled: number; aim: string | null; count: number } | null;
   records: { reason: string; recv: number; handled: number; raf: number; frame: number; labelOk: boolean; routeOk: boolean }[];
   gpu: number[];
+  /** Per-frame CPU time of the world (JS + draw submission), a ring of the last 2048 frames. */
+  cpu: Float64Array;
+  cpuAt: number;
 };
 
 export function createExploreEngine(o: EngineOptions) {

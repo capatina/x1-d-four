@@ -278,7 +278,6 @@ export function makeBillboards(s: Shared) {
         common +
         /* glsl */ `
     attribute vec4 aBill, aBillInfo;
-    uniform vec4 uPassage;
     varying vec2 vUv;
     varying vec3 vC;
     varying float vKind, vSlot, vSeed;
@@ -296,7 +295,6 @@ export function makeBillboards(s: Shared) {
       fragmentShader:
         common +
         /* glsl */ `
-    uniform float uPassageA;
     varying vec2 vUv;
     varying vec3 vC;
     varying float vKind, vSlot, vSeed;
@@ -396,7 +394,6 @@ export function makeKeepers(s: Shared, atlas: THREE.Texture) {
         /* glsl */ `
     attribute float aDeck;
     uniform vec4 uKeeper[4];
-    uniform vec2 uView;
     varying vec2 vCell;
     varying float vDeck;
     void main() {
@@ -468,6 +465,10 @@ export function makeKeepers(s: Shared, atlas: THREE.Texture) {
       vec3 col = cloak * fig.a;
       col = mix(col, woodCol, wood * (1. - fig.a * .3));
       col = mix(col, vec3(.06, .055, .05) + deck * bright * .15, frame);
+      // The deck's sigil (◆ ▲ ● ■) on the lantern's glass.
+      vec2 g2 = c / 3.2;
+      float sig = i == 0 ? abs(g2.x) + abs(g2.y) : i == 1 ? max(abs(g2.x) * .87 + g2.y * .5, -g2.y) : i == 2 ? length(g2) : max(abs(g2.x), abs(g2.y)) * 1.1;
+      flame *= 1. - step(sig, .62) * .55;
       col += flame * glass * (1. - frame);
       col = mix(col, deck * 1.3 + .1, gem);
       float a = max(cover, max(glass, gem));

@@ -1,8 +1,7 @@
 import * as THREE from 'three';
+import { ATLAS_COLS, ATLAS_ROWS, random } from '../lib/runes';
 
-/** The rune atlas grid (see atlas.ts). */
-export const ATLAS_COLS = 5;
-export const ATLAS_ROWS = 4;
+export { random };
 
 /**
  * Shared, mutable uniforms: every blade, tree, spire and route reads the same
@@ -86,6 +85,8 @@ export function makeShared() {
     /** Dragon shadow on the land: x, z, radius, strength. */
     uShadow: { value: new THREE.Vector4(0, 0, 1, 0) },
     uRunes: { value: null as THREE.Texture | null },
+    /** Every scalar and vector above, packed once per frame (see FRAME_LAYOUT). */
+    uFrame: { value: new Float32Array(FRAME_VEC4 * 4) },
     /** Baked tileable value noise (r: 8-texel lattice, g: 4, b: 16, a: white), 32 lattice cells across. */
     uNoise: { value: makeNoiseTexture() },
     /** Loop rings on the water: x, z, phase within the loop (0..1), strength. */
@@ -93,6 +94,58 @@ export function makeShared() {
   };
 }
 export type Shared = ReturnType<typeof makeShared>;
+
+/**
+ * Scalars and vectors reach the shaders packed in one `vec4 uFrame[]`, filled
+ * once per frame from the uniform objects above: a single typed-array upload
+ * per program instead of dozens of boxed scalar uploads (no garbage per frame).
+ * The GLSL keeps the old names through these defines.
+ */
+const FRAME_LAYOUT: [name: string, at: string][] = [
+  ['uTime', '0.x'], ['uWind', '0.y'], ['uGrowth', '0.z'], ['uBand', '0.w'],
+  ['uRealmNow', '1.x'], ['uLife', '1.y'], ['uMotion', '1.z'], ['uCourse', '1.w'],
+  ['uCourseW', '2.x'], ['uCourseK', '2.y'], ['uRiver0', '2.z'], ['uAge', '2.w'],
+  ['uNight', '3.x'], ['uAurora', '3.y'], ['uLeyWave', '3.z'], ['uFlow', '3.w'],
+  ['uVigil', '4.x'], ['uMist', '4.y'], ['uFog', '4.z'], ['uLight', '4.w'],
+  ['uMagic', '5.x'], ['uBar', '5.y'], ['uPassageA', '5.z'], ['uHeraldY', '5.w'],
+  ['uHeraldT', '6.x'], ['uSnap', '6.zw'],
+  ['uBounds', '7.xy'], ['uStarts', '7.zw'],
+  ['uSeeds', '8.xyz'], ['uRealms', '9.xyz'], ['uSun', '10.xyz'], ['uSunDir', '11.xyz'],
+  ['uHaze', '12.xyz'], ['uZenith', '13.xyz'], ['uAccent', '14.xyz'],
+  ['uDecks', '15.xyzw'], ['uWay', '16.xyzw'], ['uWayPrev', '17.xyzw'], ['uShadow', '18.xyzw'],
+  ['uPassage', '19.xyzw'], ['uHerald', '20.xyzw'], ['uDragon', '21.xyzw'], ['uAges', '22.xyzw'],
+  ['uWrapGrass', '23.xy'], ['uWrapTrees', '23.zw'], ['uWrapLife', '24.xy'], ['uWrapProps', '24.zw'],
+  ['uView', '25.xy'],
+];
+const FRAME_VEC4 = 26;
+const FRAME_DEFINES = FRAME_LAYOUT.map(([name, at]) => {
+  const [slot, comps] = at.split('.');
+  return `  #define ${name} uFrame[${slot}]${comps.length === 4 ? '' : `.${comps}`}`;
+}).join('\n');
+
+type Packable = { value: number | { x: number; y: number; z?: number; w?: number } };
+/** Builds the per-frame packer once; calling it copies every source into uFrame without allocating. */
+export function framePacker(sources: Record<string, { value: unknown }>, frame: Float32Array) {
+  const entries = FRAME_LAYOUT.map(([name, at]) => {
+    const [slot, comps] = at.split('.');
+    const u = sources[name] as Packable | undefined;
+    if (!u) throw new Error(`No uniform ${name} to pack`);
+    return { u, at: Number(slot) * 4 + 'xyzw'.indexOf(comps[0]), n: comps.length };
+  });
+  return () => {
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const v = e.u.value;
+      if (typeof v === 'number') frame[e.at] = v;
+      else {
+        frame[e.at] = v.x;
+        frame[e.at + 1] = v.y;
+        if (e.n > 2) frame[e.at + 2] = v.z!;
+        if (e.n > 3) frame[e.at + 3] = v.w!;
+      }
+    }
+  };
+}
 
 /** Land is drawn on a lattice this fine; the snap keeps vertices on land points. */
 export const LAND_DX = 560 / 180;
@@ -110,16 +163,12 @@ export function widthAt(z: number) {
 }
 
 export const common = /* glsl */ `
-  uniform float uTime, uWind, uGrowth, uBand, uRealmNow, uLife, uMotion;
-  uniform float uCourse, uCourseW, uCourseK, uRiver0, uAge, uNight, uAurora, uLeyWave, uFlow, uVigil, uMist, uFog, uLight, uMagic, uBar;
-  uniform vec2 uSnap, uBounds, uStarts;
-  uniform vec3 uSeeds, uRealms, uSun, uSunDir, uHaze, uZenith, uAccent;
+  uniform vec4 uFrame[${FRAME_VEC4}];
+${FRAME_DEFINES}
   uniform float uSpectrum[64];
   uniform float uFlicker[8];
-  uniform vec4 uDecks;
   uniform vec4 uLantern[4];
   uniform vec3 uDeckColor[4];
-  uniform vec4 uWay, uWayPrev, uShadow;
   uniform float uRoute[8];
   uniform float uGate[8];
   uniform vec4 uLoop[4];
@@ -307,16 +356,6 @@ export function makeNoiseTexture() {
   tex.generateMipmaps = true;
   tex.needsUpdate = true;
   return tex;
-}
-
-/** One seeded random stream at construction; animation never creates geometry. */
-export function random(seed: number) {
-  return () => {
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 export function hashString(s: string) {

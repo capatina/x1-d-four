@@ -9,9 +9,9 @@
   import { search, TRACK_DRAG } from '../lib/search.svelte';
 
   /**
-   * Type anywhere in the valley to search. Results come ranked from the server
+   * Type anywhere in the realm to search. Results come ranked from the server
    * (`browser.ids`) and its selection is the best match, so the mixer's load
-   * buttons act on it. Enter flies the valley there; Esc closes.
+   * buttons act on it. Enter starts the journey there; Esc closes.
    */
 
   const MAX_ROWS = 12;

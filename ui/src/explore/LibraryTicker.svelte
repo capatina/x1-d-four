@@ -10,7 +10,7 @@
   import { keysFor } from '../lib/mixer';
 
   /**
-   * The left jog scrolls the library even inside the valley. When the library
+   * The left jog scrolls the library even inside the realm. When the library
    * selection moves somewhere other than the aimed path, show where it is
    * (with a few neighbours) and how to use it; fade out once it settles.
    */
@@ -37,7 +37,7 @@
     checkTimer ??= setTimeout(() => {
       checkTimer = undefined;
       const now = client.browser.selected;
-      // Aiming in the valley moves the selection too; that's not a library scroll.
+      // Aiming at a route moves the selection too; that's not a library scroll.
       if (now && now !== client.explore?.aim) show();
     }, SETTLE_MS);
   });

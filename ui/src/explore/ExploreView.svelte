@@ -272,8 +272,8 @@
       <span class="chip tempo" title="Tempo from the mixer's MIDI clock">
         <b>{fmtBpm(bpm) || '—'}</b><small>BPM</small>
       </span>
-      {#if analysis?.running}
-        <span class="chip analysis" title="Analysing the library: paths appear as tracks are analysed">
+      {#if analysis?.running && !hasRoot}
+        <span class="chip analysis" title="Analysing the library: routes appear as tracks are analysed">
           <span class="k">Analysing</span>
           <b>{analysis.done}<small>/{analysis.total}</small></b>
           <span class="meter"><span style:transform="scaleX({analysis.total ? analysis.done / analysis.total : 0})"></span></span>
@@ -310,6 +310,12 @@
       <span class="eyebrow">{pal.detail.toLowerCase()}</span>
       <h1>{pal.place}</h1>
       <p>
+        {#if analysis?.running}
+          <span class="analysis" title="Analysing the library: routes appear as tracks are analysed"
+            >analysing <b>{analysis.done}<small>/{analysis.total}</small></b>
+            <span class="meter"><span style:transform="scaleX({analysis.total ? analysis.done / analysis.total : 0})"></span></span></span
+          ><i>·</i>
+        {/if}
         {children.length} {children.length === 1 ? 'route' : 'routes'} from here <i>·</i> let the music lead
         {#if (ex?.path.length ?? 0) > 1}
           <button type="button" class="upstream" onclick={() => client.send({ cmd: 'explore_back' })}>← Upstream</button>
@@ -365,7 +371,7 @@
   {:else if !hasRoot}
     <div class="center">
       <p class="big">Load a track onto the focused deck</p>
-      <p class="sub">The valley grows from the focused deck's track, in the {pal.label.toLowerCase()} band.</p>
+      <p class="sub">The journey starts from the focused deck's track, in {pal.place} ({pal.label.toLowerCase()} band).</p>
       <div class="actions">
         {#if selected}
           <button type="button" class="primary" onclick={() => client.send({ cmd: 'explore_root', id: selected })}>
@@ -381,7 +387,7 @@
   {:else if children.length === 0}
     <div class="center">
       {#if analysis?.running}
-        <p class="sub">Analysing the library… paths appear as tracks are analysed.</p>
+        <p class="sub">Analysing the library… routes appear as tracks are analysed.</p>
       {:else}
         <p class="sub">
           No similar tracks here yet.
@@ -393,7 +399,7 @@
 
   <!-- Bottom: what the mixer does here, then the decks -->
   <footer class="bottom" bind:clientHeight={bottomH} bind:this={footerEl}>
-    <WaveStrip onStats={showStats ? (ms) => (waveMs = ms) : undefined} />
+    <WaveStrip accent={pal.css} onStats={showStats ? (ms) => (waveMs = ms) : undefined} />
     <MixerLegend slots={EXPLORE_LEGEND} view="explore" tone="overlay" />
     <DeckHud rootDeck={ex?.root_deck ?? null} />
   </footer>
@@ -450,6 +456,9 @@
   .realm h1 { margin: 2px 0 0; font: 400 clamp(24px, 2.25vw, 40px)/1.05 var(--font-display); letter-spacing: -.02em; white-space: nowrap; }
   .realm p { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; font-size: 11.5px; color: #e3e0cc; }
   .realm i { font-style: normal; color: var(--band); }
+  .realm .analysis { display: inline-flex; align-items: center; gap: 6px; font: 400 12px/1 var(--font-display); font-variant-caps: all-small-caps; letter-spacing: .12em; color: var(--band); }
+  .realm .analysis b { font: 650 11px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--parchment); letter-spacing: 0; }
+  .realm .analysis small { font-size: 10px; color: #c0c5b0; }
   .upstream { pointer-events: auto; padding: 3px 8px; border: 1px solid #dedbb955; border-radius: 6px; background: #121e17cc; color: #eee9d3; font-size: 11.5px; cursor: pointer; }
   .growth { display: block; opacity: .8; }
 

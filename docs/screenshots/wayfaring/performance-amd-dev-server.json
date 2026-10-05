@@ -1,0 +1,142 @@
+{
+  "checks": [
+    "Hardware GPU in use (ANGLE (AMD, Vulkan 1.4.354 (AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO) (0x000013C0)), radv-26.2.2))",
+    "Budget: 15 draw calls (≤ 18), 243k triangles (≤ 270k)",
+    "No browser errors or external network requests"
+  ],
+  "latency": {},
+  "measurements": [
+    {
+      "label": "1920×1080 / four decks / low",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.7,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 7.75,
+        "p95": 8.59,
+        "p99": 9.14,
+        "max": 10.8
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.1,
+        "p95": 0.2,
+        "p99": 0.3,
+        "max": 0.4
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.4,
+        "p95": 0.5,
+        "p99": 0.6,
+        "max": 0.7
+      },
+      "calls": 15,
+      "triangles": 242698
+    },
+    {
+      "label": "2560×1440 / four decks / low",
+      "fps": 60,
+      "frameInterval": {
+        "n": 900,
+        "p50": 16.7,
+        "p95": 16.8,
+        "p99": 16.8,
+        "max": 16.8
+      },
+      "over25ms": 0,
+      "gpuMs": {
+        "n": 901,
+        "p50": 11.01,
+        "p95": 12.08,
+        "p99": 12.48,
+        "max": 14.01
+      },
+      "worldCpuMs": {
+        "n": 901,
+        "p50": 0.2,
+        "p95": 0.3,
+        "p99": 0.5,
+        "max": 5.8
+      },
+      "stripCpuMs": {
+        "n": 901,
+        "p50": 0.6,
+        "p95": 0.7,
+        "p99": 0.7,
+        "max": 7.1
+      },
+      "calls": 15,
+      "triangles": 242698
+    }
+  ],
+  "progress": [],
+  "errors": [],
+  "gpu": "ANGLE (AMD, Vulkan 1.4.354 (AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO) (0x000013C0)), radv-26.2.2)",
+  "allocations": {
+    "seconds": 8,
+    "bytesPerSecond": {
+      "page": 3202116,
+      "engineFrameLoop": 52448,
+      "stripFrameLoop": 49465
+    },
+    "frameLoopSites": [
+      {
+        "site": "#frame (waveRender.ts:172) ← #draw (waveRender.ts:236)",
+        "bytesPerSecond": 28040
+      },
+      {
+        "site": "WebGLRenderer.render (three.js:51996) ← setFromProjectionMatrix (three.js:18755)",
+        "bytesPerSecond": 14184
+      },
+      {
+        "site": "#draw (waveRender.ts:236) ← #markers (waveRender.ts:526)",
+        "bytesPerSecond": 13758
+      },
+      {
+        "site": "projectObject (three.js:52080) ← projectObject (three.js:52080)",
+        "bytesPerSecond": 8911
+      },
+      {
+        "site": "#tick (engine.ts:804) ← (anonymous) (shared.ts:167)",
+        "bytesPerSecond": 5111
+      },
+      {
+        "site": "#tick (engine.ts:804) ← #travel (engine.ts:1088)",
+        "bytesPerSecond": 5012
+      },
+      {
+        "site": "#frame (engine.ts:788) ← #tick (engine.ts:804)",
+        "bytesPerSecond": 4881
+      },
+      {
+        "site": "#draw (waveRender.ts:236) ← gridFor (waveRender.ts:587)",
+        "bytesPerSecond": 3734
+      },
+      {
+        "site": "(root) (:0) ← #frame (engine.ts:788)",
+        "bytesPerSecond": 2228
+      },
+      {
+        "site": "(root) (:0) ← #frame (waveRender.ts:172)",
+        "bytesPerSecond": 2165
+      },
+      {
+        "site": "#tick (engine.ts:804) ← #ages (engine.ts:1315)",
+        "bytesPerSecond": 2162
+      },
+      {
+        "site": "#tick (engine.ts:804) ← #gpuBegin (engine.ts:945)",
+        "bytesPerSecond": 1952
+      }
+    ],
+    "note": "sampled every 256 bytes, garbage included; function names need the unminified dev server (WAYFARING_PAGE)"
+  }
+}

@@ -14,8 +14,7 @@ export const WAYSTONES = 4;
 
 /** uAges: course at which the mix reached day, dusk and night (structures spawn after it). */
 const propCommon = /* glsl */ `
-  uniform vec2 uWrap;
-  uniform vec4 uAges;
+  #define uWrap uWrapProps
   uniform vec4 uWaystone[4];
   const float P = ${PROP_PERIOD}., ZN = 30.;
   // Wrap bookkeeping shared by all props: traveller z, land coordinate, wrap count, spawn course.
@@ -381,7 +380,6 @@ export function makeDragon(s: Shared) {
         common +
         /* glsl */ `
     attribute vec4 aDragon;
-    uniform vec4 uDragon;
     varying vec2 vWing;
     varying float vPart, vT, vSide;
     varying vec3 vP;
@@ -447,7 +445,6 @@ export function makeDragon(s: Shared) {
       fragmentShader:
         common +
         /* glsl */ `
-    uniform vec4 uDragon;
     varying vec2 vWing;
     varying float vPart, vT, vSide;
     varying vec3 vP;

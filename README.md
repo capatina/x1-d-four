@@ -4,7 +4,7 @@
 
 *Unofficial: not affiliated with or endorsed by Allen & Heath.*
 
-![X1 D. Four Explore](docs/screenshots/earth/01-lowlands-1080.webp)
+![X1 D. Four Explore: the Wayfaring](docs/screenshots/wayfaring/01-lowmarch-travel-1080.webp)
 
 The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. Four talks to its Ploytec USB chip directly through Linux usbfs. It renders each deck straight into the USB packets on a real-time thread, and the mixer's own knobs and buttons drive the decks.
 
@@ -17,22 +17,24 @@ The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. F
 - **The mixer's MIDI controls**: buttons, encoders, faders and jog wheels, mapped in a TOML file that reloads on save, with LED feedback on the lit buttons. The UI's live MIDI monitor names every control as you touch it.
 - **Readout of the mixer's own MIDI clock BPM.**
 
-## Explore: a living river valley
+## Explore: the Wayfaring
 
-The main screen is a living river valley through your music.
-- Every track is analysed in three bands, like the mixer's EQ: **low** (kick, bass, groove), **mid** (harmony, key) and **high** (hats, percussion, air).
-- Branching paths show the tracks most similar to what's playing, in the band you choose. As the track moves into a breakdown or a drop, the neighbours shift.
-- Aim at a path, dive into the next grove, and keep going. Music drives the wind; grass grows, wildlife arrives, and daylight shifts over the mix. Four deck waveforms become the river's foreground contours, with aligned beat grids and visible loops.
+The main screen is a journey down a river through a mythic realm, and it travels while you play.
+- Every track is analysed in three bands, like the mixer's EQ: **low** (kick, bass, groove), **mid** (harmony, key) and **high** (hats, percussion, air). Each band is a realm: the Lowmarch, the Greenwold, the Highreach.
+- The river forks ahead toward spires on floating shards: the tracks most similar to where you stand. Aiming lights a route and its gate; nothing jumps to the front.
+- Loading the aimed track takes its route: you pass under its gate into that track's country. Diving (M) scouts ahead without a deck, and the land stays misted until a load claims it.
+- Four Keepers at the bow carry the decks' lanterns, swinging on the beat. Over a long set the land ages from dawn to night, with bridges and lit shrines; an earned drop may bring a dragon. The deck waveforms run along the bottom as one faithful 3-band strip.
+- Every response appears in the next frame; flourishes take at most 300 ms.
 - Analysing a 2,300-track library takes about a minute on a desktop CPU; after that it's instant from a cache.
 
 It's played entirely from the mixer:
 
 | | Left pod | Right pod |
 |---|---|---|
-| Lit buttons 1–4 | load the aimed track onto deck 1–4 | play/pause deck 1–4 |
+| Lit buttons 1–4 | load the aimed track onto deck 1–4 (and take its route) | play/pause deck 1–4 |
 | Jog wheel | move through the focused deck: turn slowly for precision, spin to fly (a synced deck moves in whole beats) | shift the focused deck to fix its sync (it keeps the offset) |
-| JOG/SELECT | focus deck 1–4 (the valley grows from it); push to start from the search selection | aim between paths; push to reset the focused deck's sync |
-| Buttons | A low, B mid, C high band; E follow the focused deck on/off | M dive into the aimed path |
+| JOG/SELECT | focus deck 1–4 (the realm grows from it); push to start from the search selection | aim between routes; push to reset the focused deck's sync |
+| Buttons | A low, B mid, C high band; E follow the focused deck on/off | M scout down the aimed route |
 | Encoders 1–4 | push = 8-bar loop on deck 1–4; turn = loop length | skip ±2 s; push = sync |
 | Faders 1–4 | pitch ±8 % | |
 

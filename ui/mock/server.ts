@@ -816,7 +816,8 @@ function buildTree() {
     return;
   }
   if (ex.path[0] !== ex.root) ex.path = [ex.root];
-  const used = new Set(ex.path);
+  // Like the server: tracks loaded on decks don't show up as routes.
+  const used = new Set([...ex.path, ...decks.flatMap((d) => (d.track ? [d.track.id] : []))]);
   ex.nodes.push({ id: ex.root, parent: null, depth: 0, sim: 1, tempo: tempoOf(ex.root) });
   for (let i = 0; i < ex.path.length; i++) {
     const node = ex.path[i];

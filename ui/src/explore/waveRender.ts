@@ -1,9 +1,12 @@
-// The river's banks carry four deck envelopes on one linear time axis.
-// The focused deck is filled; the others have numbered, patterned contours.
-// A quiet reflected contour keeps the waveform attached to the water.
+// The Current: four deck envelopes on one linear time axis. The focused deck
+// is filled (a faithful 3-band DJ waveform) over a faint ley glow; the others
+// have numbered, patterned contours, each badge with its deck's sigil. The
+// playhead is a thin staff with a gem in the realm's accent; loop brackets
+// end in rune ticks. A quiet reflected contour keeps it attached to the water.
 
 import { client } from '../lib/client.svelte';
 import { DECK_DASHES, DECK_SHADES, hexToRgb, rgba } from '../lib/decks';
+import { SIGIL_CELL, tintedCell } from '../lib/runes';
 import { DECK_COUNT, type BeatGrid, type DeckState, type StateMsg } from '../lib/protocol';
 import { waves, type DeckWave } from '../lib/waves';
 
@@ -31,6 +34,8 @@ const LEAD_PAUSED = 0.72;
 const OTHER_LINE = { playing: 1, paused: 0.55 };
 /** How much of the past (left of the playhead) is faded out. */
 const PAST_DIM = 0.38;
+const PAST_FILL = `rgba(0, 0, 0, ${PAST_DIM})`;
+const DIGITS = ['1', '2', '3', '4'];
 
 type Shown = { pos: number; trackId: string | null; live: boolean };
 
@@ -46,8 +51,14 @@ export class WaveRenderer {
   readonly #shown: Shown[] = Array.from({ length: DECK_COUNT }, () => ({ pos: 0, trackId: null, live: false }));
   readonly #resize: ResizeObserver;
   readonly #mono: string;
+  /** Built once, so drawing a frame creates no strings. */
+  readonly #badgeFont: string;
   readonly #order = new Int8Array(DECK_COUNT);
   readonly #loopGradients: CanvasGradient[] = [];
+  /** Sigils (◆ ▲ ● ■) and rune ticks per deck, tinted once from the rune atlas. */
+  #sigils: HTMLCanvasElement[] = [];
+  #runeTicks: HTMLCanvasElement[] = [];
+  #accent = '#e3b667';
   #leftFade!: CanvasGradient;
   #rightFade!: CanvasGradient;
   #headGlow!: CanvasGradient;
@@ -78,6 +89,7 @@ export class WaveRenderer {
     }
 
     this.#mono = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() || 'monospace';
+    this.#badgeFont = `700 10.5px ${this.#mono}`;
     this.#resize = new ResizeObserver(() => this.#onResize());
     this.#resize.observe(canvas);
     this.#onResize();
@@ -87,6 +99,11 @@ export class WaveRenderer {
 
   // Timeline motion is functional; decorative beat pulsing is deliberately absent.
   setReducedMotion(_reduced: boolean): void {}
+
+  /** The realm's accent for the staff's gem and the ley glow. */
+  setAccent(hex: string): void {
+    this.#accent = hex;
+  }
 
   dispose(): void {
     this.#disposed = true;
@@ -142,6 +159,9 @@ export class WaveRenderer {
       this.#headGlow.addColorStop(0, '#ede4b900');
       this.#headGlow.addColorStop(0.5, '#ede4b928');
       this.#headGlow.addColorStop(1, '#ede4b900');
+      const px = Math.round(10 * dpr);
+      this.#sigils = DECK_SHADES.map((c, i) => tintedCell(SIGIL_CELL(i), px, c.line));
+      this.#runeTicks = DECK_SHADES.map((c, i) => tintedCell((i * 5 + 3) % 16, Math.round(9 * dpr), c.mid));
       this.#loopGradients.length = 0;
       for (let i = 0; i < DECK_COUNT; i++) {
         const g = ctx.createLinearGradient(0, 0, 0, h);
@@ -172,7 +192,12 @@ export class WaveRenderer {
     this.#advance(st, now, dt);
     const t0 = performance.now();
     this.#draw(st);
-    this.drawMs += (performance.now() - t0 - this.drawMs) * 0.05;
+    const ms = performance.now() - t0;
+    this.drawMs += (ms - this.drawMs) * 0.05;
+    if (QA_SAMPLES) {
+      QA_SAMPLES[QA_AT.i] = ms;
+      QA_AT.i = (QA_AT.i + 1) % QA_SAMPLES.length;
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -254,7 +279,8 @@ export class WaveRenderer {
     if (lead >= 0) order[ordered] = lead;
 
     // Behind the waveforms: loop regions, and the lead deck's bar lines.
-    for (const i of order) {
+    for (let o = 0; o < order.length; o++) {
+      const i = order[o];
       const ds = st.decks[i];
       const sh = this.#shown[i];
       if (!ds || !sh.live) continue;
@@ -266,7 +292,8 @@ export class WaveRenderer {
 
     // Waveforms.
     let any = false;
-    for (const i of order) {
+    for (let o = 0; o < order.length; o++) {
+      const i = order[o];
       const env = this.#env[i];
       env.n = 0;
       const ds = st.decks[i];
@@ -278,10 +305,22 @@ export class WaveRenderer {
     }
     if (any) {
       // The lead deck in its true colours.
-      if (lead >= 0 && this.#env[lead].n >= 2) this.#fill(lead, this.#env[lead], cy, st.decks[lead]?.playing ?? false);
+      if (lead >= 0 && this.#env[lead].n >= 2) {
+        // A ley glow in the realm's accent under the lead deck's envelope (6 %).
+        mirrored(ctx, this.#env[lead], this.#env[lead].yt, cy);
+        ctx.fillStyle = this.#accent;
+        ctx.globalAlpha = 0.06;
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = this.#accent;
+        ctx.fill();
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        this.#fill(lead, this.#env[lead], cy, st.decks[lead]?.playing ?? false);
+      }
       // Patterned contours with a dark casing stay distinct over the filled bank.
       ctx.lineJoin = 'bevel';
-      for (const i of order) {
+      for (let o = 0; o < order.length; o++) {
+      const i = order[o];
         const env = this.#env[i];
         if (env.n < 2 || i === lead) continue;
         const a = st.decks[i]?.playing ? OTHER_LINE.playing : OTHER_LINE.paused;
@@ -302,7 +341,8 @@ export class WaveRenderer {
     }
 
     // Beat grid ruler.
-    for (const i of order) {
+    for (let o = 0; o < order.length; o++) {
+      const i = order[o];
       const ds = st.decks[i];
       const sh = this.#shown[i];
       const grid = ds && sh.live ? gridFor(i, ds) : null;
@@ -323,7 +363,7 @@ export class WaveRenderer {
 
     // The past fades a little; both ends fade out.
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = `rgba(0, 0, 0, ${PAST_DIM})`;
+    ctx.fillStyle = PAST_FILL;
     ctx.fillRect(0, 0, cx - 1, h);
     const fade = Math.min(80, w * 0.05);
     ctx.fillStyle = this.#leftFade;
@@ -448,6 +488,9 @@ export class WaveRenderer {
       // Brackets: short arms pointing into the loop, top and bottom, just inside the ruler.
       ctx.fillRect(dir > 0 ? x : x - arm, ruler - 1.5, arm, 1.5);
       ctx.fillRect(dir > 0 ? x : x - arm, h - ruler, arm, 1.5);
+      // A rune tick at each end.
+      const rune = this.#runeTicks[i];
+      if (rune) ctx.drawImage(rune, dir > 0 ? x + 2 : x - 11, ruler + 1, 9, 9);
     }
     ctx.globalAlpha = 1;
   }
@@ -524,19 +567,25 @@ export class WaveRenderer {
     return master >= 0 ? master : playing >= 0 ? playing : first;
   }
 
+  /** The playhead: a thin staff with a small gem in the realm's accent at its top. */
   #playhead(cx: number, h: number): void {
     const ctx = this.#ctx;
     const x = Math.round(cx * this.#dpr) / this.#dpr;
     ctx.fillStyle = this.#headGlow;
     ctx.fillRect(x - 12, 0, 24, h);
     ctx.fillStyle = '#eee6c9';
-    ctx.fillRect(x - 0.75, 0, 1.5, h);
+    ctx.fillRect(x - 0.6, 7, 1.2, h - 7);
     ctx.beginPath();
-    ctx.moveTo(x - 4, 0);
-    ctx.lineTo(x + 4, 0);
-    ctx.lineTo(x, 5);
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + 3.6, 4.2);
+    ctx.lineTo(x, 9);
+    ctx.lineTo(x - 3.6, 4.2);
     ctx.closePath();
+    ctx.fillStyle = this.#accent;
     ctx.fill();
+    ctx.strokeStyle = '#121e17';
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
   /** Deck numbers down the right edge, in their colours; the focused one filled. */
@@ -546,7 +595,7 @@ export class WaveRenderer {
     const gap = 4;
     const total = DECK_COUNT * size + (DECK_COUNT - 1) * gap;
     const x = w - size - 8;
-    ctx.font = `700 10.5px ${this.#mono}`;
+    ctx.font = this.#badgeFont;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let i = 0; i < DECK_COUNT; i++) {
@@ -570,11 +619,20 @@ export class WaveRenderer {
         ctx.stroke();
         ctx.fillStyle = c;
       }
-      ctx.fillText(String(i + 1), x + size / 2, y + size / 2 + 0.5);
+      ctx.fillText(DIGITS[i], x + size / 2, y + size / 2 + 0.5);
+      // The deck's sigil beside its number (colour-blind safe with pattern and number).
+      const sigil = this.#sigils[i];
+      if (sigil) ctx.drawImage(sigil, x - 13, y + size / 2 - 5, 10, 10);
     }
     ctx.globalAlpha = 1;
   }
 }
+
+/** ?qa: per-frame strip draw times (ms), a ring the QA harness reads as window.__waveCpu. */
+const QA_SAMPLES: Float64Array | null =
+  typeof location !== 'undefined' && new URLSearchParams(location.search).has('qa') ? new Float64Array(2048).fill(-1) : null;
+const QA_AT = { i: 0 };
+if (QA_SAMPLES) (window as unknown as { __waveCpu: Float64Array }).__waveCpu = QA_SAMPLES;
 
 /** Band shades for a paused lead deck: the same colours, darker. */
 const PAUSED_SHADES = DECK_SHADES.map((c) => ({ low: dim(c.low), mid: dim(c.mid), high: dim(c.high) }));
