@@ -27,7 +27,7 @@
 #   explore.dive         on press: fly into the aimed portal
 #   explore.back         on press: climb back up
 #   explore.step         encoder: turn right = dive, turn left = back
-#   explore.follow       on press: toggle following the playing track
+#   explore.follow       on press: toggle following the focused deck's track
 #   explore.root         on press: start the tunnel at the library selection
 #
 # led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused", "deck.synced".
