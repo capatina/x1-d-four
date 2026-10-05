@@ -43,6 +43,7 @@ pub enum Action {
     Scroll,
     ExploreBand,
     ExploreCycleBand,
+    ExploreBandStep,
     ExploreAim,
     ExploreDive,
     ExploreBack,
@@ -71,6 +72,7 @@ impl Action {
             "library.scroll" => Self::Scroll,
             "explore.band" => Self::ExploreBand,
             "explore.cycle_band" => Self::ExploreCycleBand,
+            "explore.band_step" => Self::ExploreBandStep,
             "explore.aim" => Self::ExploreAim,
             "explore.dive" => Self::ExploreDive,
             "explore.back" => Self::ExploreBack,
@@ -114,6 +116,8 @@ pub enum Intent {
     /// 0 = low, 1 = mid, 2 = high.
     ExploreBand(u8),
     ExploreCycleBand,
+    /// Jog ticks towards the next band; the band moves once `.1` ticks pile up.
+    ExploreBandTicks(i32, i32),
     ExploreAim(i32),
     ExploreDive,
     ExploreBack,
@@ -173,6 +177,7 @@ impl Rule {
             (Action::Scroll, Press) => Intent::Scroll(a.unwrap_or(1.0) as i32),
             (Action::ExploreBand, Press) => Intent::ExploreBand(a.unwrap_or(0.0).clamp(0.0, 2.0) as u8),
             (Action::ExploreCycleBand, Press) => Intent::ExploreCycleBand,
+            (Action::ExploreBandStep, Delta(n)) => Intent::ExploreBandTicks(n as i32, a.unwrap_or(8.0).max(1.0) as i32),
             (Action::ExploreAim, Delta(n)) => Intent::ExploreAim(n as i32 * a.unwrap_or(1.0) as i32),
             (Action::ExploreAim, Press) => Intent::ExploreAim(a.unwrap_or(1.0) as i32),
             (Action::ExploreDive, Press) => Intent::ExploreDive,
@@ -216,7 +221,7 @@ impl Mappings {
                 Action::Rate | Action::Scroll | Action::Nudge => true,
                 Action::Trim => kind != Kind::Button,
                 Action::ExploreAim | Action::LoopLength => kind != Kind::Absolute,
-                Action::ExploreStep => kind == Kind::Relative,
+                Action::ExploreStep | Action::ExploreBandStep => kind == Kind::Relative,
                 _ => kind == Kind::Button,
             };
             if action == Action::ExploreBand && !matches!(m.amount, Some(a) if (0.0..=2.0).contains(&a)) {

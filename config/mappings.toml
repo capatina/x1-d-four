@@ -19,6 +19,8 @@
 #
 # Explore (the similarity tunnel):
 #   explore.cycle_band   on press: low -> mid -> high
+#   explore.band_step    jog/encoder: turn right for the next band up, left for down;
+#                        amount = ticks per band step (default 8), stops at low/high
 #   explore.band         on press, amount = 0 (low), 1 (mid) or 2 (high)
 #   explore.aim          encoder or jog: move between portals; button: amount portals per press
 #   explore.dive         on press: fly into the aimed portal
@@ -35,7 +37,7 @@
 #
 #                 LEFT POD                            RIGHT POD
 # lit 1-4         load aimed track -> deck 1-4        play/pause deck 1-4
-# jog             scroll the library                  aim between portals
+# jog             low / mid / high band               aim between portals
 # SELECT          turn: page library, push: fly from  turn: dive/back, push: dive
 #                 the library selection
 # buttons         A low, B mid, C high band,
@@ -70,7 +72,8 @@ led = "deck.loaded"
 
 [[map]]
 control = "left.jog"
-action = "library.scroll"
+action = "explore.band_step"
+amount = 8
 
 [[map]]
 control = "left.browse"

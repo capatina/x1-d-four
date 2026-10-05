@@ -37,6 +37,8 @@ pub struct ExploreState {
     started: Mutex<[Option<Instant>; DECKS]>,
     was_playing: Mutex<[bool; DECKS]>,
     last_tick: Mutex<Option<Instant>>,
+    /// Jog ticks collected towards the next band change, and when the last came in.
+    band_ticks: Mutex<(i32, Option<Instant>)>,
 }
 
 impl App {
@@ -264,6 +266,29 @@ impl App {
             ex.set_band(band, &data.index, query, exclude);
             true
         });
+    }
+
+    /// A jog wheel turns the band: once `per_step` ticks pile up in one direction,
+    /// move one band (stopping at low/high). A pause forgets a half-turned step.
+    pub fn explore_band_ticks(&self, ticks: i32, per_step: i32) {
+        let steps = {
+            let mut acc = self.explore.band_ticks.lock().unwrap();
+            if acc.1.is_none_or(|t| t.elapsed() > Duration::from_millis(600)) || acc.0.signum() * ticks.signum() < 0 {
+                acc.0 = 0;
+            }
+            acc.0 += ticks;
+            acc.1 = Some(Instant::now());
+            let steps = acc.0 / per_step;
+            acc.0 -= steps * per_step;
+            steps
+        };
+        if steps != 0 {
+            let current = self.explore.explorer.lock().unwrap().band;
+            let band = current.step(steps);
+            if band != current {
+                self.explore_band(band);
+            }
+        }
     }
 
     pub fn explore_cycle_band(&self) {

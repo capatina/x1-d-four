@@ -212,6 +212,7 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
         break;
       case 'band':
         add(slot, 'explore.cycle_band', () => 'band');
+        add(slot, 'explore.band_step', () => 'band');
         items.push(...bandItems(maps));
         break;
       case 'load':

@@ -30,7 +30,7 @@ It's played entirely from the mixer:
 | | Left pod | Right pod |
 |---|---|---|
 | Lit buttons 1–4 | load the aimed track onto deck 1–4 | play/pause deck 1–4 |
-| Jog wheel | scroll the library | aim between portals |
+| Jog wheel | turn through low / mid / high | aim between portals |
 | JOG/SELECT | page the library; push to start the tunnel there | dive / back; push to dive |
 | Buttons | A low, B mid, C high band; E follow the playing deck | |
 | Encoders 1–4 | nudge; push = cue | skip ±2 s |

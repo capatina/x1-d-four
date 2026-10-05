@@ -370,6 +370,7 @@ impl App {
             Intent::Scroll(n) => Ok(self.scroll(n)),
             Intent::ExploreBand(b) => Ok(self.explore_band(analysis::Band::ALL[b.min(2) as usize])),
             Intent::ExploreCycleBand => Ok(self.explore_cycle_band()),
+            Intent::ExploreBandTicks(ticks, per_step) => Ok(self.explore_band_ticks(ticks, per_step)),
             Intent::ExploreAim(n) => Ok(self.explore_aim(Some(n), None)),
             Intent::ExploreDive => Ok(self.explore_dive(None)),
             Intent::ExploreBack => Ok(self.explore_back()),

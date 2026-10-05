@@ -21,6 +21,11 @@ impl Band {
         Band::ALL[(self.index() + 1) % 3]
     }
 
+    /// One band up (`steps` > 0) or down, stopping at low and high.
+    pub fn step(self, steps: i32) -> Band {
+        Band::ALL[(self.index() as i32 + steps).clamp(0, 2) as usize]
+    }
+
     pub fn name(self) -> &'static str {
         ["low", "mid", "high"][self.index()]
     }
@@ -296,5 +301,8 @@ mod tests {
         assert_eq!(Band::Low.next(), Band::Mid);
         assert_eq!(Band::High.next(), Band::Low);
         assert_eq!(Band::parse("mid"), Some(Band::Mid));
+        assert_eq!(Band::Low.step(1), Band::Mid);
+        assert_eq!(Band::High.step(1), Band::High);
+        assert_eq!(Band::Mid.step(-5), Band::Low);
     }
 }
