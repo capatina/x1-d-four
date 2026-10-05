@@ -296,6 +296,12 @@ try {
       await evaluate(`document.querySelector('.deck:nth-child(4)').innerText.includes('Arcadia North')`),
       'A search result can be dragged onto deck 4',
     );
+    assert(
+      await evaluate(
+        `document.querySelectorAll('.results .row').length>0 && [...document.querySelectorAll('.results .artist')].every(e=>e.textContent==='Arcadia North')`,
+      ),
+      'Search keeps its typed filter after a drop and re-root',
+    );
     await screenshot('04-search-drag-800');
     await key('Escape');
     await click('.band:nth-child(3)');

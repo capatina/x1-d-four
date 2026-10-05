@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { MediaQuery } from 'svelte/reactivity';
   import { fly } from 'svelte/transition';
   import MixerKey from '../components/MixerKey.svelte';
@@ -35,6 +35,15 @@
   );
   const loadKeys = $derived(keysFor(client.mixer, 'deck.load_selected'));
   const rootKeys = $derived(keysFor(client.mixer, 'explore.root'));
+
+  // A re-root can clear the server's filter while a dropped track is loading.
+  // Keep an open search attached to what the musician is still typing.
+  $effect(() => {
+    const remote = client.browser;
+    untrack(() => {
+      if (search.open && remote.query !== search.query) client.send({ cmd: 'browse', query: search.query });
+    });
+  });
 
   $effect(() => {
     search.input = input ?? null;
