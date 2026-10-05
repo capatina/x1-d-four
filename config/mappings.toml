@@ -9,6 +9,8 @@
 #   deck.sync                                on press: beat sync on/off (locks to the master deck)
 #   deck.loop                                on press: loop from the nearest beat (8 bars by default), press again to leave
 #   deck.loop_length                         encoder: halve/double the loop (1/8 bar .. 32 bars), live while looping
+#   deck.jog       jog/encoder: smooth nudge, amount = ms per tick (default 4); playing = speed bend,
+#                  paused = glide; a synced deck keeps the new offset against the master
 #   deck.focus                               on press (needs deck)
 #   deck.focus_step                          encoder: move the focus one deck per click (1-4); the tunnel grows from the focused deck
 #   deck.nudge     amount = seconds per press or per encoder step (default 0.01)
@@ -20,6 +22,7 @@
 #
 # Explore (the similarity tunnel):
 #   explore.cycle_band   on press: low -> mid -> high
+#   explore.band_fader   fader: left third low, middle mid, right third high
 #   explore.band_step    jog/encoder: turn right for the next band up, left for down;
 #                        amount = ticks per band step (default 8), stops at low/high
 #   explore.band         on press, amount = 0 (low), 1 (mid) or 2 (high)
@@ -38,7 +41,8 @@
 #
 #                 LEFT POD                            RIGHT POD
 # lit 1-4         load aimed track -> deck 1-4        play/pause deck 1-4
-# jog             low / mid / high band               aim between portals
+# jog             nudge the focused deck              aim between portals
+# crossfader      left low / middle mid / right high band
 # SELECT          turn: focus deck 1-4, push: fly     turn: dive/back, push: dive
 #                 the library selection
 # buttons         A low, B mid, C high band,
@@ -73,8 +77,13 @@ led = "deck.loaded"
 
 [[map]]
 control = "left.jog"
-action = "explore.band_step"
-amount = 8
+action = "deck.jog"
+amount = 4
+
+# Crossfader: left = low, middle = mid, right = high band (keep XFADE off so it only sends MIDI).
+[[map]]
+control = "xfader"
+action = "explore.band_fader"
 
 [[map]]
 control = "left.browse"

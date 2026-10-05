@@ -272,6 +272,17 @@ impl App {
         }
     }
 
+    /// A fader picks the band: left third low, middle mid, right third high.
+    /// Each region gives a little before handing over, so a fader resting on a
+    /// boundary doesn't flicker between two bands.
+    pub fn explore_band_fader(&self, value: u8) {
+        let current = self.explore.explorer.lock().unwrap().band;
+        let band = fader_band(value, current);
+        if band != current {
+            self.explore_band(band);
+        }
+    }
+
     pub fn explore_cycle_band(&self) {
         let band = self.explore.explorer.lock().unwrap().band.next();
         self.explore_band(band);
@@ -342,5 +353,37 @@ impl App {
         if f(self, &data, &mut ex, &exclude) {
             self.explore_changed(&data, &ex, reason);
         }
+    }
+}
+
+/// Band for a fader position, given the band now: three regions with a small
+/// dead zone between them where the current band holds.
+fn fader_band(value: u8, current: Band) -> Band {
+    match (value, current) {
+        (0..=37, _) => Band::Low,
+        (90..=127, _) => Band::High,
+        (48..=79, _) => Band::Mid,
+        // In a dead zone: hold, unless that's two regions away.
+        (38..=47, Band::High) => Band::Mid,
+        (80..=89, Band::Low) => Band::Mid,
+        _ => current,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fader_regions_with_dead_zones() {
+        assert_eq!(fader_band(0, Band::High), Band::Low);
+        assert_eq!(fader_band(64, Band::Low), Band::Mid);
+        assert_eq!(fader_band(127, Band::Low), Band::High);
+        // Wobbling around the low/mid boundary doesn't flicker.
+        assert_eq!(fader_band(42, Band::Low), Band::Low);
+        assert_eq!(fader_band(42, Band::Mid), Band::Mid);
+        assert_eq!(fader_band(42, Band::High), Band::Mid);
+        assert_eq!(fader_band(85, Band::Mid), Band::Mid);
+        assert_eq!(fader_band(85, Band::Low), Band::Mid);
     }
 }

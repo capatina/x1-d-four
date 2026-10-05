@@ -26,12 +26,20 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/library/rescan", post(rescan))
         .route("/api/state", get(|State(app): State<Arc<App>>| async move { Json(app.state_json()) }))
         .route("/api/decks", get(|State(app): State<Arc<App>>| async move { Json(app.decks_json()) }))
+        .route("/api/decks/{deck}/wave", get(wave))
         .route("/api/midi/recent", get(|State(app): State<Arc<App>>| async move { Json(app.midi_recent()) }))
         .route("/api/controls", get(|State(app): State<Arc<App>>| async move { Json(app.controls_json()) }))
         .route("/api/mappings", get(|State(app): State<Arc<App>>| async move { Json(app.mappings_json()) }))
         .route("/api/command", post(command))
         .fallback(static_file)
         .with_state(app)
+}
+
+async fn wave(State(app): State<Arc<App>>, axum::extract::Path(deck): axum::extract::Path<usize>) -> Response {
+    match app.deck_wave(deck) {
+        Some(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes.as_ref().clone()).into_response(),
+        None => (StatusCode::NOT_FOUND, "no track on that deck").into_response(),
+    }
 }
 
 async fn library(State(app): State<Arc<App>>) -> Json<Value> {

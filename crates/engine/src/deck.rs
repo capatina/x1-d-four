@@ -27,6 +27,11 @@ pub struct Deck {
     pub loop_len: usize,
     /// Active loop: start and end frame.
     pub looping: Option<(f64, f64)>,
+    /// Frames of jog still to glide through (smooth nudge).
+    pub jog_pending: f64,
+    /// While synced: where this deck sits relative to the master's beat, in beats
+    /// (set by jogging a synced deck; 0 = on the beat).
+    pub phase_offset: f64,
     pub trim: f32,
     pub cue: f64,
     /// Playing only while the cue button is held.
@@ -68,6 +73,8 @@ impl Deck {
         self.pending_seek = None;
         self.stop_after_seek = false;
         self.looping = None;
+        self.jog_pending = 0.0;
+        self.phase_offset = 0.0;
         std::mem::replace(&mut self.track, track)
     }
 
@@ -174,6 +181,17 @@ impl Deck {
         let len = (samples.len() / 2) as f64;
         let step = 1.0 / FADE_FRAMES;
         for o in out.iter_mut() {
+            // Jog: glide through pending frames, as a speed bend of up to 8 % while
+            // playing, at up to normal speed while paused.
+            if self.jog_pending != 0.0 {
+                let max = if self.playing { 0.08 * self.rate.abs().max(0.25) } else { 1.0 };
+                let step = self.jog_pending.clamp(-max, max);
+                self.position = (self.position + step).clamp(0.0, len);
+                self.jog_pending -= step;
+                if self.jog_pending.abs() < 1e-6 {
+                    self.jog_pending = 0.0;
+                }
+            }
             let target = if self.playing && self.pending_seek.is_none() { 1.0 } else { 0.0 };
             if self.fade < target {
                 self.fade = (self.fade + step).min(1.0);

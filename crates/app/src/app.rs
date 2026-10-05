@@ -57,6 +57,8 @@ pub enum ClientCommand {
     Loop { deck: usize },
     /// Halve (negative) or double (positive) the loop length.
     LoopLength { deck: usize, steps: i32 },
+    /// Smooth nudge by this many milliseconds of track time.
+    Jog { deck: usize, ms: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -83,6 +85,10 @@ pub(crate) struct DeckMeta {
     trim: f64,
     peaks: Vec<u8>,
     length: f64,
+    /// Detailed waveform: [low, mid, high] per `WAVE_BLOCK` frames.
+    wave: Arc<Vec<u8>>,
+    /// Beat grid in seconds: (bpm, first beat).
+    grid: Option<(f64, f64)>,
 }
 
 pub(crate) struct Ui {
@@ -330,6 +336,9 @@ impl App {
             ClientCommand::Sync { deck, on } => self.send(Command::Sync { deck: deck_ok(deck)?, on }),
             ClientCommand::Loop { deck } => self.toggle_loop(deck_ok(deck)?)?,
             ClientCommand::LoopLength { deck, steps } => self.send(Command::LoopLength { deck: deck_ok(deck)?, steps }),
+            ClientCommand::Jog { deck, ms } => {
+                self.send(Command::Jog { deck: deck_ok(deck)?, frames: ms / 1000.0 * SAMPLE_RATE as f64 })
+            }
             ClientCommand::Rescan => {
                 let app = self.clone();
                 self.runtime.spawn_blocking(move || app.rescan());
@@ -383,6 +392,10 @@ impl App {
             Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
             Intent::Loop(d) => self.toggle_loop(self.deck_or_focused(d)),
             Intent::LoopLength(d, steps) => Ok(self.send(Command::LoopLength { deck: self.deck_or_focused(d), steps })),
+            Intent::Jog(d, ms) => {
+                Ok(self.send(Command::Jog { deck: self.deck_or_focused(d), frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
+            }
+            Intent::BandFader(v) => Ok(self.explore_band_fader(v)),
         };
         if let Err(e) = result {
             self.broadcast(json!({ "type": "error", "message": e }));
@@ -443,6 +456,8 @@ impl App {
                     tracing::info!(deck, id = %track.id, secs = decoded.seconds(), grid = ?decoded.grid, took = ?started.elapsed(), "loaded");
                     let length = decoded.seconds();
                     let peaks = decoded.peaks.clone();
+                    let wave: Arc<Vec<u8>> = Arc::new(decoded.bands.iter().flatten().copied().collect());
+                    let grid = decoded.grid.map(|g| (g.bpm, g.first_beat / SAMPLE_RATE as f64));
                     app.send(Command::Load { deck, track: Some(Arc::new(decoded)) });
                     let msg = {
                         let mut ui = app.ui.lock().unwrap();
@@ -451,6 +466,8 @@ impl App {
                         meta.loading = false;
                         meta.peaks = peaks;
                         meta.length = length;
+                        meta.wave = wave;
+                        meta.grid = grid;
                         deck_loaded_json(deck, meta)
                     };
                     app.broadcast(msg);
@@ -721,7 +738,12 @@ impl App {
                     "trim": meta.trim,
                     "sync": s.sync,
                     "master": s.master,
-                    "loop": { "active": s.looping, "beats": s.loop_beats },
+                    "loop": {
+                        "active": s.looping,
+                        "beats": s.loop_beats,
+                        "start": s.loop_range.map(|r| r.0 / sr),
+                        "end": s.loop_range.map(|r| r.1 / sr),
+                    },
                     "bpm": s.bpm.map(|b| (b * s.rate * 100.0).round() / 100.0),
                 })
             })
@@ -781,6 +803,13 @@ impl App {
         out
     }
 
+    /// The detailed waveform of a loaded deck.
+    pub fn deck_wave(&self, deck: usize) -> Option<Arc<Vec<u8>>> {
+        let ui = self.ui.lock().unwrap();
+        let meta = ui.decks.get(deck)?;
+        meta.track.as_ref().map(|_| meta.wave.clone())
+    }
+
     pub fn decks_json(&self) -> Value {
         let ui = self.ui.lock().unwrap();
         json!(ui
@@ -804,6 +833,8 @@ fn deck_loaded_json(deck: usize, meta: &DeckMeta) -> Value {
         "track": meta.track,
         "length": meta.length,
         "peaks": meta.peaks,
+        "grid": meta.grid.map(|(bpm, first_beat)| json!({ "bpm": bpm, "first_beat": first_beat })),
+        "wave": { "block_frames": engine::track::WAVE_BLOCK, "blocks": meta.wave.len() / 3 },
     })
 }
 

@@ -194,3 +194,27 @@ The **aimed** child of `current` is also the library selection, so every "load s
 { cmd: "explore_root", id: string }               // re-root on any library track (follow turns off)
 { cmd: "explore_root_selected" }                  // re-root on the library selection (follow turns off)
 ```
+
+## Waveforms (the overlaid deck strip)
+
+When a track loads, the server computes a detailed three-band waveform. There is one block per 480 frames (10 ms at 48 kHz), holding the low/mid/high RMS levels, each 0..255. The splits are 250 Hz and 3 kHz.
+
+**`deck_loaded`** gains:
+```ts
+  grid: { bpm: number, first_beat: number } | null, // beat grid: tempo and first beat (seconds)
+  wave: { block_frames: number, blocks: number },    // what GET /api/decks/{n}/wave returns
+```
+
+**`GET /api/decks/{deck}/wave`** returns `application/octet-stream`: `blocks × 3` bytes, laid out as [low, mid, high] per block, in track order. A 6-minute track is about 108 KB. It returns 404 when the deck is empty.
+
+**`state.decks[]`** gains loop positions, to draw the loop region:
+```ts
+  loop: { active: boolean, beats: number, start: number | null, end: number | null }, // seconds
+```
+
+To draw a frame at 60 fps between the 30 Hz `state` messages, advance a playing deck's position by `rate × elapsed seconds`, and resync whenever a `state` message arrives. A deck's frame at track time `p` is drawn at `(p − position) / rate` seconds from now. Because of that, decks synced to the same tempo show their beats lined up.
+
+### Client → server
+```ts
+{ cmd: "jog", deck: number, ms: number }   // smooth nudge: playing = brief speed bend, paused = glide; ± milliseconds of track time
+```

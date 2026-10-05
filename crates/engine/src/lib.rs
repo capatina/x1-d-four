@@ -33,6 +33,8 @@ pub enum Command {
     Loop { deck: usize },
     /// Halve (negative) or double (positive) the loop length.
     LoopLength { deck: usize, steps: i32 },
+    /// Smooth nudge by this many frames of track time (+ = forward).
+    Jog { deck: usize, frames: f64 },
     Trim { deck: usize, gain: f32 },
     /// Raw MIDI to the mixer (LED rings), sent one byte per packet.
     MidiOut { bytes: [u8; 3], len: u8 },
@@ -59,6 +61,8 @@ pub struct DeckState {
     bpm: AtomicU64,
     looping: AtomicBool,
     loop_beats: AtomicU64,
+    loop_start: AtomicU64,
+    loop_end: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -76,6 +80,8 @@ pub struct DeckSnapshot {
     pub looping: bool,
     /// Loop length in beats (the next loop's, when not looping).
     pub loop_beats: f64,
+    /// Active loop's start and end frame.
+    pub loop_range: Option<(f64, f64)>,
 }
 
 /// Lock-free state shared between the RT thread and the control side.
@@ -117,6 +123,7 @@ impl Shared {
             bpm: Some(load(&d.bpm)).filter(|b| *b > 0.0),
             looping: d.looping.load(Ordering::Relaxed),
             loop_beats: load(&d.loop_beats),
+            loop_range: d.looping.load(Ordering::Relaxed).then(|| (load(&d.loop_start), load(&d.loop_end))),
         }
     }
 }
@@ -150,6 +157,8 @@ struct SyncState {
     master: Option<usize>,
     /// No phase snap on this deck before this packet (lets a jump land first).
     snap_hold: [u64; DECKS],
+    /// Until this packet the deck is being jogged: bend harder, never snap.
+    jog_until: [u64; DECKS],
 }
 
 /// Phase errors above this many beats are fixed with a jump, smaller ones by bending speed.
@@ -252,9 +261,23 @@ impl Rt {
                 self.decks[deck].toggle_loop();
             }
             Command::LoopLength { deck, steps } => self.decks[deck].change_loop_length(steps),
+            Command::Jog { deck, frames } => {
+                let d = &mut self.decks[deck];
+                let following = d.sync && d.playing && self.sync.master.is_some_and(|m| m != deck);
+                match d.grid() {
+                    // A synced deck keeps the nudge: move where it sits against the
+                    // master's beat and let the phase lock glide it there.
+                    Some(g) if following => {
+                        d.phase_offset += frames / g.beat_frames();
+                        self.sync.jog_until[deck] = self.sync.packets + 60;
+                    }
+                    _ => d.jog_pending += frames,
+                }
+            }
             Command::Sync { deck, on } => {
                 let d = &mut self.decks[deck];
                 d.sync = on.unwrap_or(!d.sync);
+                d.phase_offset = 0.0;
                 if !d.sync {
                     d.rate = d.base_rate;
                 }
@@ -284,6 +307,10 @@ impl Rt {
             state.playing.store(deck.playing, Ordering::Relaxed);
             state.sync.store(deck.sync, Ordering::Relaxed);
             store(&state.bpm, deck.grid().map_or(0.0, |g| g.bpm));
+            if let Some((a, b)) = deck.looping {
+                store(&state.loop_start, a);
+                store(&state.loop_end, b);
+            }
             state.looping.store(deck.looping.is_some(), Ordering::Relaxed);
             store(&state.loop_beats, deck.loop_beats());
         }
@@ -330,8 +357,12 @@ impl Rt {
                 d.rate = target;
                 continue;
             }
-            let err = (master_phase - g.phase_at(d.position) + 0.5).rem_euclid(1.0) - 0.5;
-            if err.abs() > SNAP_BEATS && s.packets >= s.snap_hold[n] {
+            let err = (master_phase + d.phase_offset - g.phase_at(d.position) + 0.5).rem_euclid(1.0) - 0.5;
+            let jogging = s.packets < s.jog_until[n];
+            if jogging {
+                // Being nudged by hand: glide there quickly (up to 8 %), no jumps.
+                d.rate = target * (1.0 + (4.0 * err).clamp(-0.08, 0.08));
+            } else if err.abs() > SNAP_BEATS && s.packets >= s.snap_hold[n] {
                 // Jump onto the beat; the fade-out/in hides it. Both decks already run
                 // at the same tempo, so the phase holds while the fade plays out.
                 d.snap(d.position + err * g.beat_frames());
@@ -505,6 +536,70 @@ mod tests {
         control.send(Command::Sync { deck: 1, on: Some(false) }).ok();
         rt.render(&mut frames);
         assert_eq!(control.shared.deck(1).rate, 1.0);
+    }
+
+    #[test]
+    fn jog_glides_paused_and_playing_decks() {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        control.send(Command::Load { deck: 0, track: Some(grid_track(120.0, 0.0)) }).ok();
+        control.send(Command::Sync { deck: 0, on: Some(false) }).ok();
+        control.send(Command::Seek { deck: 0, frame: 48_000.0 }).ok();
+        control.send(Command::Jog { deck: 0, frames: 4_800.0 }).ok();
+        rt.render(&mut frames);
+        let after_one = control.shared.deck(0).position;
+        assert!(after_one > 48_000.0 && after_one < 48_000.0 + 4_800.0, "glides, doesn't jump: {after_one}");
+        for _ in 0..80 {
+            rt.render(&mut frames);
+        }
+        assert_eq!(control.shared.deck(0).position, 52_800.0);
+        // Playing: ends up the jogged amount ahead of where it would have been.
+        control.send(Command::Play { deck: 0 }).ok();
+        for _ in 0..10 {
+            rt.render(&mut frames);
+        }
+        let base = control.shared.deck(0).position;
+        control.send(Command::Jog { deck: 0, frames: -960.0 }).ok();
+        for _ in 0..300 {
+            rt.render(&mut frames);
+        }
+        let expected = base + 300.0 * 80.0 - 960.0;
+        assert!((control.shared.deck(0).position - expected).abs() < 1.0, "{} vs {expected}", control.shared.deck(0).position);
+    }
+
+    #[test]
+    fn jogging_a_synced_deck_keeps_the_new_offset() {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        let (ga, gb) = (Grid { bpm: 124.0, first_beat: 0.0 }, Grid { bpm: 124.0, first_beat: 3_000.0 });
+        control.send(Command::Load { deck: 0, track: Some(grid_track(ga.bpm, ga.first_beat)) }).ok();
+        control.send(Command::Load { deck: 1, track: Some(grid_track(gb.bpm, gb.first_beat)) }).ok();
+        control.send(Command::Play { deck: 0 }).ok();
+        for _ in 0..100 {
+            rt.render(&mut frames);
+        }
+        control.send(Command::Play { deck: 1 }).ok();
+        for _ in 0..600 {
+            rt.render(&mut frames);
+        }
+        assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01);
+        // Nudge deck 2 a tenth of a beat ahead, in small jog ticks.
+        let tenth = gb.beat_frames() / 10.0;
+        for _ in 0..10 {
+            control.send(Command::Jog { deck: 1, frames: tenth / 10.0 }).ok();
+            rt.render(&mut frames);
+        }
+        for _ in 0..1200 {
+            rt.render(&mut frames);
+        }
+        let err = phase_error(&control, 0, 1, ga, gb);
+        assert!((err + 0.1).abs() < 0.01, "stays a tenth of a beat ahead: {err}");
+    }
+
+    #[test]
+    fn tracks_carry_a_three_band_waveform() {
+        let t = grid_track(120.0, 0.0);
+        assert_eq!(t.bands.len(), t.frames().div_ceil(track::WAVE_BLOCK));
     }
 
     #[test]

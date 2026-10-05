@@ -18,6 +18,8 @@ use crate::SAMPLE_RATE;
 
 /// Buckets in the overview waveform.
 pub const PEAK_BUCKETS: usize = 1024;
+/// Frames per block of the detailed three-band waveform (10 ms at 48 kHz).
+pub const WAVE_BLOCK: usize = 480;
 
 /// A decoded track: interleaved stereo f32 at 48 kHz.
 pub struct Track {
@@ -25,6 +27,8 @@ pub struct Track {
     pub samples: Vec<f32>,
     /// Max |sample| per bucket, 0..=255, for the overview waveform.
     pub peaks: Vec<u8>,
+    /// Low/mid/high level per `WAVE_BLOCK` frames, 0..=255, for the detailed waveforms.
+    pub bands: Vec<[u8; 3]>,
     /// Beat grid, if known: needed for sync.
     pub grid: Option<Grid>,
 }
@@ -59,7 +63,8 @@ impl Track {
     /// Build a track from 48 kHz interleaved stereo samples.
     pub fn from_samples(path: PathBuf, samples: Vec<f32>) -> Self {
         let peaks = peaks(&samples);
-        Self { path, samples, peaks, grid: None }
+        let bands = band_levels(&samples);
+        Self { path, samples, peaks, bands, grid: None }
     }
 }
 
@@ -154,6 +159,30 @@ fn resample(samples: &[f32], from: u32, to: u32) -> anyhow::Result<Vec<f32>> {
     let input = InterleavedSlice::new(samples, 2, frames).map_err(|e| anyhow!("resampler input: {e}"))?;
     let output = resampler.process_all(&input, frames, None).map_err(|e| anyhow!("resample: {e}"))?;
     Ok(output.take_data())
+}
+
+/// Three-band RMS per block, split at 250 Hz and 3 kHz with one-pole filters
+/// (the same split the live meters use), gently compressed into 0..255.
+fn band_levels(samples: &[f32]) -> Vec<[u8; 3]> {
+    let coef = |fc: f32| 1.0 - (-std::f32::consts::TAU * fc / SAMPLE_RATE as f32).exp();
+    let (a1, a2) = (coef(250.0), coef(3000.0));
+    let (mut lp1, mut lp2) = (0f32, 0f32);
+    let level = |sq: f32| ((sq / WAVE_BLOCK as f32).sqrt() * 3.0).min(1.0).powf(0.7) * 255.0;
+    samples
+        .chunks(WAVE_BLOCK * 2)
+        .map(|block| {
+            let mut sq = [0f32; 3];
+            for f in block.chunks_exact(2) {
+                let x = 0.5 * (f[0] + f[1]);
+                lp1 += a1 * (x - lp1);
+                lp2 += a2 * (x - lp2);
+                sq[0] += lp1 * lp1;
+                sq[1] += (lp2 - lp1) * (lp2 - lp1);
+                sq[2] += (x - lp2) * (x - lp2);
+            }
+            sq.map(|s| level(s).round() as u8)
+        })
+        .collect()
 }
 
 fn peaks(samples: &[f32]) -> Vec<u8> {
