@@ -115,9 +115,9 @@ const FRAME_LAYOUT: [name: string, at: string][] = [
   ['uDecks', '15.xyzw'], ['uWay', '16.xyzw'], ['uWayPrev', '17.xyzw'], ['uShadow', '18.xyzw'],
   ['uPassage', '19.xyzw'], ['uHerald', '20.xyzw'], ['uDragon', '21.xyzw'], ['uAges', '22.xyzw'],
   ['uWrapGrass', '23.xy'], ['uWrapTrees', '23.zw'], ['uWrapLife', '24.xy'], ['uWrapProps', '24.zw'],
-  ['uView', '25.xy'],
+  ['uView', '25.xy'], ['uGunwale', '26.xyzw'],
 ];
-const FRAME_VEC4 = 26;
+const FRAME_VEC4 = 27;
 const FRAME_DEFINES = FRAME_LAYOUT.map(([name, at]) => {
   const [slot, comps] = at.split('.');
   return `  #define ${name} uFrame[${slot}]${comps.length === 4 ? '' : `.${comps}`}`;
@@ -173,6 +173,8 @@ ${FRAME_DEFINES}
   uniform float uGate[8];
   uniform vec4 uLoop[4];
   uniform sampler2D uRunes;
+  // The Wayfinder floats this high over the river.
+  const float WAY_Y = 1.6;
   // Small inputs only (instance seeds, uv).
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
   // Integer hash: exact however far the course has run.
@@ -262,7 +264,8 @@ ${FRAME_DEFINES}
   float shadowAt(vec3 p) {
     if (uShadow.w <= 0.) return 0.;
     vec2 v = (p.xz - uShadow.xy) / uShadow.z;
-    return uShadow.w * (1. - smoothstep(.45, 1., length(v * vec2(1., 1.7))));
+    // An 18 × 9 ellipse with soft edges; uShadow.w is its darkness.
+    return uShadow.w * (1. - smoothstep(.3, 1., length(v * vec2(1., 2.))));
   }
   // Coverage of rune i (atlas cell) at local (u, v) in 0..1, v down.
   float rune(float i, vec2 l) {
@@ -286,6 +289,22 @@ ${FRAME_DEFINES}
       c = mix(c, uDeckColor[i] * (1.1 + .4 * uMagic), clamp(band * runes * .35 + rim * .3, 0., .6) * L.w);
     }
     return c;
+  }
+  // The vessel the Keepers stand in: the dark crescent of its bow on the water, from
+  // uGunwale.x (far edge, at the middle) to uGunwale.x + uGunwale.y (near edge), centred
+  // at x = uGunwale.z (the vessel's own, 0), its tips meeting sqrt(uGunwale.w) either
+  // side, with a 1 px pale lip along the near edge. Water only: the banks hide its tips.
+  // w is fwidth(p.z), passed in because this chunk also compiles into vertex shaders.
+  vec3 gunwale(vec3 c, vec3 p, float w) {
+    if (uGunwale.y <= 0.) return c;
+    float x2 = (p.x - uGunwale.z) * (p.x - uGunwale.z);
+    float far_ = uGunwale.x + (.003 + uGunwale.y / uGunwale.w) * x2;
+    float near_ = uGunwale.x + uGunwale.y + .003 * x2;
+    if (p.z < far_ - 1. || p.z > near_ + 1.) return c;
+    float band = smoothstep(far_ - w, far_ + w, p.z) * (1. - smoothstep(near_ - w, near_ + w, p.z));
+    float lip = (1. - smoothstep(0., w * 1.2, abs(p.z - near_))) * (1. - smoothstep(uGunwale.w * .8, uGunwale.w, x2));
+    c = mix(c, vec3(.07, .055, .04) * (.45 + .55 * uLight), band);
+    return mix(c, vec3(.72, .68, .58) * (.45 + .55 * uLight), lip * .75);
   }
   // A faint fixed grain, like paper under ink (interleaved gradient noise, no sines).
   float grain(vec2 fc) { return (fract(52.9829189 * fract(dot(floor(fc), vec2(.06711056, .00583715)))) - .5) * .02; }

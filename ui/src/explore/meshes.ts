@@ -51,7 +51,8 @@ export function makeSky(s: Shared) {
       float sd = distance(d, uSunDir);
       // Sun by day, a pale moon at night; one light only.
       col += uSun * (.2 - uNight * .14) * exp(-sd * sd * 16.);
-      float disc = 1. - smoothstep(.018 - uNight * .004, .023 - uNight * .004, sd);
+      col += uSun * (.3 - uNight * .12) * exp(-sd * sd * 900.);
+      float disc = 1. - smoothstep(.018 - uNight * .004, .03 - uNight * .006, sd);
       col = mix(col, uSun * (1.02 - uNight * .1), disc);
       // Night: stars and (late, rare) a slow aurora in the realm's accent, at most 18 %.
       if (uNight > 0.) {
@@ -127,7 +128,7 @@ export function makeLand(s: Shared) {
       c = mix(c, uAccent * (.6 + .4 * uMagic), b * .7) + uAccent * b * .25 + lanterns(vP);
       c = loopRings(c, vP);
       // The dragon's shadow is known before the dragon: it darkens through the haze.
-      gl_FragColor = vec4(fogged(c, vP) * (1. - shadowAt(vP) * .5) + grain(gl_FragCoord.xy), 1.);
+      gl_FragColor = vec4(fogged(c, vP) * (1. - shadowAt(vP)) + grain(gl_FragCoord.xy), 1.);
     }
   `,
     ),
@@ -162,8 +163,13 @@ export function makeWater(s: Shared) {
       c += uSun * .28 * pow(ripple * fine, 5.) * glint * (.4 + .6 * uLight);
       float b = beam(vP);
       c = mix(c, uAccent * (.75 + .5 * uMagic), b) + uAccent * b * .45 + lanterns(vP) * 1.5;
+      // The Wayfinder's reflection: its mirror image lies 4 to 11 units nearer the camera,
+      // broken by the ripples into a warm streak.
+      vec2 wv = vP.xz - uWay.xy;
+      float streak = exp(-wv.x * wv.x / (.08 + max(wv.y, 0.) * .015)) * smoothstep(1.5, 4.5, wv.y) * (1. - smoothstep(8., 12., wv.y));
+      c += vec3(1., .78, .5) * streak * (.3 + .7 * fine) * .6 * uWayPrev.w * uMagic;
       c = loopRings(c, vP);
-      gl_FragColor = vec4(fogged(c, vP) * (1. - shadowAt(vP) * .45), 1.);
+      gl_FragColor = vec4(gunwale(fogged(c, vP) * (1. - shadowAt(vP)), vP, fwidth(vP.z)), 1.);
     }
   `,
     ),
@@ -311,6 +317,11 @@ export function makeTrees(s: Shared) {
         float realm = realmFor(k * P - aTree.y);
         float keep = realm < .5 ? step(r3, .5) : (realm < 1.5 ? 1. : step(r3, .7));
         float h = (3. + r2 * 6.) * keep * smoothstep(0., 22., m);
+        // Near crowns part ahead of the vessel so the gates' sightlines stay clear. The
+        // outermost gates stand at z ≈ −26, x ≈ ±37 (their sightlines pass x ±26 at
+        // z = −10), so nearer than that no crown stands inside x ±46.
+        float push = max(0., 46. + h * .45 - aTree.z * x) * smoothstep(-56., -26., z);
+        x += aTree.z * push; dist += push;
         vec3 p = position; vUv = uv;
         float growth = .85 + uGrowth * .18;
         vSeed = fract(r3 * 13.7 + aTree.w);

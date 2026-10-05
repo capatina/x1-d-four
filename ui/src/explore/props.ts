@@ -330,9 +330,12 @@ export function makeProps(s: Shared) {
     void main() {
       vec3 n = flatN(vP);
       vec3 c = lit(vec3(.25, .22, .18), n);
-      // The lamp box glows warm at night: light on surfaces, no flare.
+      // The lamp box glows warm at night: light on surfaces, no flare. Its light runs down
+      // the post and catches the cap, so the lantern stands on something.
       float box = step(1.5, vY) * step(vY, 1.95);
-      c = mix(c, vec3(1., .78, .45) * (.8 + .5 * uMagic), box * vLamp * uNight);
+      vec3 warm = vec3(1., .78, .45) * (.8 + .5 * uMagic) * .6;
+      float spill = (vY < 1.5 ? exp(-(1.5 - vY) * 1.4) * .32 : exp(-(vY - 1.95) * 5.) * .45) * (1. - box);
+      c = mix(c, warm, box * vLamp * uNight) + warm * spill * vLamp * uNight;
       gl_FragColor = vec4(fogged(c, vP), 1.);
     }
   `,
@@ -395,23 +398,25 @@ export function makeDragon(s: Shared) {
         // Perched on a far crag, curled (reduced motion: no flight at all).
         return vec3(-64., 23., -190.) + vec3(sin(t * 2.4) * 3.5, cos(t * 1.7) * 1.2 - (1. - t) * 1.5, cos(t * 2.4) * 2.5);
       }
-      // Flyover: down out of the cloud behind and above, across the sky, up and away.
+      // Flyover: sideways across the sky band at a distance, behind every spire;
+      // the far form brought closer, nothing more. Never below y = 40.
       float u = clamp(t / D, 0., 1.);
       float side = seed < .5 ? 1. : -1.;
-      // From above and behind (out of sight: its shadow crosses the land first) down to
-      // the open band of sky over the horizon, then away into the haze.
-      vec3 a = vec3(90. * side, 64., 20.), b = vec3(25. * side, -4., -170.), c = vec3(-240. * side, 24., -250.);
-      return mix(mix(a, b, u), mix(b, c, u), u);
+      vec3 a = vec3(130. * side, 74., -140.), b = vec3(20. * side, 46., -230.), c = vec3(-260. * side, 30., -300.);
+      vec3 p = mix(mix(a, b, u), mix(b, c, u), u);
+      p.y = max(p.y, 40.);
+      return p;
     }
     void main() {
       float t = uDragon.y;
       float s = aDragon.x, side = aDragon.y, part = aDragon.z;
       float mode = uDragon.x;
-      float scale = mode < 1.5 ? 3. : (mode > 2.5 ? .8 : 2.);
+      float scale = mode < 1.5 ? 3. : (mode > 2.5 ? .8 : 1.2);
       float lag = mode > 2.5 ? 1. : 15. * scale / (mode < 1.5 ? 12. : 18.);
       vec3 c = path(t - s * lag);
       vec3 c2 = path(t - min(1., s + .04) * lag);
-      c.y += sin(s * 7. - t * 2.6 * uMotion) * .9 * scale * s * step(mode, 2.5);
+      // Sinuous: two waves along the body, travelling back.
+      c.y += sin(s * 12.566 - t * 2.6 * uMotion) * 2.2 * scale * smoothstep(0., .25, s) * step(mode, 2.5);
       vec4 v0 = modelViewMatrix * vec4(c, 1.);
       vec4 v1 = modelViewMatrix * vec4(c2, 1.);
       vec2 dir = normalize(v0.xy - v1.xy + vec2(1e-4, 0.));
@@ -429,10 +434,11 @@ export function makeDragon(s: Shared) {
         world = sh;
         mv = modelViewMatrix * vec4(sh, 1.);
         float wing = part < 1.5 ? 1. : -1.;
-        float beat = mode > 2.5 ? -.7 : sin(uBar * 6.2832) * uMotion;
+        // Once per bar, fast down and slow up.
+        float beat = mode > 2.5 ? -.7 : (1. - 2. * pow(fract(uBar), .4)) * uMotion;
         vec2 out_ = normalize(perp * wing + vec2(0., .2 + beat * .7));
         float along = s, span = side;
-        float spanLen = (mode > 2.5 ? 3.5 : 10.) * scale;
+        float spanLen = (mode > 2.5 ? 2.5 : 7.) * scale;
         mv.xy += out_ * span * spanLen;
         mv.xy += -dir * ((along - .25) * 5.5 * (1. - span * .45) + span * 3.2) * scale;
         vWing = vec2(along, span);
@@ -450,22 +456,23 @@ export function makeDragon(s: Shared) {
     varying vec3 vP;
     void main() {
       if (vPart > .5) {
-        // Membrane: finger bones end in points; the skin between them sags.
-        float finger = 1. - abs(fract(vWing.y * 3. + .15) - .5) * 2.;
-        float edge = .32 + .62 * pow(finger, 2.2) * (1. - vWing.y * .35);
-        if (vWing.x > edge || vWing.y < .03) discard;
+        // Membrane: four finger bones ending in points, the skin between them sagging half
+        // the chord; a thumb crook on the leading edge near the wrist.
+        float finger = 1. - abs(fract(vWing.y * 4. + .12) - .5) * 2.;
+        float edge = .5 + .5 * pow(finger, 2.) * (1. - vWing.y * .3);
+        float thumb = smoothstep(.06, 0., abs(vWing.x - .1)) * smoothstep(.04, 0., abs(vWing.y - .36));
+        if ((vWing.x > edge && thumb < .5) || vWing.y < .03) discard;
       } else if (vT < .03 && abs(vSide) > .45 + vT * 18.) discard;
       vec3 d = normalize(vP - cameraPosition);
       // Mostly behind cloud: the same cover as the sky in this direction.
       vec2 cp = d.xz / max(.12, d.y) * 2.2 + vec2(uTime * .002 * uMotion, -uCourse * .0006);
       float clouds = snoise(cp) * .65 + snoise(cp * 2.8) * .35;
-      float cover = smoothstep(.5, .74, clouds) * smoothstep(.03, .25, d.y) * .85;
-      // A silhouette in the fog's own colour × 0.45, unlit.
-      vec3 c = uHaze * .45;
-      float far = 1. - exp(-max(0., length(vP - cameraPosition) - 60.) * uFog * .5);
-      c = mix(c, uHaze, far * .6);
-      vec3 cloud = mix(mix(vec3(.93, .91, .82), uSun, .3) * (.55 + .45 * uLight), uHaze * 1.1, uNight * .6);
-      gl_FragColor = vec4(mix(c, cloud, cover), 1.);
+      float cover = smoothstep(.5, .74, clouds) * smoothstep(.03, .25, d.y);
+      // Lighter than the cloud it crosses, and only partly there: dithered coverage of
+      // 0.7 in the gaps, 0.4 in the noise, nothing behind cover.
+      float coverage = mix(.7, .4, clouds) * (1. - cover);
+      if (coverage < fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(.06711056, .00583715))))) discard;
+      gl_FragColor = vec4(mix(uHaze, uZenith, .55), 1.);
     }
   `,
       side: THREE.DoubleSide,

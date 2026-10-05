@@ -6,20 +6,24 @@ export { ATLAS_CELL, ATLAS_COLS, ATLAS_ROWS, RUNES, SIGIL_CELL, SIGIL_PATHS, run
 /** Keeper cells: 4 hooded figures seen from behind, 128 × 192 each. */
 export const KEEPER_W = 128;
 export const KEEPER_H = 192;
-/** Where each Keeper's hand holds the pole (cell px), and which side it reaches to. */
-export const KEEPER_HANDS = [
-  [95, 96],
-  [33, 100],
-  [97, 101],
-  [31, 95],
+/** Per figure: the side the lantern arm reaches to, hood top, hem half-width, lean (cell px). */
+const KEEPER_FORMS = [
+  [1, 36, 24, 1],
+  [-1, 40, 22, -2],
+  [1, 38, 26, 0],
+  [-1, 35, 23, 2],
 ] as const;
+/** Where each Keeper's hand holds the pole: out at shoulder height (cell px). */
+export const KEEPER_HANDS = KEEPER_FORMS.map(([side, head]) => [64 + side * 31, head + 44] as const);
+/** Figure height in the cell (hood top to hem), for sizing them on screen. */
+export const KEEPER_FIGURE = 150 / KEEPER_H;
 
 let keepers: HTMLCanvasElement | null = null;
 
 /**
- * Four Keepers: hooded cloaks from behind, one arm out to the lantern pole.
- * No faces, no hats. Red = cloak shade, green = the rim the lantern lights,
- * alpha = coverage; the shader adds pole, lantern and light.
+ * Four Keepers: hooded cloaks from behind, slim (1 : 3.2), one arm out to the
+ * lantern pole. No faces, no hats. Red = cloak shade, green = the rim the
+ * lantern lights, alpha = coverage; the shader adds pole, lantern and light.
  */
 export function keeperAtlas(): HTMLCanvasElement {
   if (keepers) return keepers;
@@ -31,40 +35,40 @@ export function keeperAtlas(): HTMLCanvasElement {
   const r = random(4021);
   for (let k = 0; k < 4; k++) {
     const ox = k * KEEPER_W;
+    const [side, head, hem, lean] = KEEPER_FORMS[k];
     const [hx, hy] = KEEPER_HANDS[k];
-    const side = hx > KEEPER_W / 2 ? 1 : -1;
-    const cx = ox + 64 + (r() - 0.5) * 6;
-    const head = 34 + r() * 10;
-    const shoulder = 24 + r() * 5;
-    const hem = 33 + r() * 8;
-    const lean = (r() - 0.5) * 6;
+    const cx = ox + 64;
+    const sh = 19;
+    const foot = 186;
     const body = new Path2D();
-    // Hood: a soft peak that falls to the shoulders.
-    body.moveTo(cx + lean * 0.4, head);
-    body.bezierCurveTo(cx + 15, head + 2, cx + 18, head + 22, cx + shoulder * 0.62, head + 36);
-    body.bezierCurveTo(cx + shoulder, head + 40, cx + shoulder + 3, head + 52, cx + shoulder + 4, head + 64);
-    // Cloak to a ragged hem.
-    body.bezierCurveTo(cx + hem - 2, 130, cx + hem + 2, 168, cx + hem, 186);
-    const teeth = 7;
+    // Hood: a soft peak, falling to narrow shoulders from head + 28.
+    body.moveTo(cx + lean, head);
+    body.bezierCurveTo(cx + 11, head + 1, cx + 13, head + 18, cx + sh * 0.7, head + 28);
+    body.quadraticCurveTo(cx + sh, head + 31, cx + sh, head + 40);
+    // The cloak falls straight, flaring only below head + 90.
+    body.lineTo(cx + sh + 1, head + 90);
+    body.bezierCurveTo(cx + sh + 2, head + 110, cx + hem - 2, foot - 30, cx + hem, foot);
+    const teeth = 6;
     for (let t = 1; t <= teeth; t++) {
-      const x = cx + hem - ((2 * hem) * t) / teeth;
-      body.lineTo(x + (r() - 0.5) * 5, 186 - (t % 2) * (3 + r() * 5));
+      const x = cx + hem - (2 * hem * t) / teeth;
+      body.lineTo(x + (r() - 0.5) * 3, foot - (t % 2) * (2 + r() * 3));
     }
-    body.bezierCurveTo(cx - hem - 2, 168, cx - hem + 2, 130, cx - shoulder - 4, head + 64);
-    body.bezierCurveTo(cx - shoulder - 3, head + 52, cx - shoulder, head + 40, cx - shoulder * 0.62, head + 36);
-    body.bezierCurveTo(cx - 18, head + 22, cx - 15, head + 2, cx + lean * 0.4, head);
+    body.bezierCurveTo(cx - hem + 2, foot - 30, cx - sh - 2, head + 110, cx - sh - 1, head + 90);
+    body.lineTo(cx - sh, head + 40);
+    body.quadraticCurveTo(cx - sh, head + 31, cx - sh * 0.7, head + 28);
+    body.bezierCurveTo(cx - 13, head + 18, cx - 11, head + 1, cx + lean, head);
     body.closePath();
-    // The arm reaching out to the pole.
+    // The arm out to the pole, at shoulder height.
     const arm = new Path2D();
-    const sx = cx + side * (shoulder - 2),
-      sy = head + 46;
-    arm.moveTo(sx, sy - 6);
-    arm.quadraticCurveTo(sx + side * 14, sy - 4, ox + hx, hy - 5);
-    arm.lineTo(ox + hx + side * 2, hy + 5);
-    arm.quadraticCurveTo(sx + side * 10, sy + 12, sx - side * 4, sy + 14);
+    const sx = cx + side * (sh - 3),
+      sy = head + 36;
+    arm.moveTo(sx, sy - 4);
+    arm.quadraticCurveTo(sx + side * 9, sy - 2, ox + hx, hy - 4);
+    arm.lineTo(ox + hx + side * 1, hy + 4);
+    arm.quadraticCurveTo(sx + side * 6, sy + 10, sx - side * 3, sy + 12);
     arm.closePath();
-    // Shade (red): darker low and away from the lantern; rim (green) on the lantern's side.
-    const shade = g.createLinearGradient(ox, 40, ox, 190);
+    // Shade (red), darker low; rim (green) on the lantern's side.
+    const shade = g.createLinearGradient(ox, head, ox, foot);
     shade.addColorStop(0, 'rgb(150,0,0)');
     shade.addColorStop(1, 'rgb(70,0,0)');
     g.fillStyle = shade;
@@ -79,17 +83,17 @@ export function keeperAtlas(): HTMLCanvasElement {
     rim.addColorStop(1, 'rgba(0,0,0,1)');
     g.fillStyle = rim;
     g.fillRect(ox, 0, KEEPER_W, KEEPER_H);
-    // A fold or two in the cloak.
+    // A back seam catching the light, and a fold.
+    g.fillStyle = 'rgba(70,0,0,1)';
+    g.fillRect(cx - 0.8 + lean * 0.3, head + 30, 1.6, foot - head - 34);
     g.globalCompositeOperation = 'source-atop';
     g.strokeStyle = 'rgba(40,0,0,0.9)';
-    g.lineWidth = 3;
-    for (let f = 0; f < 2; f++) {
-      const fx = cx + (r() - 0.5) * hem;
-      g.beginPath();
-      g.moveTo(fx, head + 60);
-      g.quadraticCurveTo(fx + (r() - 0.5) * 10, 140, fx + (r() - 0.5) * 14, 186);
-      g.stroke();
-    }
+    g.lineWidth = 2.5;
+    const fx = cx - side * (6 + r() * 6);
+    g.beginPath();
+    g.moveTo(fx, head + 70);
+    g.quadraticCurveTo(fx - side * 2, 150, fx - side * 5, foot);
+    g.stroke();
     g.restore();
     g.save();
     g.globalCompositeOperation = 'lighter';

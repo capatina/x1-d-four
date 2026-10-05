@@ -117,14 +117,17 @@ async function click(selector: string) {
   await Bun.sleep(300);
 }
 /** WebP, modest: full frames at q72, sequences at half size. */
-async function screenshot(name: string, opts: { half?: boolean; clip?: { x: number; y: number; width: number; height: number } } = {}) {
+async function screenshot(
+  name: string,
+  opts: { half?: boolean; scale?: number; clip?: { x: number; y: number; width: number; height: number } } = {},
+) {
   await evaluate(`document.querySelector('.stats')?.style.setProperty('visibility','hidden')`);
   const metrics = await evaluate<{ w: number; h: number }>(`({w: innerWidth, h: innerHeight})`);
   const clip = opts.clip ?? (opts.half ? { x: 0, y: 0, width: metrics.w, height: metrics.h } : undefined);
   const r = await c.call('Page.captureScreenshot', {
     format: 'webp',
     quality: opts.half ? 70 : 72,
-    ...(clip ? { clip: { ...clip, scale: opts.half ? 0.5 : 1 } } : {}),
+    ...(clip ? { clip: { ...clip, scale: opts.scale ?? (opts.half ? 0.5 : 1) } } : {}),
   });
   await Bun.write(`${out}/${name}.webp`, Buffer.from(r.data, 'base64'));
   await evaluate(`document.querySelector('.stats')?.style.removeProperty('visibility')`);
@@ -457,16 +460,20 @@ try {
       await qa(`setMinutes(${minutes})`);
       await Bun.sleep(2200);
       await screenshot(`11-age-${name}-1080`);
+      // The Keepers at night, twice size: slim cloaks, lanterns at the shoulder with their
+      // pools on the bank, the master's crooked staff and gem, the vessel's bow behind them.
+      if (name === 'night') await screenshot('19-keepers-closeup-1080', { clip: { x: 140, y: 560, width: 840, height: 220 }, scale: 2 });
     }
     await qa('setMinutes(25)');
 
     // The dragon: shadow first, body second; and its far form at the horizon.
     await qa('freeze()');
-    await qa(`dragon('flyover')`);
+    // Seed 0.75: it enters on the left and leaves on the right, between the outer labels.
+    await qa(`dragon('flyover', 0.75)`);
     await qa('advance(3200)');
     await Bun.sleep(100);
     await screenshot('12-dragon-shadow-1080');
-    await qa('advance(5600)');
+    await qa('advance(8300)');
     await Bun.sleep(100);
     await screenshot('13-dragon-flyover-1080');
     await qa('resume()');

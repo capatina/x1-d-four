@@ -10,20 +10,21 @@ same: earthy, painterly and contemplative, never kitsch and never neon.
 
 ## The realm
 
-You ride **the Current** in a vessel you never see. The river forks ahead
-toward **spires** on floating shards of rock, and each spire is a track similar
-to the one you stand on.
+You ride **the Current** in a vessel: only its bow shows, a dark crescent on
+the water behind the Keepers. The river forks ahead toward **spires** on
+floating shards of rock, and each spire is a track similar to the one you
+stand on.
 
 Each part of the realm stands for something in the music:
 
 | In the realm | Means | Driven by |
 |---|---|---|
-| A spire on a floating shard, a rune-ring **gate** at its foot | a candidate track; its lit window band is its similarity | `explore.nodes` |
+| A spire (broch, needle or ruin) on a floating shard, a **gate** arc at its foot | a candidate track; its lit window band is its similarity | `explore.nodes` |
 | Six **routes** (causeway, planks or pale slabs) from the river to the gates | current's children, in the server's order | `explore` |
-| The **Wayfinder** lantern's beam, a lit ley line, a ring that ignites | the aimed route; nothing moves to the front | `explore.aim` |
+| The **Wayfinder** lantern's beam, a lit ley line, a gate that closes and ignites | the aimed route; nothing moves to the front | `explore.aim` |
 | Passing under the aimed gate into new country | loading the aimed track (a **commit**) | `reason: "commit"` |
 | The same passage, with the land beyond misted | a **scout** (button M) | `reason: "dive"` |
-| Small far spires in the haze beyond each gate | grandchildren | `explore.nodes` |
+| Small far spires scattered in the haze beyond each gate | grandchildren | `explore.nodes` |
 | The **Lowmarch** (ochre moor), the **Greenwold** (old wood), the **Highreach** (pale fells) | the low, mid and high band | `explore.band` |
 | Four hooded **Keepers** at the bow, lanterns in deck colours | decks 1–4 | `state.decks`, `viz.decks` |
 | The Keeper with the staff and gem | the master deck | `master` |
@@ -35,6 +36,60 @@ Each part of the realm stands for something in the music:
 
 Lore lives only in place names and captions. The legend still says aim, dive
 and band.
+
+## Finish
+
+After Fable's first review of the build:
+
+- **Spires.**
+  - Each is 0.7–1.35 times the base height, from a hash of the track id.
+  - The silhouette comes from the same hash: 45 % brochs, 30 % needles
+    (radius 0.55, apex 8.6, no ledge) and 25 % ruins (top tier and cap gone,
+    the second tier's top ragged, no window).
+  - The window band sits at 50–75 % of the tower and is 0.25–0.5 units tall.
+    Unaimed windows glow at 55 %; only the aimed one burns full.
+  - Grandchildren stand 12–40 units beyond their child, x ± 4, and half of
+    them are ruins.
+- **Depth.** Spire fog is 0.005 near and 0.008 beyond z = −100, and ×1.6 on
+  grandchildren. That makes three planes: the near land, the gates, and the
+  far spires.
+- **The sun** keeps to the right edge, in the top fifth of the frame, until
+  dusk: never behind slot 0, and clear of slot 5's label even when it is
+  aimed and grows upward. Its disc is soft (`smoothstep(0.018, 0.03)`) with a
+  halo.
+- **Near trees part ahead of the vessel.** Nearer than z = −26, no crown
+  stands within x ± 46, so the gates' sightlines stay clear.
+- **Gates.** An unaimed gate is a 1.5 px hairline in the haze at 18 % alpha:
+  a 270° arc, open at the bottom where its route enters. Only the aimed gate
+  closes, and its band of runes ignites.
+- **Routes.** A lit route is 0.22 units wide, soft over its outer quarter,
+  70 % alpha, coloured `mix(accent, haze, 0.3)`, with flow dashes at 40 %
+  contrast.
+- **The Wayfinder** is twice its first size, antialiased, in a warm halo three
+  times its size at 0.2. Its reflection is a broken streak on the water, and
+  it bobs ± 0.1.
+- **Keepers.**
+  - Slim cloaks at 1 : 3.2, drawn 100–115 px tall at 1080p.
+  - Shoulders 19 px wide from head + 28, a hem of 22–26 px flaring only below
+    head + 90, and a back-seam highlight.
+  - Lanterns hang at shoulder height and lay a pool on the bank beyond the
+    bow: radius 2, the deck's colour at 0.35.
+  - The master's staff is 2.5 px with a crook, and its 6 px gem carries a
+    reflection streak.
+- **The dragon.**
+  - It crosses at a distance over 14 s, from (130, 74, −140) through
+    (20, 46, −230) toward (−260, 30, −300), mirrored at random. It never
+    flies below y = 40, so it stays in the sky band behind every spire.
+  - Scale 1.2, wingspan 7 × scale.
+  - It is lighter than the cloud it crosses (`mix(haze, zenith, 0.55)`), with
+    dithered coverage of 0.7 in the gaps and 0.4 in the cloud, and none
+    behind cover.
+  - Its body undulates two waves along its length (2.2 × scale). Each wing
+    has four fingers with scallops half the chord deep, and a thumb crook.
+  - The beat is fast down, slow up: `1 − 2·pow(fract(bar), 0.4)`.
+  - Its shadow, a soft 18 × 9 ellipse at 0.22, leads the body by 2 s.
+- **Shrine lanterns** light their own post and cap, at 0.6 of their former
+  intensity.
 
 ## Travel
 
@@ -77,7 +132,8 @@ values.
   - The heading swings toward the taken route (±22°, fastest at frame 0, level
     by 300 ms).
   - A stone arch sweeps over the camera. As it passes, at about 110 ms, the
-    vignette edge brightens in the realm's hot colour.
+    outer 12 % of the frame brightens in the realm's hot colour (at most
+    20 %).
   - The course surges ×6.
   - The old labels slide out while the new ones rise 8 px; the label layer
     rides the swing.
@@ -120,7 +176,12 @@ timing, ticks, loop brackets and focused fill. Only its frame changed:
 - Each deck's number badge carries its **sigil** (◆ ▲ ● ■), from the same rune
   atlas the gates and loop rings use. The sigils also appear on the HUD cards
   and the Keepers' lanterns.
-- Loop brackets end in rune ticks.
+- The lead deck's bands are 75 % (low), 60 % (mid) and 45 % (high) opaque,
+  so the river shows through.
+- Below the waterline, the reflection is tinted half way to the water.
+- The sigils are 9 px, in deck colour.
+- Loop brackets have 2 px arms, and an 8 px rune stands on the lower ruler at
+  each end.
 
 The deck colours are lapis, amber, moonstone and heather. Identity survives
 colour-vision deficiencies through pattern, sigil, number and lightness.
@@ -161,6 +222,22 @@ Astra's valley is the ground this stands on:
   hidden behind the waveform strip.
 - **Gates** are rune rings hovering at the shard's tip, so passing hills
   never bury them.
+- **The dragon's path** ends at y = 30 in the review, which conflicts with
+  "never below y = 40". The flight is clamped at 40, so its last third
+  levels out.
+- **The vessel's bow** is not at a fixed z = 10–13, which lies behind the
+  deck cards at 1080p (z = 10 projects to y ≈ 990). It is cast from the
+  Keepers' screen rows onto the water instead: its far edge 28 % of the way
+  up their figures, its near edge 12 % (about z = −12 to −9 at 1080p).
+  There the river is only about ± 9 wide, so the tips meet at most 10 units
+  either side (less where it narrows) and the banks hide them when the river
+  bends. Keepers 2 and 3 stand at its ends; 1 and 4 stand on the banks, where
+  their lantern pools fall.
+- **Near trees** keep out of x ± 46 nearer than z = −26, not ± 26 at
+  z > −20. The outer gates' sightlines pass x ± 26 at z = −10, so the
+  narrower clearing parked crowns right on them.
+- **The loop rune** stands on the lower ruler. "Above the ruler" at the top
+  would be off the canvas.
 - **Keepers' lanterns** swing on each deck's own beat grid, including the
   master's, rather than `viz.beat`. The mixer's MIDI clock isn't phase-locked
   to the master deck, and the grid keeps synced decks visibly together.

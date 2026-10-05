@@ -4,7 +4,7 @@ import { DECK_COLORS } from '../lib/decks';
 import type { ExploreMsg, ExploreNode, Track } from '../lib/protocol';
 import type { VizFrame } from '../lib/viz';
 import { waves } from '../lib/waves';
-import { keeperAtlas, runeAtlas } from './atlas';
+import { KEEPER_FIGURE, keeperAtlas, runeAtlas } from './atlas';
 import { Labels, type Obstacle } from './labels';
 import { makeGrass, makeLand, makeLife, makeSky, makeTrees, makeWater, type Wrapped } from './meshes';
 import { AGES, BAND_PALETTE, REALM_SHADER } from './palette';
@@ -18,10 +18,10 @@ import {
   MAX_CHILDREN,
   MAX_GRANDS,
   ROUTE_SEGMENTS,
-  SPIRE_TOP,
+  SPIRE_TOPS,
   TAKEN_SLOT,
 } from './realm';
-import { framePacker, hashString, hexInto, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW } from './shared';
+import { framePacker, hashString, hexInto, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW, widthAt } from './shared';
 
 export type EngineStats = {
   fps: number;
@@ -97,11 +97,15 @@ const AGE_KEYS: [number, number][] = [
   [146, 3],
   [154, 4],
 ];
-/** Sun (or moon) directions for dawn, day, dusk and night. */
+/**
+ * Sun (or moon) directions for dawn, day, dusk and night. Until dusk the sun keeps to
+ * the right edge, in the top fifth of the frame, clear of the labels (even an aimed
+ * slot-5 label growing upward) and never behind slot 0 (left).
+ */
 const SUN_DIRS = [
-  [-0.62, 0.16, -0.77],
-  [-0.45, 0.4, -0.8],
-  [0.58, 0.13, -0.8],
+  [0.6, 0.28, -0.75],
+  [0.58, 0.31, -0.75],
+  [0.62, 0.13, -0.77],
   [0.34, 0.36, -0.87],
 ] as const;
 const FLYOVER_COOLDOWN = 180_000;
@@ -326,6 +330,7 @@ export class ExploreEngine {
         uDragon: { value: this.#dragon.dragon },
         uAges: { value: this.#props.ages },
         uView: { value: this.#keepers.view },
+        uGunwale: { value: this.#gunwale },
       },
       s.uFrame.value,
     );
@@ -462,7 +467,7 @@ export class ExploreEngine {
         [
           { opacity: 0, offset: 0 },
           { opacity: 0, offset: 0.27 },
-          { opacity: 0.35, offset: 0.42 },
+          { opacity: 0.2, offset: 0.42 },
           { opacity: 0, offset: 1 },
         ],
         { duration: 260, easing: 'linear' },
@@ -482,7 +487,35 @@ export class ExploreEngine {
   setKeepers(xs: ArrayLike<number>, baseY: number) {
     for (let i = 0; i < 4; i++) this.#keeperX[i] = xs[i] ?? 0;
     this.#keeperBase = baseY;
+    this.#placeVessel();
   }
+
+  /** Keepers 100–115 px tall at 1080p, in proportion elsewhere. */
+  #figure() {
+    return Math.round(Math.max(64, Math.min(115, this.#height * 0.1)));
+  }
+
+  /**
+   * The vessel they stand in: its bow crosses the water behind their legs, from 28 % up
+   * their figures (far edge) to 12 % (near edge), found by casting those screen rows onto
+   * the water.
+   */
+  #placeVessel() {
+    if (!this.#keeperBase) return;
+    const far = this.#waterZ(this.#keeperBase - this.#figure() * 0.28);
+    const near = this.#waterZ(this.#keeperBase - this.#figure() * 0.12);
+    // The tips stay on the water: 10 units either side, less where the river narrows.
+    const tip = Math.min(10, widthAt(far) - 1.5);
+    this.#gunwale.set(far, Math.max(0.4, near - far), this.#gunwale.z, tip * tip);
+  }
+  #waterZ(y: number) {
+    this.#rest.updateMatrixWorld();
+    this.#point.set(0, 1 - (2 * y) / this.#height, 0.5).unproject(this.#rest).sub(CAMERA).normalize();
+    const t = (-0.05 - CAMERA.y) / Math.min(-1e-3, this.#point.y);
+    return CAMERA.z + this.#point.z * t;
+  }
+  /** The bow: far-edge z, depth, centre x (the vessel's, 0), tip half-width squared. */
+  readonly #gunwale = new THREE.Vector4(0, 0, 0, 100);
 
   /** Aim from a local input (keys, wheel, click): lit in this event, reconciled by the server's echo. */
   aimLocal(target: number | string) {
@@ -632,7 +665,8 @@ export class ExploreEngine {
     this.#rest.updateProjectionMatrix();
     this.#rest.updateMatrixWorld();
     for (let i = 0; i < this.#children.length; i++) {
-      const top = SPIRE_Y + SPIRE_TOP * SPIRE_SCALE * this.#heightOf(this.#children[i].id);
+      const id = this.#children[i].id;
+      const top = SPIRE_Y + SPIRE_TOPS[this.#kindOf(id, false)] * SPIRE_SCALE * this.#heightOf(id);
       this.#slotTop[i] = top;
       this.#point.set(this.#slotX[i], top, this.#slotZ[i]).project(this.#rest);
       this.#anchors[i * 2] = (this.#point.x * 0.5 + 0.5) * this.#width;
@@ -644,8 +678,23 @@ export class ExploreEngine {
   }
 
   #heightOf(id: string) {
-    return 0.86 + hashString(`${id}#h`) * 0.3;
+    return 0.7 + hashString(`${id}#h`) * 0.65;
   }
+
+  /** Silhouette: 0 broch (45 %), 1 needle (30 %), 2 ruin (25 %); half the far spires are ruins. */
+  #kindOf(id: string, grand: boolean) {
+    if (grand && hashString(`${id}#r`) < 0.5) return 2;
+    const k = hashString(`${id}#k`);
+    return k < 0.45 ? 0 : k < 0.75 ? 1 : 2;
+  }
+
+  /** A grandchild's place: scattered in depth beyond its child, a little to either side. */
+  #grandAt(i: number, j: number, count: number, id: string, out: Float32Array) {
+    const o = j - (count - 1) / 2;
+    out[0] = this.#slotX[i] + o * 4.6 + (hashString(`${id}#x`) - 0.5) * 8;
+    out[1] = this.#slotZ[i] - 12 - hashString(`${id}#z`) * 28;
+  }
+  readonly #grand = new Float32Array(2);
 
   #layoutLabels() {
     if (!this.#labels.items.length) return;
@@ -659,7 +708,7 @@ export class ExploreEngine {
     for (let i = 0; i < n; i++) {
       const c = this.#children[i];
       spire.set([this.#slotX[i], SPIRE_Y, this.#slotZ[i], SPIRE_SCALE], k * 4);
-      info.set([hashString(c.id), c.sim, i, this.#heightOf(c.id)], k * 4);
+      info.set([hashString(c.id), c.sim, i + 32 * this.#kindOf(c.id, false), this.#heightOf(c.id)], k * 4);
       k++;
       const bill = this.#bills.bill;
       bill[i * 4] = this.#slotX[i];
@@ -673,9 +722,9 @@ export class ExploreEngine {
       const grands = this.#grandsOf(msg, this.#children[i].id);
       for (let j = 0; j < grands.length && k < MAX_CHILDREN + MAX_GRANDS; j++) {
         const g = grands[j];
-        const o = j - (grands.length - 1) / 2;
-        spire.set([this.#slotX[i] + o * 4.6, GRAND_Y, this.#slotZ[i] - 20 - Math.abs(o) * 5, GRAND_SCALE], k * 4);
-        info.set([hashString(g.id), g.sim, 8 + i, this.#heightOf(g.id)], k * 4);
+        this.#grandAt(i, j, grands.length, g.id, this.#grand);
+        spire.set([this.#grand[0], GRAND_Y, this.#grand[1], GRAND_SCALE], k * 4);
+        info.set([hashString(g.id), g.sim, 8 + i + 32 * this.#kindOf(g.id, true), this.#heightOf(g.id)], k * 4);
         k++;
       }
     }
@@ -700,18 +749,16 @@ export class ExploreEngine {
     const r = this.#routes;
     let seg = 0;
     const n = this.#children.length;
-    for (let i = 0; i < n; i++) seg = this.#route(seg, i, 0, 9, this.#slotX[i], this.#slotZ[i], ROUTE_SEGMENTS, 1.25, 1.6);
+    for (let i = 0; i < n; i++) seg = this.#route(seg, i, 0, 9, this.#slotX[i], this.#slotZ[i], ROUTE_SEGMENTS, 0.5, 1.6);
     // The taken route keeps its own place in the buffer (full light, fading over the passage).
     seg = Math.max(seg, this.#takenAt(n));
-    if (this.#takenSlot >= 0) this.#route(seg, TAKEN_SLOT, 0, 9, this.#passX, this.#passZ, ROUTE_SEGMENTS, 1.25, 1.6);
+    if (this.#takenSlot >= 0) this.#route(seg, TAKEN_SLOT, 0, 9, this.#passX, this.#passZ, ROUTE_SEGMENTS, 0.5, 1.6);
     seg += ROUTE_SEGMENTS;
     for (let i = 0; i < n; i++) {
       const grands = this.#grandsOf(msg, this.#children[i].id);
       for (let j = 0; j < grands.length; j++) {
-        const o = j - (grands.length - 1) / 2;
-        const gx = this.#slotX[i] + o * 4.6,
-          gz = this.#slotZ[i] - 20 - Math.abs(o) * 5;
-        seg = this.#route(seg, 8 + i, this.#slotX[i], this.#slotZ[i] - 1.5, gx, gz, GRAND_SEGMENTS, 0.5, 1);
+        this.#grandAt(i, j, grands.length, grands[j].id, this.#grand);
+        seg = this.#route(seg, 8 + i, this.#slotX[i], this.#slotZ[i] - 1.5, this.#grand[0], this.#grand[1], GRAND_SEGMENTS, 0.35, 1);
       }
     }
     r.mesh.geometry.setDrawRange(0, seg * 6);
@@ -1025,14 +1072,18 @@ export class ExploreEngine {
         this.#ages();
         for (let i = 0; i < 3; i++) this.#ageCourse[i] = this.#shared.uAge.value >= i + 0.5 ? -1e9 : 1e9;
       },
-      /** Force the dragon: 'far', 'flyover', 'perch' or 'drop' (the full drop, as if earned). */
-      dragon: (what: 'far' | 'flyover' | 'perch' | 'drop') => {
+      /**
+       * Force the dragon: 'far', 'flyover', 'perch' or 'drop' (the full drop, as if earned).
+       * `seed` (0..1) fixes its side and variant for repeatable captures.
+       */
+      dragon: (what: 'far' | 'flyover' | 'perch' | 'drop', seed?: number) => {
         if (what === 'drop') {
           this.#lastFlyover = -1e9;
           this.#flownRoot = null;
           this.#drop(this.#now());
         } else this.#startDragon(what === 'far' ? 1 : what === 'perch' ? 3 : 2);
         if (what === 'far') this.#buildUp = true;
+        if (seed !== undefined) this.#dragonSeed = seed;
       },
       /** Diagnostics: show or hide one scene mesh (by index) to price it. */
       meshes: () => this.#scene.children.map((m, i) => `${i}:${(m as THREE.Mesh).geometry?.type}:${m.renderOrder}`),
@@ -1197,12 +1248,14 @@ export class ExploreEngine {
     const s = this.#shared;
     const st = waves.state;
     const K = this.#keepers;
-    const height = Math.round(Math.max(54, Math.min(92, this.#height * 0.082)));
+    const height = Math.round(this.#figure() / KEEPER_FIGURE);
     const kLevel = 1 - Math.exp(-dt / 0.15);
     const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
     const aspect = this.#width / this.#height;
     const reach = 2 * (CAMERA.z - POOL_Z) * Math.tan((FOV * Math.PI) / 360) * aspect;
     const riverX = riverW(POOL_Z - this.#course) - s.uRiver0.value;
+    const poolZ = this.#gunwale.y > 0 ? this.#gunwale.x - 2.5 : POOL_Z;
+    const poolReach = 2 * (CAMERA.z - poolZ) * Math.tan((FOV * Math.PI) / 360) * aspect;
     for (let i = 0; i < 4; i++) {
       const d = st?.decks[i];
       const loaded = !!d?.track_id;
@@ -1236,10 +1289,11 @@ export class ExploreEngine {
       // Their light on the water and banks ahead, and a rune ring beside a looping Keeper.
       const x = (this.#keeperX[i] / this.#width - 0.5) * reach;
       const pool = s.uLantern.value;
-      pool[i * 4] = x * 0.82 + riverX * 0.18;
-      pool[i * 4 + 1] = POOL_Z;
-      pool[i * 4 + 2] = loaded ? bright * (st?.focused === i ? 0.9 : 0.6) * (this.#breakdown >= 8 ? 1.6 : 1) : 0;
-      pool[i * 4 + 3] = 7;
+      // Their light on the water and banks just beyond the gunwale: radius 2, about 0.35 of the deck's colour.
+      pool[i * 4] = (this.#keeperX[i] / this.#width - 0.5) * poolReach;
+      pool[i * 4 + 1] = poolZ;
+      pool[i * 4 + 2] = loaded ? bright * (st?.focused === i ? 1.4 : 1.15) * (this.#breakdown >= 8 ? 1.5 : 1) : 0;
+      pool[i * 4 + 3] = 2;
       const ring = s.uLoop.value;
       const loop = d?.loop;
       const active = !!loop?.active && loop.start != null && loop.end != null && loop.end > loop.start;
@@ -1268,7 +1322,7 @@ export class ExploreEngine {
       const mx = (pool[a * 4] + pool[b * 4]) / 2;
       pool[a * 4] += (mx - 1.6 - pool[a * 4]) * k;
       pool[b * 4] += (mx + 1.6 - pool[b * 4]) * k;
-      pool[a * 4 + 3] = pool[b * 4 + 3] = 7 + 3 * k;
+      pool[a * 4 + 3] = pool[b * 4 + 3] = 2 + 2 * k;
     }
     K.view.set(this.#width, this.#height);
   }
@@ -1454,7 +1508,7 @@ export class ExploreEngine {
   #startDragon(mode: number) {
     this.#dragonMode = mode;
     this.#dragonT = 0;
-    this.#dragonD = mode === 3 ? 20 : 12 + Math.random() * 6;
+    this.#dragonD = mode === 3 ? 20 : 14;
     this.#dragonSeed = Math.random();
   }
 
@@ -1473,11 +1527,10 @@ export class ExploreEngine {
     this.#dragon.dragon.set(mode, mode === 3 ? 1 : this.#dragonT, this.#dragonD, this.#dragonSeed);
     const sh = s.uShadow.value;
     if (mode === 2) {
-      // The shadow runs ~2.5 s ahead of the body along the same course, on the land.
-      flyover(this.#dragonT + 2.5, this.#dragonD, this.#dragonSeed, this.#tmp);
+      // A soft shadow on the land, 2 s ahead of the body along its course.
+      flyover(this.#dragonT + 2, this.#dragonD, this.#dragonSeed, this.#tmp);
       const u = this.#dragonT / this.#dragonD;
-      // Nearer while the body is still out of sight above, so the land is crossed first.
-      sh.set(this.#tmp.x, this.#tmp.z + 45 * (1 - u), 14, 0.85 * Math.min(1, this.#dragonT / 1.2) * Math.min(1, (1 - u) * 6));
+      sh.set(this.#tmp.x, this.#tmp.z, 18, 0.22 * Math.min(1, this.#dragonT / 1.2) * Math.min(1, (1 - u) * 6));
     } else sh.w = 0;
   }
 
@@ -1506,6 +1559,7 @@ export class ExploreEngine {
     this.#width = Math.max(1, el.clientWidth);
     this.#height = Math.max(1, el.clientHeight);
     this.#applySize();
+    this.#placeVessel();
     if (this.#msg && this.#children.length) {
       this.#layoutSlots(this.#msg);
       this.#writeSpires(this.#msg);
@@ -1635,15 +1689,15 @@ function cacheHexGet(hex: string) {
 function flyover(t: number, D: number, seed: number, out: THREE.Vector3) {
   const u = Math.max(0, Math.min(1, t / D));
   const side = seed < 0.5 ? 1 : -1;
-  const ax = 90 * side,
-    ay = 64,
-    az = 20,
-    bx = 25 * side,
-    by = -4,
-    bz = -170,
-    cx = -240 * side,
-    cy = 24,
-    cz = -250;
+  const ax = 130 * side,
+    ay = 74,
+    az = -140,
+    bx = 20 * side,
+    by = 46,
+    bz = -230,
+    cx = -260 * side,
+    cy = 30,
+    cz = -300;
   const abx = ax + (bx - ax) * u,
     aby = ay + (by - ay) * u,
     abz = az + (bz - az) * u;

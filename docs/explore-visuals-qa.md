@@ -65,7 +65,8 @@ the mock or Vite processes when you are done.
   `cpuSamples()` the per-frame CPU of the world. `window.__waveCpu` holds the
   strip's per-frame CPU.
 - `setMinutes(m)` jumps to an age.
-- `dragon('far' | 'flyover' | 'perch' | 'drop')` forces the dragon.
+- `dragon('far' | 'flyover' | 'perch' | 'drop', seed?)` forces the dragon. A
+  seed (0…1) fixes its side for repeatable captures.
 
 ## Coverage
 
@@ -93,7 +94,8 @@ Each run checks:
 - **Search and drag:** search by typing anywhere; a real Chromium drag onto
   deck 4; the search keeps its filter.
 - **Vigil:** after stopping, travel drifts to a stop.
-- **Ages:** dawn, day, dusk and night.
+- **Ages:** dawn, day, dusk and night, with a close-up of the Keepers at
+  night.
 - **Dragon:** shadow, flyover and far form.
 - **Reduced motion:** switched on live; the course holds, the heading never
   swings, and an earned drop perches the dragon.
@@ -117,11 +119,11 @@ animation frame after the message.
 
 | Input | Samples | Handler (p50 / max) | To first frame (p50 / p95 / max) | First frame complete |
 |---|---:|---:|---:|---:|
-| Aim from a key (local) | 20 | 0.0 / 0.1 ms | 8.7 / 15.6 / 15.6 ms | 20/20 |
-| Aim from the server (encoder) | 40 | 0.4 / 1.1 ms | 15.3 / 15.8 / 15.9 ms | 40/40 |
-| Band switch | 6 | 2.1 / 3.1 ms | 14.0 / 16.6 / 16.6 ms | 6/6 |
-| Commit from a mixer-style `load_selected` | 6 | 2.0 / 3.5 ms | 12.2 / 16.3 / 16.3 ms | 6/6 |
-| Back | 6 | 2.0 / 2.3 ms | 11.1 / 16.2 / 16.2 ms | 6/6 |
+| Aim from a key (local) | 20 | 0.0 / 0.0 ms | 9.2 / 15.6 / 15.6 ms | 20/20 |
+| Aim from the server (encoder) | 40 | 0.5 / 1.4 ms | 15.3 / 15.9 / 15.9 ms | 40/40 |
+| Band switch | 6 | 1.8 / 2.8 ms | 16.5 / 18.4 / 18.4 ms | 6/6 |
+| Commit from a mixer-style `load_selected` | 6 | 1.8 / 3.1 ms | 11.7 / 16.1 / 16.1 ms | 6/6 |
+| Back | 6 | 1.5 / 2.4 ms | 9.9 / 16.2 / 16.2 ms | 6/6 |
 
 How to read this table:
 
@@ -131,7 +133,8 @@ How to read this table:
   paces at 60 Hz (16.7 ms). Messages that arrive just after a frame wait
   almost a whole one; that is why server aims cluster near 15 ms.
 - Every first frame's rAF timestamp fell within one display period of the
-  message (at most 15.0 ms here). Photons follow one display frame later:
+  message (at most 15.3 ms here). A rAF callback can run a little after its
+  timestamp, which is why the band switch's p95 reads 18.4 ms. Photons follow one display frame later:
   ≤ 7 ms at 144 Hz, ≤ 17 ms at 60 Hz.
 - The spec's optional "render immediately" was not added. Chromium presents
   a WebGL canvas at the next frame either way, so it can't make the change
@@ -142,32 +145,33 @@ How to read this table:
 ### Frame time
 
 The final AMD run used the production bundle, four decks and diagnostics,
-DPR 1 and no adaptive resolution. The machine was under heavy unrelated load
-(load average 19–22, mostly another Chromium using ~16 cores). An earlier
-full run of the same scene, on a quieter machine, measured AMD 1080p GPU at
-6.7 / 7.1 ms (p50 / p95), and 6.5 / 6.7 ms after the soak.
+DPR 1 and no adaptive resolution, on a quiet machine (load average about 2).
 
 | GPU / viewport | FPS | Frame interval p99 | GPU p50 / p95 / p99 | World CPU p50 / p99 | Strip CPU p50 / p99 |
 |---|---:|---:|---:|---:|---:|
-| AMD, 1920×1080 | 60 | 16.8 ms | 7.9 / 8.8 / 9.6 ms | 0.2 / 0.3 ms | 0.4 / 0.6 ms |
-| AMD, 1920×1080, after a 3-minute soak | 60 | 16.8 ms | 8.2 / 9.3 / 10.6 ms | 0.2 / 1.1 ms | 0.4 / 0.6 ms |
-| AMD, 1280×800, four loops | 60 | 16.8 ms | 4.1 / 4.4 / 4.4 ms | 0.1 / 0.3 ms | 0.3 / 0.5 ms |
-| RTX 4090, 1920×1080, uncapped | 718 | 6.7 ms | 0.20 / 0.21 / 0.22 ms | 0.1 / 0.2 ms | 0.4 / 0.5 ms |
-| RTX 4090, 2560×1440, uncapped | 533 | 8.3 ms | 0.34 / 0.36 / 0.42 ms | 0.1 / 0.3 ms | 0.5 / 0.7 ms |
-| RTX 4090, 1920×1080, uncapped, after 60 s | 683 | 6.5 ms | 0.21 / 0.22 / 0.25 ms | 0.1 / 0.2 ms | 0.4 / 0.5 ms |
+| AMD, 1920×1080 | 60 | 16.8 ms | 7.6 / 8.1 / 9.0 ms | 0.1 / 0.3 ms | 0.3 / 0.5 ms |
+| AMD, 1920×1080, after a 3-minute soak | 60 | 16.8 ms | 8.0 / 8.5 / 8.7 ms | 0.1 / 0.2 ms | 0.3 / 0.5 ms |
+| AMD, 1280×800, four loops | 60 | 16.8 ms | 4.2 / 4.4 / 4.4 ms | 0.1 / 0.3 ms | 0.3 / 0.4 ms |
+| RTX 4090, 1920×1080, uncapped | 883 | 5.7 ms | 0.15 / 0.16 / 0.17 ms | 0.0 / 0.2 ms | 0.3 / 0.5 ms |
+| RTX 4090, 2560×1440, uncapped | 735 | 5.7 ms | 0.21 / 0.30 / 0.50 ms | 0.0 / 0.2 ms | 0.3 / 0.5 ms |
+| RTX 4090, 1920×1080, uncapped, after 60 s | 775 | 6.3 ms | 0.18 / 0.19 / 0.39 ms | 0.1 / 0.2 ms | 0.3 / 0.5 ms |
 
+- **Fable's first review cost no GPU time.** An A/B on the AMD GPU at 1080p,
+  alternating this build with the previous commit's, measured 7.61 against
+  7.65 ms (median of eight 3-second medians each). The earlier 6.7 ms figure
+  came from a different GPU clock state, not from a lighter scene.
 - **Budget.** The scene is 15 draw calls (16 while the dragon flies) and 243k
   triangles. The budget is 18 calls and 270k triangles.
 - **Pacing.** No sampled frame on either GPU took longer than 25 ms.
 - **The 4090 at 144 Hz.** Uncapped at 1080p, 99 % of frame intervals were
-  within 6.7 ms, under the 6.9 ms a 144 Hz display allows; the GPU itself
-  needs 0.2 ms.
+  within 5.7 ms (6.3 ms after a minute), under the 6.9 ms a 144 Hz display
+  allows; the GPU itself needs 0.15 ms.
   - At 60 Hz pacing the 4090 sits in a low power state. There its timer
-    queries read 4.6 ms, which is clock speed, not work.
-  - The uncapped tail (p95 4.8 ms) comes from the browser's other
+    queries read 4.4 ms, which is clock speed, not work.
+  - The uncapped tail (p95 4.0 ms) comes from the browser's other
     main-thread work (WebSocket messages at 180/s, the HUD), not the scene.
-- **The AMD GPU budget** (spec: ≤ 10 ms at 1080p) holds at p50 and p95 even
-  under load. Three changes brought it back under budget, from 12.2 ms:
+- **The AMD GPU budget** (spec: ≤ 10 ms at 1080p) holds at p50, p95 and
+  p99. Three changes brought it back under budget, from 12.2 ms:
   - the sky draws last, on the far plane;
   - colour noise comes from a baked, mipmapped texture;
   - the land is drawn front to back.
@@ -180,7 +184,7 @@ unminified dev build (`performance-amd-dev-server.json`).
 **Our frame code creates no objects, arrays, closures or strings.** Three
 changes got it there:
 
-- The scalar and vector uniforms are packed into one typed `vec4 uFrame[26]`.
+- The scalar and vector uniforms are packed into one typed `vec4 uFrame[27]`.
   Three.js previously boxed each scalar upload.
 - Three's per-frame render-list sort is off. The scene is added in draw
   order, and the sort allocated every frame.
@@ -188,12 +192,12 @@ changes got it there:
   loops.
 
 Together these cut sampled frame-loop allocation from about 425 KB/s to about
-100 KB/s:
+110 KB/s (re-measured after Fable's first review):
 
 | Where | Before | After |
 |---|---:|---:|
 | Engine frame loop (with three.js) | ~250 KB/s | ~52 KB/s |
-| Strip | ~190 KB/s | ~49 KB/s |
+| Strip | ~190 KB/s | ~58 KB/s |
 
 What remains:
 

@@ -439,7 +439,14 @@
     inset: 0;
     pointer-events: none;
     opacity: 0;
-    background: radial-gradient(ellipse 75% 70% at 50% 48%, transparent 55%, color-mix(in srgb, var(--hot) 70%, transparent) 100%);
+    /* The commit's light lives in the outer 12 % of the frame only. */
+    --edge: color-mix(in srgb, var(--hot) 70%, transparent);
+    --soft: color-mix(in srgb, var(--hot) 22%, transparent);
+    background:
+      linear-gradient(to right, var(--edge), var(--soft) 5%, transparent 12%),
+      linear-gradient(to left, var(--edge), var(--soft) 5%, transparent 12%),
+      linear-gradient(to bottom, var(--edge), var(--soft) 5%, transparent 12%),
+      linear-gradient(to top, var(--edge), var(--soft) 5%, transparent 12%);
     mix-blend-mode: screen;
     will-change: opacity;
   }

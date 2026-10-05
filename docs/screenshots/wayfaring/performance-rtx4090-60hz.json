@@ -19,24 +19,24 @@
       "over25ms": 0,
       "gpuMs": {
         "n": 901,
-        "p50": 4.6,
-        "p95": 6.3,
-        "p99": 6.74,
-        "max": 8.03
+        "p50": 4.4,
+        "p95": 5.42,
+        "p99": 6.15,
+        "max": 7.25
       },
       "worldCpuMs": {
         "n": 901,
         "p50": 0.1,
         "p95": 0.2,
         "p99": 0.3,
-        "max": 0.4
+        "max": 0.3
       },
       "stripCpuMs": {
         "n": 901,
-        "p50": 0.4,
+        "p50": 0.3,
         "p95": 0.5,
-        "p99": 0.6,
-        "max": 0.8
+        "p99": 0.5,
+        "max": 0.6
       },
       "calls": 15,
       "triangles": 242698
@@ -47,31 +47,31 @@
       "frameInterval": {
         "n": 900,
         "p50": 16.7,
-        "p95": 16.8,
+        "p95": 16.7,
         "p99": 16.8,
         "max": 16.8
       },
       "over25ms": 0,
       "gpuMs": {
         "n": 901,
-        "p50": 5.28,
-        "p95": 6.25,
-        "p99": 6.86,
-        "max": 9.54
+        "p50": 1.2,
+        "p95": 1.23,
+        "p99": 1.24,
+        "max": 1.31
       },
       "worldCpuMs": {
         "n": 901,
         "p50": 0.1,
         "p95": 0.2,
         "p99": 0.3,
-        "max": 0.4
+        "max": 0.5
       },
       "stripCpuMs": {
         "n": 901,
-        "p50": 0.5,
+        "p50": 0.4,
         "p95": 0.6,
         "p99": 0.6,
-        "max": 1.7
+        "max": 1.2
       },
       "calls": 15,
       "triangles": 242698
@@ -89,24 +89,24 @@
       "over25ms": 0,
       "gpuMs": {
         "n": 901,
-        "p50": 4.62,
-        "p95": 6.51,
-        "p99": 8.75,
-        "max": 16.5
+        "p50": 4.22,
+        "p95": 4.84,
+        "p99": 5.43,
+        "max": 5.71
       },
       "worldCpuMs": {
         "n": 901,
-        "p50": 0.2,
-        "p95": 0.3,
-        "p99": 0.5,
-        "max": 3.1
+        "p50": 0.1,
+        "p95": 0.2,
+        "p99": 0.3,
+        "max": 0.3
       },
       "stripCpuMs": {
         "n": 901,
-        "p50": 0.5,
-        "p95": 0.6,
-        "p99": 0.9,
-        "max": 3.6
+        "p50": 0.3,
+        "p95": 0.5,
+        "p99": 0.6,
+        "max": 0.6
       },
       "calls": 15,
       "triangles": 242698
@@ -115,17 +115,17 @@
   "progress": [
     {
       "elapsed": 30,
-      "course": 242.99,
-      "gpuMs": 4.74,
-      "cpuMs": 0.15,
-      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.12 ms · wave 0.40 ms\ngrowth 36% · age 0.00 · course 242 · 2.87 u/s · gpu 4.08 ms"
+      "course": 250.75,
+      "gpuMs": 2.51,
+      "cpuMs": 0.13,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.14 ms · wave 0.34 ms\ngrowth 36% · age 0.00 · course 250 · 2.90 u/s · gpu 2.87 ms"
     },
     {
       "elapsed": 60,
-      "course": 329.63,
-      "gpuMs": 4.35,
-      "cpuMs": 0.14,
-      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.13 ms · wave 0.44 ms\ngrowth 46% · age 0.00 · course 329 · 2.90 u/s · gpu 4.31 ms"
+      "course": 337.46,
+      "gpuMs": 2.9,
+      "cpuMs": 0.09,
+      "stats": "60 fps · 15 calls · 243k tris · dpr 1.00 · world 0.07 ms · wave 0.34 ms\ngrowth 46% · age 0.00 · course 336 · 2.89 u/s · gpu 3.95 ms"
     }
   ],
   "errors": [],
@@ -133,7 +133,7 @@
   "allocations": {
     "seconds": 8,
     "bytesPerSecond": {
-      "page": 1255443,
+      "page": 1262671,
       "engineFrameLoop": 0,
       "stripFrameLoop": 0
     },

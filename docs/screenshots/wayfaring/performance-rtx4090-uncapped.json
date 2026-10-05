@@ -8,33 +8,33 @@
   "measurements": [
     {
       "label": "1920×1080 / four decks / low",
-      "fps": 718.5,
+      "fps": 882.86,
       "frameInterval": {
-        "n": 10779,
-        "p50": 0.8,
-        "p95": 4.8,
-        "p99": 6.7,
-        "max": 12.5
+        "n": 13244,
+        "p50": 0.7,
+        "p95": 4,
+        "p99": 5.7,
+        "max": 10.6
       },
       "over25ms": 0,
       "gpuMs": {
-        "n": 533,
-        "p50": 0.2,
-        "p95": 0.21,
-        "p99": 0.22,
-        "max": 0.48
+        "n": 655,
+        "p50": 0.15,
+        "p95": 0.16,
+        "p99": 0.17,
+        "max": 0.23
       },
       "worldCpuMs": {
         "n": 2048,
-        "p50": 0.1,
+        "p50": 0,
         "p95": 0.1,
         "p99": 0.2,
-        "max": 0.3
+        "max": 0.2
       },
       "stripCpuMs": {
         "n": 2048,
-        "p50": 0.4,
-        "p95": 0.5,
+        "p50": 0.3,
+        "p95": 0.4,
         "p99": 0.5,
         "max": 0.6
       },
@@ -43,70 +43,70 @@
     },
     {
       "label": "2560×1440 / four decks / low",
-      "fps": 532.69,
+      "fps": 735.14,
       "frameInterval": {
-        "n": 7992,
-        "p50": 1.1,
-        "p95": 5.8,
-        "p99": 8.3,
-        "max": 12.9
+        "n": 11028,
+        "p50": 0.8,
+        "p95": 4.1,
+        "p99": 5.7,
+        "max": 8.8
       },
       "over25ms": 0,
       "gpuMs": {
-        "n": 519,
-        "p50": 0.34,
-        "p95": 0.36,
-        "p99": 0.42,
-        "max": 0.71
+        "n": 716,
+        "p50": 0.21,
+        "p95": 0.3,
+        "p99": 0.5,
+        "max": 0.91
       },
       "worldCpuMs": {
         "n": 2048,
-        "p50": 0.1,
-        "p95": 0.2,
-        "p99": 0.3,
-        "max": 1.6
+        "p50": 0,
+        "p95": 0.1,
+        "p99": 0.2,
+        "max": 0.3
       },
       "stripCpuMs": {
         "n": 2048,
-        "p50": 0.5,
-        "p95": 0.6,
-        "p99": 0.7,
-        "max": 1.3
+        "p50": 0.3,
+        "p95": 0.5,
+        "p99": 0.5,
+        "max": 0.8
       },
       "calls": 15,
       "triangles": 242698
     },
     {
       "label": "1920×1080 / after a 60 s soak",
-      "fps": 683.28,
+      "fps": 775.42,
       "frameInterval": {
-        "n": 10251,
-        "p50": 0.9,
-        "p95": 4.7,
-        "p99": 6.5,
-        "max": 11.2
+        "n": 11634,
+        "p50": 0.7,
+        "p95": 3.9,
+        "p99": 6.3,
+        "max": 14.1
       },
       "over25ms": 0,
       "gpuMs": {
-        "n": 519,
-        "p50": 0.21,
-        "p95": 0.22,
-        "p99": 0.25,
-        "max": 0.61
+        "n": 590,
+        "p50": 0.18,
+        "p95": 0.19,
+        "p99": 0.39,
+        "max": 0.65
       },
       "worldCpuMs": {
         "n": 2048,
         "p50": 0.1,
         "p95": 0.2,
         "p99": 0.2,
-        "max": 0.3
+        "max": 2
       },
       "stripCpuMs": {
         "n": 2048,
-        "p50": 0.4,
-        "p95": 0.5,
+        "p50": 0.3,
+        "p95": 0.4,
         "p99": 0.5,
-        "max": 0.7
+        "max": 3
       },
       "calls": 15,
       "triangles": 242698
@@ -115,17 +115,17 @@
   "progress": [
     {
       "elapsed": 30,
-      "course": 243.51,
-      "gpuMs": 0.24,
-      "cpuMs": 0.03,
-      "stats": "644 fps · 15 calls · 243k tris · dpr 1.00 · world 0.04 ms · wave 0.31 ms\ngrowth 36% · age 0.00 · course 242 · 2.90 u/s · gpu 0.23 ms"
+      "course": 248.57,
+      "gpuMs": 0.16,
+      "cpuMs": 0.04,
+      "stats": "887 fps · 15 calls · 243k tris · dpr 1.00 · world 0.05 ms · wave 0.28 ms\ngrowth 36% · age 0.00 · course 248 · 2.90 u/s · gpu 0.16 ms"
     },
     {
       "elapsed": 60,
-      "course": 330.17,
-      "gpuMs": 0.2,
-      "cpuMs": 0.06,
-      "stats": "575 fps · 15 calls · 243k tris · dpr 1.00 · world 0.07 ms · wave 0.37 ms\ngrowth 46% · age 0.00 · course 329 · 2.89 u/s · gpu 0.20 ms"
+      "course": 335.22,
+      "gpuMs": 0.17,
+      "cpuMs": 0.04,
+      "stats": "752 fps · 15 calls · 243k tris · dpr 1.00 · world 0.05 ms · wave 0.28 ms\ngrowth 46% · age 0.00 · course 334 · 2.89 u/s · gpu 0.17 ms"
     }
   ],
   "errors": [],
@@ -133,7 +133,7 @@
   "allocations": {
     "seconds": 8,
     "bytesPerSecond": {
-      "page": 2066511,
+      "page": 2386896,
       "engineFrameLoop": 0,
       "stripFrameLoop": 0
     },

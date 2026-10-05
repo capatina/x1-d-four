@@ -35,6 +35,10 @@ const OTHER_LINE = { playing: 1, paused: 0.55 };
 /** How much of the past (left of the playhead) is faded out. */
 const PAST_DIM = 0.38;
 const PAST_FILL = `rgba(0, 0, 0, ${PAST_DIM})`;
+/** Lead-deck band opacity, low to high, so the river shows through the bank. */
+const BAND_ALPHA = [0.75, 0.6, 0.45] as const;
+/** The water the reflection is tinted toward (half way). */
+const WATER = 'rgba(30, 58, 56, 0.5)';
 const DIGITS = ['1', '2', '3', '4'];
 
 type Shown = { pos: number; trackId: string | null; live: boolean };
@@ -159,9 +163,9 @@ export class WaveRenderer {
       this.#headGlow.addColorStop(0, '#ede4b900');
       this.#headGlow.addColorStop(0.5, '#ede4b928');
       this.#headGlow.addColorStop(1, '#ede4b900');
-      const px = Math.round(10 * dpr);
-      this.#sigils = DECK_SHADES.map((c, i) => tintedCell(SIGIL_CELL(i), px, c.line));
-      this.#runeTicks = DECK_SHADES.map((c, i) => tintedCell((i * 5 + 3) % 16, Math.round(9 * dpr), c.mid));
+      const px = Math.round(9 * dpr);
+      this.#sigils = DECK_SHADES.map((c, i) => tintedCell(SIGIL_CELL(i), px, c.mid));
+      this.#runeTicks = DECK_SHADES.map((c, i) => tintedCell((i * 5 + 3) % 16, Math.round(8 * dpr), c.mid));
       this.#loopGradients.length = 0;
       for (let i = 0; i < DECK_COUNT; i++) {
         const g = ctx.createLinearGradient(0, 0, 0, h);
@@ -338,6 +342,11 @@ export class WaveRenderer {
         ctx.setLineDash(DECK_DASHES[0]);
       }
       ctx.globalAlpha = 1;
+      // Below the waterline everything drawn so far is a reflection: half way to the water.
+      ctx.globalCompositeOperation = 'source-atop';
+      ctx.fillStyle = WATER;
+      ctx.fillRect(0, cy, w, h - ruler - cy - 1);
+      ctx.globalCompositeOperation = 'source-over';
     }
 
     // Beat grid ruler.
@@ -445,13 +454,17 @@ export class WaveRenderer {
     const c = playing ? DECK_SHADES[i] : PAUSED_SHADES[i];
     mirrored(ctx, env, env.yl, cy);
     ctx.fillStyle = c.low;
+    ctx.globalAlpha = BAND_ALPHA[0];
     ctx.fill();
     mirrored(ctx, env, env.ym, cy);
     ctx.fillStyle = c.mid;
+    ctx.globalAlpha = BAND_ALPHA[1];
     ctx.fill();
     mirrored(ctx, env, env.yh, cy);
     ctx.fillStyle = c.high;
+    ctx.globalAlpha = BAND_ALPHA[2];
     ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   /** Path along the outer envelope (the loudest band), top and bottom. */
@@ -485,12 +498,12 @@ export class WaveRenderer {
       const x = side === 0 ? x0 : x1;
       const dir = side === 0 ? 1 : -1;
       ctx.fillRect(x - 0.75, 0, 1.5, h);
-      // Brackets: short arms pointing into the loop, top and bottom, just inside the ruler.
-      ctx.fillRect(dir > 0 ? x : x - arm, ruler - 1.5, arm, 1.5);
-      ctx.fillRect(dir > 0 ? x : x - arm, h - ruler, arm, 1.5);
-      // A rune tick at each end.
+      // Brackets: 2 px arms pointing into the loop, top and bottom, just inside the ruler.
+      ctx.fillRect(dir > 0 ? x : x - arm, ruler - 2, arm, 2);
+      ctx.fillRect(dir > 0 ? x : x - arm, h - ruler, arm, 2);
+      // An 8 px rune at each end, standing on the lower ruler.
       const rune = this.#runeTicks[i];
-      if (rune) ctx.drawImage(rune, dir > 0 ? x + 2 : x - 11, ruler + 1, 9, 9);
+      if (rune) ctx.drawImage(rune, dir > 0 ? x + 2 : x - 10, h - ruler - 10, 8, 8);
     }
     ctx.globalAlpha = 1;
   }
@@ -622,7 +635,7 @@ export class WaveRenderer {
       ctx.fillText(DIGITS[i], x + size / 2, y + size / 2 + 0.5);
       // The deck's sigil beside its number (colour-blind safe with pattern and number).
       const sigil = this.#sigils[i];
-      if (sigil) ctx.drawImage(sigil, x - 13, y + size / 2 - 5, 10, 10);
+      if (sigil) ctx.drawImage(sigil, x - 12, y + size / 2 - 4.5, 9, 9);
     }
     ctx.globalAlpha = 1;
   }
