@@ -31,7 +31,8 @@ const PAST_DIM = 0.38;
 
 type Shown = { pos: number; trackId: string | null; live: boolean };
 
-type Envelope = { n: number; xs: Float32Array; yl: Float32Array; ym: Float32Array; yh: Float32Array };
+/** Per column: x, each band's peak height, and the outline (the largest of the three). */
+type Envelope = { n: number; xs: Float32Array; yl: Float32Array; ym: Float32Array; yh: Float32Array; yt: Float32Array };
 
 type Loop = { start: number; end: number };
 
@@ -69,6 +70,7 @@ export class WaveRenderer {
         yl: new Float32Array(0),
         ym: new Float32Array(0),
         yh: new Float32Array(0),
+        yt: new Float32Array(0),
       });
     }
 
@@ -152,6 +154,7 @@ export class WaveRenderer {
       e.yl = new Float32Array(cols);
       e.ym = new Float32Array(cols);
       e.yh = new Float32Array(cols);
+      e.yt = new Float32Array(cols);
     }
   }
 
@@ -385,34 +388,38 @@ export class WaveRenderer {
       env.yl[k] = lo * half;
       env.ym[k] = mi * half;
       env.yh[k] = hi * half;
+      env.yt[k] = Math.max(lo, mi, hi) * half;
     }
     env.n = n;
   }
 
-  /** Fill one deck's stacked bands: highs outside, then mids, lows at the core. */
+  /**
+   * Fill one deck's bands overlaid from the centre, like a DJ 3-band waveform:
+   * lows first, mids over them, highs on top. Kicks stand out as low peaks.
+   */
   #fill(i: number, env: Envelope, cy: number, playing: boolean): void {
     const ctx = this.#ctx;
     const c = playing ? DECK_SHADES[i] : PAUSED_SHADES[i];
-    mirrored(ctx, env, env.yh, cy);
-    ctx.fillStyle = c.high;
+    mirrored(ctx, env, env.yl, cy);
+    ctx.fillStyle = c.low;
     ctx.fill();
     mirrored(ctx, env, env.ym, cy);
     ctx.fillStyle = c.mid;
     ctx.fill();
-    mirrored(ctx, env, env.yl, cy);
-    ctx.fillStyle = c.low;
+    mirrored(ctx, env, env.yh, cy);
+    ctx.fillStyle = c.high;
     ctx.fill();
   }
 
-  /** Path along the outer envelope, top and bottom, lightly smoothed so lines stay calm. */
+  /** Path along the outer envelope (the loudest band), top and bottom. */
   #outline(env: Envelope, cy: number): void {
     const ctx = this.#ctx;
-    const { n, xs, yh } = env;
+    const { n, xs, yt } = env;
     ctx.beginPath();
-    ctx.moveTo(xs[0], cy - smoothAt(yh, n, 0));
-    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - smoothAt(yh, n, k));
-    ctx.moveTo(xs[0], cy + smoothAt(yh, n, 0) * 0.32);
-    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy + smoothAt(yh, n, k) * 0.32);
+    ctx.moveTo(xs[0], cy - yt[0]);
+    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy - yt[k]);
+    ctx.moveTo(xs[0], cy + yt[0] * 0.32);
+    for (let k = 1; k < n; k++) ctx.lineTo(xs[k], cy + yt[k] * 0.32);
   }
 
   /** An active loop: a tint in the deck colour, bracketed at both ends. */
@@ -613,8 +620,4 @@ function rate(ds: DeckState): number {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
-}
-
-function smoothAt(ys: Float32Array, n: number, k: number): number {
-  return (ys[Math.max(0, k - 1)] + 2 * ys[k] + ys[Math.min(n - 1, k + 1)]) / 4;
 }

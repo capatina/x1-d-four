@@ -2,18 +2,10 @@ import { DECK_COUNT, type StateMsg, type WaveInfo } from './protocol';
 
 /** The server renders at 48 kHz; `wave.block_frames` counts frames at that rate. */
 const SAMPLE_RATE = 48_000;
-/** Each band is scaled so this share of its blocks fits; the loudest few clip. */
-const NORM_PERCENTILE = 0.995;
-/** A band quieter than this fraction of the track's loudest band stays that quiet (no blown-up noise). */
-const NORM_FLOOR = 0.2;
-/** Display curve on the normalised level: < 1 lifts quiet detail. */
-const GAMMA = 0.8;
-/** Share of the half-height each band gets, centre outwards: low, mid, high. */
-export const BAND_SHARE = [0.46, 0.33, 0.21] as const;
-/** The stacked total is scaled so this share of blocks fits (at most ×MAX_STACK_GAIN). */
-const STACK_PERCENTILE = 0.99;
-const MAX_STACK_GAIN = 1.8;
-const STACK_BINS = 256;
+/** The track is scaled so this share of its blocks fits; the loudest few clip. */
+const NORM_PERCENTILE = 0.998;
+/** Never boost a quiet track more than this (its noise floor stays low). */
+const MAX_GAIN = 4;
 
 export type DeckWave = {
   trackId: string;
@@ -21,8 +13,9 @@ export type DeckWave = {
   blockSec: number;
   blocks: number;
   /**
-   * Stacked display heights per block, as fractions of the half-height,
-   * centre outwards: [low, low + mid, low + mid + high], each 0..1.
+   * Per block, the [low, mid, high] peak level as a fraction of the half-height
+   * (0..1), all three on one scale for the whole track, so a kick is a tall low
+   * peak and a breakdown stays lower than a drop.
    */
   amp: Float32Array;
 };
@@ -91,37 +84,16 @@ class Waves {
 }
 
 /**
- * Raw [low, mid, high] bytes → stacked display heights. Each band is scaled
- * to its own loud passages (so the server's absolute levels don't matter),
- * then the stack is scaled so the loud parts fill the lane.
+ * Raw [low, mid, high] peak bytes (linear, 255 = full scale) → display heights.
+ * One gain for the whole track: its loud passages fill the lane.
  */
 function prepare(bytes: Uint8Array, blocks: number): Float32Array {
-  const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-  for (let i = 0; i < blocks; i++) {
-    hist[0][bytes[i * 3]]++;
-    hist[1][bytes[i * 3 + 1]]++;
-    hist[2][bytes[i * 3 + 2]]++;
-  }
-  const loud = hist.map((h) => percentile(h, blocks, NORM_PERCENTILE));
-  const top = Math.max(1, ...loud);
-  const luts = loud.map((p) => {
-    const norm = Math.max(p, top * NORM_FLOOR, 1);
-    return Float32Array.from({ length: 256 }, (_, v) => Math.min(1, v / norm) ** GAMMA);
-  });
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < blocks * 3; i += 3) hist[Math.max(bytes[i], bytes[i + 1], bytes[i + 2])]++;
+  const loud = Math.max(1, percentile(hist, blocks, NORM_PERCENTILE));
+  const gain = Math.min(MAX_GAIN, 255 / loud) / 255;
   const amp = new Float32Array(blocks * 3);
-  const totals = new Uint32Array(STACK_BINS);
-  for (let i = 0; i < blocks * 3; i += 3) {
-    const lo = luts[0][bytes[i]] * BAND_SHARE[0];
-    const mid = lo + luts[1][bytes[i + 1]] * BAND_SHARE[1];
-    const top = mid + luts[2][bytes[i + 2]] * BAND_SHARE[2];
-    amp[i] = lo;
-    amp[i + 1] = mid;
-    amp[i + 2] = top;
-    totals[Math.min(STACK_BINS - 1, Math.floor(top * STACK_BINS))]++;
-  }
-  const loudTotal = (percentile(totals, blocks, STACK_PERCENTILE) + 1) / STACK_BINS;
-  const gain = Math.min(MAX_STACK_GAIN, Math.max(1, 1 / loudTotal));
-  for (let i = 0; i < amp.length; i++) amp[i] = Math.min(1, amp[i] * gain);
+  for (let i = 0; i < amp.length; i++) amp[i] = Math.min(1, bytes[i] * gain);
   return amp;
 }
 

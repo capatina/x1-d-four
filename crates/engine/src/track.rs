@@ -161,28 +161,68 @@ fn resample(samples: &[f32], from: u32, to: u32) -> anyhow::Result<Vec<f32>> {
     Ok(output.take_data())
 }
 
-/// Three-band RMS per block, split at 250 Hz and 3 kHz with one-pole filters
-/// (the same split the live meters use), gently compressed into 0..255.
+/// Three-band peak level per block, like a DJ waveform: the mono mix split at
+/// 250 Hz and 3 kHz by 4th-order Linkwitz-Riley filters (so a kick lands in low
+/// and a hat in high), the largest |sample| of each band per block, linear,
+/// full scale = 255. Linear and unnormalised, so breakdowns stay quieter than drops.
 fn band_levels(samples: &[f32]) -> Vec<[u8; 3]> {
-    let coef = |fc: f32| 1.0 - (-std::f32::consts::TAU * fc / SAMPLE_RATE as f32).exp();
-    let (a1, a2) = (coef(250.0), coef(3000.0));
-    let (mut lp1, mut lp2) = (0f32, 0f32);
-    let level = |sq: f32| ((sq / WAVE_BLOCK as f32).sqrt() * 3.0).min(1.0).powf(0.7) * 255.0;
+    let mut low = [Biquad::lowpass(250.0), Biquad::lowpass(250.0)];
+    let mut mid = [Biquad::highpass(250.0), Biquad::highpass(250.0), Biquad::lowpass(3000.0), Biquad::lowpass(3000.0)];
+    let mut high = [Biquad::highpass(3000.0), Biquad::highpass(3000.0)];
     samples
         .chunks(WAVE_BLOCK * 2)
         .map(|block| {
-            let mut sq = [0f32; 3];
+            let mut peak = [0f32; 3];
             for f in block.chunks_exact(2) {
                 let x = 0.5 * (f[0] + f[1]);
-                lp1 += a1 * (x - lp1);
-                lp2 += a2 * (x - lp2);
-                sq[0] += lp1 * lp1;
-                sq[1] += (lp2 - lp1) * (lp2 - lp1);
-                sq[2] += (x - lp2) * (x - lp2);
+                let l = low.iter_mut().fold(x, |v, f| f.run(v));
+                let h = high.iter_mut().fold(x, |v, f| f.run(v));
+                let m = mid.iter_mut().fold(x, |v, f| f.run(v));
+                for (p, v) in peak.iter_mut().zip([l, m, h]) {
+                    *p = p.max(v.abs());
+                }
             }
-            sq.map(|s| level(s).round() as u8)
+            peak.map(|p| (p.min(1.0) * 255.0).round() as u8)
         })
         .collect()
+}
+
+/// A 2nd-order Butterworth section (RBJ cookbook); two in a row make a Linkwitz-Riley filter.
+struct Biquad {
+    b: [f32; 3],
+    a: [f32; 2],
+    z: [f32; 2],
+}
+
+impl Biquad {
+    fn new(fc: f32, high: bool) -> Self {
+        let w = std::f32::consts::TAU * fc / SAMPLE_RATE as f32;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / std::f32::consts::SQRT_2;
+        let a0 = 1.0 + alpha;
+        let b = if high {
+            [(1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0]
+        } else {
+            [(1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0]
+        };
+        Self { b: b.map(|v| v / a0), a: [-2.0 * cos / a0, (1.0 - alpha) / a0], z: [0.0; 2] }
+    }
+
+    fn lowpass(fc: f32) -> Self {
+        Self::new(fc, false)
+    }
+
+    fn highpass(fc: f32) -> Self {
+        Self::new(fc, true)
+    }
+
+    /// Transposed direct form II.
+    fn run(&mut self, x: f32) -> f32 {
+        let y = self.b[0] * x + self.z[0];
+        self.z[0] = self.b[1] * x - self.a[0] * y + self.z[1];
+        self.z[1] = self.b[2] * x - self.a[1] * y;
+        y
+    }
 }
 
 fn peaks(samples: &[f32]) -> Vec<u8> {
@@ -203,6 +243,26 @@ fn peaks(samples: &[f32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waveform_bands_separate_kicks_from_hats_and_keep_dynamics() {
+        // Stereo frames: 1 s of a 60 Hz tone at half scale, 1 s of an 8 kHz tone at
+        // half scale, then 1 s of the 60 Hz tone at a tenth.
+        let tone = |hz: f32, amp: f32| (0..SAMPLE_RATE as usize).flat_map(move |i| {
+            let v = amp * (std::f32::consts::TAU * hz * i as f32 / SAMPLE_RATE as f32).sin();
+            [v, v]
+        });
+        let samples: Vec<f32> = tone(60.0, 0.5).chain(tone(8000.0, 0.5)).chain(tone(60.0, 0.1)).collect();
+        let bands = band_levels(&samples);
+        let at = |sec: f32| bands[(sec * SAMPLE_RATE as f32 / WAVE_BLOCK as f32) as usize];
+        let kick = at(0.5);
+        assert!((kick[0] as i32 - 128).abs() <= 6 && kick[2] < 10, "kick in low only: {kick:?}");
+        let hat = at(1.5);
+        // 8 kHz is 6 samples a cycle, so the sampled peak reads a little under the true one.
+        assert!(hat[2] >= 100 && hat[0] < 10 && hat[1] < 30, "hat in high only: {hat:?}");
+        let quiet = at(2.5);
+        assert!((quiet[0] as i32 - 26).abs() <= 3, "a tenth of the level reads a tenth: {quiet:?}");
+    }
 
     fn write_wav(path: &Path, rate: u32, channels: u16, frames: usize) {
         let mut data = Vec::new();
