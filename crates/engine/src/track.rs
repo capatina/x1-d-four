@@ -81,6 +81,7 @@ fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(SymError::ResetRequired) => break,
+            Err(SymError::IoError(_)) if decoded_enough(&out, rate) => break,
             Err(e) => return Err(e).context("read packet"),
         };
         if packet.track_id != track_id {
@@ -89,6 +90,8 @@ fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
         let buf = match decoder.decode(&packet) {
             Ok(b) => b,
             Err(SymError::DecodeError(_)) => continue,
+            // A file cut off mid-frame: keep what decoded, if it's a real track.
+            Err(SymError::IoError(_)) if decoded_enough(&out, rate) => break,
             Err(e) => return Err(e).context("decode"),
         };
         rate = buf.spec().rate();
@@ -107,6 +110,11 @@ fn decode_stereo(path: &Path) -> anyhow::Result<(u32, Vec<f32>)> {
         return Err(anyhow!("no audio decoded from {}", path.display()));
     }
     Ok((rate, out))
+}
+
+/// More than 5 s decoded: an I/O error now means a truncated file, not a bogus one.
+fn decoded_enough(out: &[f32], rate: u32) -> bool {
+    rate > 0 && out.len() / 2 > rate as usize * 5
 }
 
 fn resample(samples: &[f32], from: u32, to: u32) -> anyhow::Result<Vec<f32>> {

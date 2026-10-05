@@ -43,6 +43,7 @@ impl Library {
                     .and_then(|x| x.to_str())
                     .is_some_and(|x| EXTENSIONS.contains(&x.to_ascii_lowercase().as_str()))
             })
+            .filter(|e| !is_mac_leftover(e.path()))
             .map(|e| read_track(root, e.path()))
             .collect();
         tracks.sort_by(|a, b| {
@@ -65,6 +66,19 @@ impl Library {
             .filter(|t| words.iter().all(|w| t.search.contains(w.as_str())))
             .map(|t| t.id.clone())
             .collect()
+    }
+}
+
+/// macOS Finder aliases and AppleDouble files copied along with real tracks:
+/// named like audio but aren't (an alias starts with "book....mark").
+fn is_mac_leftover(path: &Path) -> bool {
+    if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("._")) {
+        return true;
+    }
+    let mut head = [0u8; 12];
+    match std::fs::File::open(path).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head)) {
+        Ok(()) => &head[..4] == b"book" && &head[8..12] == b"mark",
+        Err(_) => false,
     }
 }
 

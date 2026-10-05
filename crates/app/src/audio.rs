@@ -11,7 +11,14 @@ use crate::app::{App, DeviceState};
 
 /// Drive the device until `stop` is set, reconnecting after unplug or a mixer power cycle.
 pub fn run(app: Arc<App>, mut rt: Rt, stop: Arc<AtomicBool>, config: StreamConfig) {
-    match audio_thread_priority::promote_current_thread_to_real_time(FRAMES_PER_PACKET as u32, ploytec::SAMPLE_RATE) {
+    // The soft RLIMIT_RTTIME budget is derived from these frames, and going over it
+    // sends SIGXCPU, which kills the process by default. One packet (1.67 ms) is too
+    // tight for device bring-up and reconnects, so ask for 100 ms and ignore SIGXCPU;
+    // rtkit's 200 ms hard limit still stops a runaway thread.
+    unsafe {
+        libc::signal(libc::SIGXCPU, libc::SIG_IGN);
+    }
+    match audio_thread_priority::promote_current_thread_to_real_time(ploytec::SAMPLE_RATE / 10, ploytec::SAMPLE_RATE) {
         Ok(handle) => {
             std::mem::forget(handle);
             tracing::info!("audio thread is real-time");
