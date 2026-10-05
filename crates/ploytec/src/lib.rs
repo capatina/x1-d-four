@@ -1,6 +1,6 @@
 //! Userspace driver for the Allen & Heath Xone:4D over Linux usbfs.
 //!
-//! The protocol knowledge comes from the Ozzy driver (`ginkomarchy/drivers/ozzy`)
+//! The protocol knowledge comes from the Ozzy driver (https://github.com/mischa85/Ozzy)
 //! and USB captures of the official A&H Windows driver.
 
 pub mod codec;

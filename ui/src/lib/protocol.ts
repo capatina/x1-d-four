@@ -1,4 +1,4 @@
-// Wire types for the xone-deck server. Mirrors docs/protocol.md exactly;
+// Wire types for the baredeck server. Mirrors docs/protocol.md exactly;
 // decks are 0..3 on the wire and shown to people as 1–4.
 
 export const DECK_COUNT = 4;

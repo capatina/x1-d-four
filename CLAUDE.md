@@ -1,4 +1,4 @@
-# xone-deck
+# baredeck
 
 A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the mixer through its own userspace USB driver: raw usbfs ioctls, no libusb, ALSA or PipeWire. Deck n plays into USB pair 2n+1/2n+2, which feeds mixer channel n+1 when that channel's source switch is on SC (USB).
 
@@ -9,7 +9,7 @@ A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the 
   - `device.rs`: bring-up, streaming loop and hand-back.
   - `midi.rs`: MIDI parser and the out-queue.
 - `crates/engine`: decks and track loading (symphonia + rubato). `Rt` renders on the USB thread; `Control` is the other side.
-- `crates/app`: the `xone-deck` binary.
+- `crates/app`: the `baredeck` binary.
   - axum server (`server.rs`, protocol in `docs/protocol.md`).
   - Application logic (`app.rs`).
   - Control catalog (`controls.rs`) and mappings (`mapping.rs`).
@@ -21,16 +21,16 @@ A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the 
 ## Running
 - One-time setup: `setup/install` (pkexec) installs a udev rule so the user can open the device.
 - Build: `(cd ui && bun install && bun run build) && cargo build --release`.
-- `target/release/xone-deck`: serves http://127.0.0.1:7878 and takes the Xone from snd-usb-ozzy until it quits. Ctrl-C hands it back.
-- `xone-deck serve --no-device`: the same, without hardware.
-- `xone-deck probe --pair N`: test tone.
-- `xone-deck release`: rebind the kernel driver after a crash.
+- `target/release/baredeck`: serves http://127.0.0.1:7878 and takes the Xone (from snd-usb-ozzy, if bound) until it quits. Ctrl-C hands it back.
+- `baredeck serve --no-device`: the same, without hardware.
+- `baredeck probe --pair N`: test tone.
+- `baredeck release`: rebind the kernel driver after a crash.
 - `cargo test`: codec golden packets (captured from the kernel driver), MIDI parser, decks, mappings.
 
 ## Hardware rules (learned the hard way)
 - **Never reset the device, and never cancel a PCM URB mid-packet.** Either one wedges the 4D's audio engine until the mixer is power-cycled. The symptoms: EP5 OUT completes with -71 (EPROTO) and EP6 IN never completes.
   - Our shutdown lets PCM URBs finish and only cancels the MIDI reads.
-  - snd-usb-ozzy must drain before it unbinds. That needs Ozzy 283574d or later in `ginkomarchy/drivers/ozzy` (drain + `soft_unbind`); older builds can wedge the mixer when xone-deck takes it over.
+  - snd-usb-ozzy must drain before it unbinds. That needs the drain + `soft_unbind` fix (capatina/Ozzy, branch `ginkomarchy`); older builds can wedge the mixer when baredeck takes it over.
 - Just after streaming, the 4D stalls SET_INTERFACE for a while. The hand-back switches both interfaces to alt 0 itself, retrying, before releasing them. Otherwise the kernel defers the switch to snd-usb-ozzy's probe, which then fails with -32.
 - Bring-up follows `ploytec.c` exactly. Control transfers time out after 300 ms and retry, because the device drops the transfer that follows a cancelled URB.
 - **Firmware 1.4.1 only:** PCM is on interrupt endpoints there.
@@ -38,7 +38,7 @@ A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the 
 
 ## Mapping Xone controls by prompt
 
-The user asks for mappings in plain words ("make the left pod's first lit button play deck 2"). To make one:
+Users ask for mappings in plain words ("make the left pod's first lit button play deck 2"). To make one:
 1. Find the control in `config/controls.toml`. Names look like:
    - `left.lit1..4`, `right.lit1..4`
    - `left.button.A..L`, `right.button.M..X`
@@ -51,4 +51,4 @@ The user asks for mappings in plain words ("make the left pod's first lit button
 
 Holding the left JOG/SELECT encoder (above the left jog wheel) for about half a second toggles the mixer's shift layer: the BPM display shows SFT and every control sends on channel 15 (`shift.*`). Unmapped shift controls look like "nothing works".
 
-LED rings toggle on every Note On; the mixer has no absolute on/off. Confirmed working 2026-10-04 on channel 16, with the user's mixer set to host-driven rings. `led = "deck.playing"` etc. only works with the mixer's host-driven ring mode (third illuminated button unlit in the power-on map setup).
+LED rings toggle on every Note On; the mixer has no absolute on/off. `led = "deck.playing"` etc. only works with the mixer's host-driven ring mode (third illuminated button unlit in the power-on map setup).

@@ -1,5 +1,5 @@
 /**
- * Fake xone-deck server for UI development: speaks docs/protocol.md on
+ * Fake baredeck server for UI development: speaks docs/protocol.md on
  * http://127.0.0.1:7878 with made-up tracks, decks and MIDI, and serves
  * ui/dist when it exists. Not part of the production bundle.
  *
@@ -256,9 +256,9 @@ const mappings: MappingsMsg = opts['bad-mappings']
       ok: false,
       error: 'line 14, column 9: unknown action "deck.ply"\n  left.lit1 = "deck.ply deck=1"\n          ^ did you mean "deck.play"?',
       count: 0,
-      path: '/home/ginko/Projects/xone-deck/config/mappings.toml',
+      path: 'config/mappings.toml',
     }
-  : { type: 'mappings', ok: true, error: null, count: 23, path: '/home/ginko/Projects/xone-deck/config/mappings.toml' };
+  : { type: 'mappings', ok: true, error: null, count: 23, path: 'config/mappings.toml' };
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -577,4 +577,4 @@ setInterval(() => {
   broadcast(stateMsg());
 }, 1000 / TICK_HZ);
 
-console.log(`xone-deck mock on http://127.0.0.1:${server.port} (${tracks.length} tracks, device ${device.state})`);
+console.log(`baredeck mock on http://127.0.0.1:${server.port} (${tracks.length} tracks, device ${device.state})`);
