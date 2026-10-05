@@ -30,7 +30,8 @@ A browser-controlled 4-deck player for the Allen & Heath Xone:4D. It drives the 
 ## Hardware rules (learned the hard way)
 - **Never reset the device, and never cancel a PCM URB mid-packet.** Either one wedges the 4D's audio engine until the mixer is power-cycled. The symptoms: EP5 OUT completes with -71 (EPROTO) and EP6 IN never completes.
   - Our shutdown lets PCM URBs finish and only cancels the MIDI reads.
-  - snd-usb-ozzy must drain before it unbinds. That needs Ozzy commit f41a0f9 or later in `ginkomarchy/drivers/ozzy`; older builds wedge the mixer when xone-deck takes it over.
+  - snd-usb-ozzy must drain before it unbinds. That needs Ozzy 283574d or later in `ginkomarchy/drivers/ozzy` (drain + `soft_unbind`); older builds can wedge the mixer when xone-deck takes it over.
+- Just after streaming, the 4D stalls SET_INTERFACE for a while. The hand-back switches both interfaces to alt 0 itself, retrying, before releasing them. Otherwise the kernel defers the switch to snd-usb-ozzy's probe, which then fails with -32.
 - Bring-up follows `ploytec.c` exactly. Control transfers time out after 300 ms and retry, because the device drops the transfer that follows a cancelled URB.
 - **Firmware 1.4.1 only:** PCM is on interrupt endpoints there.
 - **Every OUT packet must be complete:** 80 frames, with 0xFD in all 16 MIDI bytes.

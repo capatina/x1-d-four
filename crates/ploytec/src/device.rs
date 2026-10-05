@@ -447,6 +447,12 @@ impl Xone {
         // so the kernel driver's own handshake (no retries) succeeds.
         let mut fw = [0u8; 15];
         let _ = self.control("firmware read", 0xC0, REQ_FIRMWARE, 0, 0, &mut fw);
+        // Releasing an interface switches it to alt 0. Right after streaming the
+        // 4D stalls that request for a while, and the kernel then retries it in
+        // snd-usb-ozzy's probe, which fails with -EPIPE. Do the switch ourselves.
+        for iface in [1, 0] {
+            self.set_alt_zero(iface);
+        }
         let _ = self.usb.release(1);
         self.usb.release(0).ctx("release interface 0")?;
         // snd-usb-ozzy binds interface 0 and claims 1 itself.
@@ -457,6 +463,27 @@ impl Xone {
         }
         tracing::info!("Xone:4D handed back to the kernel driver");
         Ok(())
+    }
+
+    fn set_alt_zero(&self, iface: u32) {
+        let start = Instant::now();
+        loop {
+            match self.usb.set_interface(iface, 0) {
+                Ok(()) => {
+                    if start.elapsed() > Duration::from_millis(1) {
+                        tracing::debug!(iface, waited = ?start.elapsed(), "interface back at alt 0");
+                    }
+                    return;
+                }
+                Err(e) if e.raw_os_error() == Some(libc::EPIPE) && start.elapsed() < Duration::from_secs(3) => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    tracing::warn!(iface, error = %e, waited = ?start.elapsed(), "could not switch interface to alt 0");
+                    return;
+                }
+            }
+        }
     }
 }
 
