@@ -22,9 +22,6 @@ export function handleExploreKey(e: KeyboardEvent): boolean {
     case ' ':
       if (!e.repeat) client.send({ cmd: 'play_pause', deck: client.targetDeck() });
       return true;
-    case 'Escape':
-      if (!e.repeat) client.setView('decks');
-      return true;
   }
   return false;
 }

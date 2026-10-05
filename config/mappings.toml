@@ -24,7 +24,6 @@
 #   explore.step         encoder: turn right = dive, turn left = back
 #   explore.follow       on press: toggle following the playing track
 #   explore.root         on press: start the tunnel at the library selection
-#   view.explore         on press: switch between the decks and the tunnel
 #
 # led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused", "deck.synced".
 # The rings toggle on each message, so they need the mixer's host-driven ring mode
@@ -37,7 +36,7 @@
 # jog             scroll the library                  aim between portals
 # SELECT          turn: page library, push: fly from  turn: dive/back, push: dive
 #                 the library selection
-# buttons         A low, B mid, C high band,          M decks <-> tunnel
+# buttons         A low, B mid, C high band,
 #                 E follow the playing deck
 # encoders 1-4    nudge deck 1-4, push = cue          skip deck 1-4 by 2 s, push = sync
 # faders 1-4      pitch deck 1-4 (+/-8 %)
@@ -239,7 +238,3 @@ deck = 3
 control = "right.encoder4.push"
 action = "deck.sync"
 deck = 4
-
-[[map]]
-control = "right.button.M"
-action = "view.explore"

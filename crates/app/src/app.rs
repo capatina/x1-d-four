@@ -307,11 +307,12 @@ impl App {
                 b[..bytes.len()].copy_from_slice(&bytes);
                 self.send(Command::MidiOut { bytes: b, len: bytes.len() as u8 });
             }
-            ClientCommand::View { view } => match view.as_str() {
-                "explore" => self.set_view(true),
-                "decks" => self.set_view(false),
-                other => return Err(format!("unknown view {other:?}")),
-            },
+            // The tunnel is the only view now; the deck view was removed.
+            ClientCommand::View { view } => {
+                if view != "explore" {
+                    return Err(format!("there is no {view:?} view; the tunnel is the only one"));
+                }
+            }
             ClientCommand::ExploreBand { band } => {
                 self.explore_band(analysis::Band::parse(&band).ok_or_else(|| format!("unknown band {band:?}"))?)
             }
@@ -369,7 +370,6 @@ impl App {
             Intent::ExploreFollow => Ok(self.explore_follow(None)),
             Intent::ExploreRootSelected => self.explore_root_selected(),
             Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
-            Intent::ToggleView => Ok(self.set_view(self.view_name() == "decks")),
         };
         if let Err(e) = result {
             self.broadcast(json!({ "type": "error", "message": e }));

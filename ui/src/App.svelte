@@ -1,20 +1,9 @@
 <script lang="ts">
-  import Deck from './components/Deck.svelte';
-  import Library from './components/Library.svelte';
-  import MidiPanel from './components/MidiPanel.svelte';
-  import StatusBar from './components/StatusBar.svelte';
   import Toasts from './components/Toasts.svelte';
   import ExploreView from './explore/ExploreView.svelte';
   import { handleExploreKey } from './explore/keys';
   import { client } from './lib/client.svelte';
   import { search } from './lib/search.svelte';
-  import { DECK_COUNT } from './lib/protocol';
-
-  const DECKS = Array.from({ length: DECK_COUNT }, (_, i) => i);
-  const MIDI_KEY = 'x1-d-four:midi-collapsed';
-
-  let midiCollapsed = $state(readFlag(MIDI_KEY));
-  $effect(() => writeFlag(MIDI_KEY, midiCollapsed));
 
   // Banner: only once a connection attempt has actually failed, so a normal
   // page load doesn't flash it.
@@ -22,70 +11,22 @@
   let now = $state(performance.now());
   $effect(() => {
     if (!offline) return;
-    const timer = setInterval(() => (now = performance.now()), 200);
+    const timer = setInterval(() => (now = performance.now()), 250);
     return () => clearInterval(timer);
   });
   const retryIn = $derived(client.retryAt == null ? 0 : Math.max(0, Math.ceil((client.retryAt - now) / 1000)));
-  const exploring = $derived(client.view === 'explore');
 
-  // Keyboard shortcuts. Capture phase, so they win over a focused button or
-  // slider; ignored while typing in the search box (it handles Esc itself).
+  // The tunnel is the whole app; everything is played from the mixer. Typing
+  // any character searches; arrows, Enter, Backspace and Space are fallbacks.
   $effect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
-
-      if (client.view === 'explore') {
-        // Any character starts a search (Space stays play/pause).
-        if (isCharacter(e)) {
-          e.preventDefault();
-          search.start(e.key);
-          return;
-        }
-        if (handleExploreKey(e)) e.preventDefault();
-        return;
-      }
-      // Deck view: letters go straight into the library search box.
-      if (isCharacter(e) && /\p{L}/u.test(e.key) && e.key.toLowerCase() !== 'e') {
-        document.getElementById('library-search')?.focus();
-        return;
-      }
-      if (e.key === 'e' || e.key === 'E') {
+      if (e.key.length === 1 && e.key !== ' ' && !e.repeat) {
         e.preventDefault();
-        if (!e.repeat) client.setView('explore');
+        search.start(e.key);
         return;
       }
-
-      const digit = deckDigit(e.code);
-      if (digit != null) {
-        e.preventDefault();
-        if (e.repeat) return;
-        if (e.shiftKey) client.send({ cmd: 'load_selected', deck: digit });
-        else client.focus(digit);
-        return;
-      }
-
-      switch (e.key) {
-        case 'ArrowUp':
-        case 'ArrowDown':
-          e.preventDefault();
-          client.send({ cmd: 'scroll', delta: e.key === 'ArrowUp' ? -1 : 1 });
-          break;
-        case 'Enter':
-          e.preventDefault();
-          if (!e.repeat) client.send({ cmd: 'load_selected' });
-          break;
-        case ' ':
-          e.preventDefault();
-          if (!e.repeat) client.send({ cmd: 'play_pause', deck: client.targetDeck() });
-          break;
-        case '/':
-          e.preventDefault();
-          document.getElementById('library-search')?.focus();
-          break;
-        case 'Escape':
-          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-          break;
-      }
+      if (handleExploreKey(e)) e.preventDefault();
     };
     // Stop Space/Enter from also "clicking" whatever button has focus.
     const up = (e: KeyboardEvent) => {
@@ -99,41 +40,15 @@
     };
   });
 
-  /** A printable character other than Space. */
-  function isCharacter(e: KeyboardEvent): boolean {
-    return e.key.length === 1 && e.key !== ' ' && !e.repeat;
-  }
-
-  function deckDigit(code: string): number | null {
-    const m = /^(?:Digit|Numpad)([1-4])$/.exec(code);
-    return m ? Number(m[1]) - 1 : null;
-  }
-
   function isTyping(target: EventTarget | null): boolean {
     if (target instanceof HTMLTextAreaElement) return true;
     if (target instanceof HTMLInputElement) return !['range', 'button', 'checkbox', 'radio'].includes(target.type);
     return target instanceof HTMLElement && target.isContentEditable;
   }
-
-  function readFlag(key: string): boolean {
-    try {
-      return localStorage.getItem(key) === '1';
-    } catch {
-      return false;
-    }
-  }
-
-  function writeFlag(key: string, value: boolean) {
-    try {
-      localStorage.setItem(key, value ? '1' : '0');
-    } catch {
-      // Storage blocked: the panel just won't remember its state.
-    }
-  }
 </script>
 
-<div class="app" class:offline class:exploring>
-  <StatusBar inert={exploring} />
+<div class="app">
+  <ExploreView />
 
   {#if offline}
     <div class="banner" role="alert">
@@ -146,66 +61,21 @@
     </div>
   {/if}
 
-  <main inert={exploring}>
-    <div class="decks">
-      {#each DECKS as i (i)}
-        <Deck index={i} />
-      {/each}
-    </div>
-    <div class="lower">
-      <Library />
-      <MidiPanel bind:collapsed={midiCollapsed} />
-    </div>
-  </main>
-
-  {#if exploring}
-    <ExploreView />
-  {/if}
-
   <Toasts />
 </div>
 
 <style>
   .app {
     position: relative;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
     height: 100vh;
     height: 100dvh;
-  }
-  main {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: var(--gap);
-    min-height: 0;
-    padding: var(--gap);
-  }
-  .decks {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--gap);
-  }
-  .lower {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--gap);
-    min-height: 0;
-  }
-  .offline .decks {
-    opacity: 0.45;
-    filter: saturate(0.4);
-  }
-  /* Explore covers everything; skip painting the deck view underneath. */
-  .exploring > main,
-  .exploring > .banner {
-    visibility: hidden;
   }
 
   .banner {
     position: absolute;
     top: 52px;
+    z-index: 40;
     left: 50%;
-    z-index: 10;
     display: flex;
     align-items: center;
     gap: 14px;

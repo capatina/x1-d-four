@@ -175,7 +175,7 @@ The **aimed** child of `current` is also the library selection, so every "load s
 }
 ```
 
-`state` gains `view: "decks" | "explore"`. The server starts in `"explore"`, the main view. The mixer can switch views, so the UI must follow it.
+`state` gains `view`, which is always `"explore"`: the tunnel is the only view (the deck view was removed).
 
 ### Client → server
 

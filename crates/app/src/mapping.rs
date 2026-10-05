@@ -49,7 +49,6 @@ pub enum Action {
     ExploreStep,
     ExploreFollow,
     ExploreRoot,
-    ViewExplore,
     Sync,
 }
 
@@ -76,7 +75,6 @@ impl Action {
             "explore.step" => Self::ExploreStep,
             "explore.follow" => Self::ExploreFollow,
             "explore.root" => Self::ExploreRoot,
-            "view.explore" => Self::ViewExplore,
             "deck.sync" => Self::Sync,
             other => bail!("unknown action {other:?}"),
         })
@@ -118,7 +116,6 @@ pub enum Intent {
     ExploreFollow,
     /// Start the tree at the library selection.
     ExploreRootSelected,
-    ToggleView,
     Sync(Option<usize>),
 }
 
@@ -177,7 +174,6 @@ impl Rule {
             (Action::ExploreStep, Delta(n)) if n < 0 => Intent::ExploreBack,
             (Action::ExploreFollow, Press) => Intent::ExploreFollow,
             (Action::ExploreRoot, Press) => Intent::ExploreRootSelected,
-            (Action::ViewExplore, Press) => Intent::ToggleView,
             (Action::Sync, Press) => Intent::Sync(d),
             _ => return None,
         })
@@ -274,8 +270,7 @@ mod tests {
             "[[map]]\ncontrol = \"left.button.A\"\naction = \"explore.cycle_band\"\n\
              [[map]]\ncontrol = \"left.button.C\"\naction = \"explore.band\"\namount = 1\n\
              [[map]]\ncontrol = \"right.jog\"\naction = \"explore.aim\"\n\
-             [[map]]\ncontrol = \"right.browse\"\naction = \"explore.step\"\n\
-             [[map]]\ncontrol = \"right.button.M\"\naction = \"view.explore\"",
+             [[map]]\ncontrol = \"right.browse\"\naction = \"explore.step\"",
             &c,
         )
         .unwrap();
@@ -284,7 +279,6 @@ mod tests {
         assert_eq!(m.rules[2].intent(ControlEvent::Delta(-2)), Some(Intent::ExploreAim(-2)));
         assert_eq!(m.rules[3].intent(ControlEvent::Delta(1)), Some(Intent::ExploreDive));
         assert_eq!(m.rules[3].intent(ControlEvent::Delta(-1)), Some(Intent::ExploreBack));
-        assert_eq!(m.rules[4].intent(ControlEvent::Press), Some(Intent::ToggleView));
         assert!(Mappings::parse("[[map]]\ncontrol = \"left.button.A\"\naction = \"explore.band\"", &c).is_err());
         assert!(Mappings::parse("[[map]]\ncontrol = \"left.fader1\"\naction = \"explore.aim\"", &c).is_err());
     }

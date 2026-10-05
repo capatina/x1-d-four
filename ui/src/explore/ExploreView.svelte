@@ -4,7 +4,7 @@
   import MixerLegend from '../components/MixerLegend.svelte';
   import { client } from '../lib/client.svelte';
   import { fmtBpm, idToName } from '../lib/format';
-  import { backKey, bandKey, diveHint, EXPLORE_LEGEND, keysFor, keysText, keyText } from '../lib/mixer';
+  import { backKey, bandKey, diveHint, EXPLORE_LEGEND, keysText, keyText } from '../lib/mixer';
   import { BANDS, type Band } from '../lib/protocol';
   import { viz } from '../lib/viz';
   import DeckHud from './DeckHud.svelte';
@@ -53,7 +53,13 @@
 
   // Everything is driven from the mixer; these say which control does what.
   const maps = $derived(client.mixer);
-  const viewKey = $derived(keysFor(maps, 'view.explore')[0] ?? null);
+  /** The mixer's connection, shown in the corner (the only status the app has). */
+  const device = $derived(client.state?.device ?? null);
+  const deviceLine = $derived.by(() => {
+    if (!device) return 'Connecting…';
+    if (device.state === 'running') return `Xone:4D · ${device.latency_ms.toFixed(1)} ms`;
+    return device.message ?? { connecting: 'Connecting to the Xone:4D…', stalled: 'Xone:4D stalled', missing: 'Xone:4D not connected', error: 'Xone:4D error' }[device.state] ?? device.state;
+  });
   const followKeys = $derived(keysText(maps, 'explore.follow'));
   const back = $derived(backKey(maps));
   const aimHint = $derived.by(() => {
@@ -210,15 +216,14 @@
 
   <!-- Top-right: tree + way out -->
   <aside class="side">
-    <button
-      type="button"
-      class="close"
-      onclick={() => client.setView('decks')}
-      title="Back to the decks{viewKey ? ` (${keyText(viewKey)})` : ''}"
+    <div
+      class="device"
+      class:ok={device?.state === 'running'}
+      class:warn={device?.state === 'connecting' || !device}
+      title={device?.firmware ? `Firmware ${device.firmware} · ${device.underruns} underruns · ${device.urb_errors} USB errors` : undefined}
     >
-      Decks
-      {#if viewKey}<MixerKey k={viewKey} />{/if}
-    </button>
+      <span class="dot"></span>{deviceLine}
+    </div>
     {#if ex?.root}
       <Minimap msg={ex} />
     {/if}
@@ -263,10 +268,7 @@
             Start from “{title(selected)}”
           </button>
         {/if}
-        <button type="button" onclick={() => client.setView('decks')}>
-          Open the library
-          {#if viewKey}<MixerKey k={viewKey} />{/if}
-        </button>
+        <span class="hint">or just start typing to search</span>
       </div>
       <div class="teach">
         <MixerLegend slots={['play', 'scroll', 'root']} view="explore" tone="overlay" errors={false} />
@@ -627,22 +629,46 @@
     justify-items: end;
     gap: 10px;
   }
-  .close {
+  .device {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    max-width: 360px;
     height: 30px;
-    padding: 0 8px 0 12px;
+    padding: 0 12px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
     background: rgba(6, 7, 10, 0.55);
     font: 600 12.5px/1 var(--font-ui);
     color: var(--text-2);
-    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .close:hover {
+  .device .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--bad);
+    box-shadow: 0 0 8px var(--bad);
+  }
+  .device.ok .dot {
+    background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+  }
+  .device.warn .dot {
+    background: var(--warn);
+    box-shadow: 0 0 8px var(--warn);
+  }
+  .device:not(.ok):not(.warn) {
     color: var(--text);
-    background: rgba(20, 22, 28, 0.8);
+    border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  }
+  .hint {
+    align-self: center;
+    font-size: 13px;
+    color: var(--text-3);
   }
   .stats {
     padding: 3px 8px;
