@@ -27,6 +27,16 @@ const CORRECT_TAU = 0.15;
 const GLIDE_TAU = 0.05;
 /** Don't extrapolate further than this past the last `state` (server stalled). */
 const MAX_AGE_S = 1;
+/** A hand shift glides at up to this speed bend while playing (the engine's SHIFT_BEND), at normal speed while paused. */
+const SHIFT_BEND = 0.25;
+/** After a shift tick, follow the server this tightly (and backwards too) for this long. */
+const SHIFT_TRACK_MS = 400;
+const SHIFT_TAU = 0.025;
+/** Lining up beats by hand: the strip zooms in to ± this many seconds, held after the last tick. */
+const FINE_S = 1.6;
+const FINE_HOLD_MS = 1500;
+const ZOOM_IN_TAU = 0.06;
+const ZOOM_OUT_TAU = 0.25;
 
 /** Brightness of a paused lead deck's fill (its colours are mixed towards black). */
 const LEAD_PAUSED = 0.72;
@@ -41,7 +51,8 @@ const BAND_ALPHA = [0.75, 0.6, 0.45] as const;
 const WATER = 'rgba(30, 58, 56, 0.5)';
 const DIGITS = ['1', '2', '3', '4'];
 
-type Shown = { pos: number; trackId: string | null; live: boolean };
+/** `pos` follows the server; `view` adds hand shifts not landed yet, and is what's drawn. */
+type Shown = { pos: number; view: number; trackId: string | null; live: boolean };
 
 /** Per column: x, each band's peak height, and the outline (the largest of the three). */
 type Envelope = { n: number; xs: Float32Array; yl: Float32Array; ym: Float32Array; yh: Float32Array; yt: Float32Array };
@@ -52,7 +63,7 @@ export class WaveRenderer {
   readonly #canvas: HTMLCanvasElement;
   readonly #ctx: CanvasRenderingContext2D;
   readonly #env: Envelope[] = [];
-  readonly #shown: Shown[] = Array.from({ length: DECK_COUNT }, () => ({ pos: 0, trackId: null, live: false }));
+  readonly #shown: Shown[] = Array.from({ length: DECK_COUNT }, () => ({ pos: 0, view: 0, trackId: null, live: false }));
   readonly #resize: ResizeObserver;
   readonly #mono: string;
   /** Built once, so drawing a frame creates no strings. */
@@ -73,6 +84,8 @@ export class WaveRenderer {
   #running = false;
   #disposed = false;
   #last = 0;
+  /** Seconds visible each side of the playhead: WINDOW_S, or FINE_S while shifting. */
+  #window = WINDOW_S;
   /** Average draw time (ms), for ?stats. */
   drawMs = 0;
 
@@ -209,11 +222,13 @@ export class WaveRenderer {
 
   #advance(st: StateMsg | null, now: number, dt: number): void {
     const age = Math.min(MAX_AGE_S, Math.max(0, (now - waves.stateAt) / 1000));
+    let fine = false;
     for (let i = 0; i < DECK_COUNT; i++) {
       const sh = this.#shown[i];
       const ds = st?.decks[i];
       if (!ds || !ds.track_id) {
         sh.live = false;
+        waves.shiftLead[i] = 0;
         continue;
       }
       const loop = activeLoop(ds);
@@ -222,11 +237,14 @@ export class WaveRenderer {
       let target = ds.position + (ds.playing ? ds.rate * age : 0);
       if (loop && ds.position < loop.end && target >= loop.end) target = wrapLoop(target, loop);
       target = clamp(target, 0, len);
+      const shifting = now - waves.shiftAt[i] < SHIFT_TRACK_MS;
+      if (now - waves.shiftAt[i] < FINE_HOLD_MS) fine = true;
 
       if (!sh.live || sh.trackId !== ds.track_id) {
-        sh.pos = target;
+        sh.pos = sh.view = target;
         sh.trackId = ds.track_id;
         sh.live = true;
+        waves.shiftLead[i] = 0;
         continue;
       }
       if (ds.playing) {
@@ -237,18 +255,34 @@ export class WaveRenderer {
         if (loop) err = wrapSym(err, loop.end - loop.start);
         if (Math.abs(err) > SNAP_S) {
           next = target;
+        } else if (shifting) {
+          // A hand on the platter: follow the deck closely, backwards as well.
+          next += err * (1 - Math.exp(-dt / SHIFT_TAU));
         } else {
           // Ease onto the server clock, but never move backwards: a late
           // tick only slows the scroll for a moment.
           next += Math.max(-step, err * (1 - Math.exp(-dt / CORRECT_TAU)));
-          if (loop && next >= loop.end) next = wrapLoop(next, loop);
         }
+        if (loop && next >= loop.end) next = wrapLoop(next, loop);
         sh.pos = clamp(next, 0, len);
       } else {
         const err = target - sh.pos;
-        sh.pos = Math.abs(err) > SNAP_S ? target : sh.pos + err * (1 - Math.exp(-dt / GLIDE_TAU));
+        const tau = shifting ? SHIFT_TAU : GLIDE_TAU;
+        sh.pos = Math.abs(err) > SNAP_S ? target : sh.pos + err * (1 - Math.exp(-dt / tau));
       }
+      // Shifts the deck hasn't glided through yet show at once, and glide out as fast
+      // as the deck glides in: the waveform moves with the wheel.
+      let lead = waves.shiftLead[i];
+      if (lead !== 0) {
+        const d = (ds.playing ? SHIFT_BEND * Math.max(Math.abs(ds.rate), 0.25) : 1) * dt;
+        lead = Math.abs(lead) <= d ? 0 : lead - Math.sign(lead) * d;
+        waves.shiftLead[i] = lead;
+      }
+      sh.view = clamp(sh.pos + lead, 0, len);
     }
+    // Lining up beats by hand: zoom in so a 2 ms tick is a visible step.
+    const want = fine ? FINE_S : WINDOW_S;
+    this.#window += (want - this.#window) * (1 - Math.exp(-dt / (fine ? ZOOM_IN_TAU : ZOOM_OUT_TAU)));
   }
 
   // -------------------------------------------------------------------------
@@ -267,7 +301,7 @@ export class WaveRenderer {
 
     const cx = w / 2;
     const cy = h * 0.64;
-    const pps = w / (2 * WINDOW_S);
+    const pps = w / (2 * this.#window);
     // Beat-grid ruler along both edges: one lane per deck, deck 1 outermost.
     const lane = clamp(h * 0.04, 4, 6);
     const ruler = 2 + DECK_COUNT * lane;
@@ -289,9 +323,9 @@ export class WaveRenderer {
       const sh = this.#shown[i];
       if (!ds || !sh.live) continue;
       const loop = activeLoop(ds);
-      if (loop) this.#loop(i, loop, sh.pos, rate(ds), cx, pps, ruler, i === lead);
+      if (loop) this.#loop(i, loop, sh.view, rate(ds), cx, pps, ruler, i === lead);
       const grid = i === lead ? gridFor(i, ds) : null;
-      if (grid) this.#ticks(i, grid, sh.pos, rate(ds), ds.length, cx, pps, lane, ruler, 'lines');
+      if (grid) this.#ticks(i, grid, sh.view, rate(ds), ds.length, cx, pps, lane, ruler, 'lines');
     }
 
     // Waveforms.
@@ -304,7 +338,7 @@ export class WaveRenderer {
       const sh = this.#shown[i];
       const wave = waves.decks[i];
       if (!ds || !sh.live || !wave || wave.trackId !== ds.track_id) continue;
-      this.#sample(env, wave, sh.pos, rate(ds), ds.length, cx, pps, half);
+      this.#sample(env, wave, sh.view, rate(ds), ds.length, cx, pps, half);
       if (env.n >= 2) any = true;
     }
     if (any) {
@@ -359,7 +393,7 @@ export class WaveRenderer {
       this.#ticks(
         i,
         grid,
-        sh.pos,
+        sh.view,
         rate(ds),
         ds.length,
         cx,
@@ -405,11 +439,23 @@ export class WaveRenderer {
     const last = wave.blocks - 1;
     const perPx = r / pps / wave.blockSec; // blocks per CSS px
     const span = STEP * perPx;
-    const n = Math.min(env.xs.length, Math.ceil((x1 - x0) / STEP) + 1);
+    // Zoomed out, columns sit at fixed places in the track (multiples of `span`
+    // blocks), not at fixed pixels: the shape slides rigidly, sub-pixel, instead
+    // of shimmering as the blocks under each column change.
+    const head = pos / wave.blockSec - 0.5;
+    const k0 = span > 1 ? Math.floor((head + (x0 - cx) * perPx) / span) : 0;
+    const n = Math.min(env.xs.length, Math.ceil((x1 - x0) / STEP) + (span > 1 ? 2 : 1));
     for (let k = 0; k < n; k++) {
-      const x = k === n - 1 ? x1 : x0 + k * STEP;
-      // Block centres sit half a block in.
-      const f = pos / wave.blockSec + (x - cx) * perPx - 0.5;
+      let x: number;
+      let f: number;
+      if (span > 1) {
+        f = (k0 + k) * span;
+        x = clamp(cx + (f - head) / perPx, x0, x1);
+      } else {
+        x = k === n - 1 ? x1 : x0 + k * STEP;
+        // Block centres sit half a block in.
+        f = head + (x - cx) * perPx;
+      }
       let lo: number;
       let mi: number;
       let hi: number;

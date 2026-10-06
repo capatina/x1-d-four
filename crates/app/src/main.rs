@@ -8,6 +8,7 @@ mod explore;
 mod exploring;
 mod library;
 mod mapping;
+mod recorder;
 mod server;
 mod viz;
 
@@ -117,7 +118,13 @@ fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let (mut control, rt) = engine::new();
     let viz_feed = control.take_viz().expect("viz feed");
-    let app = app::App::new(control, music, config_dir.clone(), args.urbs, runtime.handle().clone());
+    // Recording the mix: the writer drains the mixer's record channels to ~/Music/recordings.
+    let recorder = recorder::Recorder::new(control.shared.clone(), music.join("recordings"));
+    {
+        let (recorder, feed) = (recorder.clone(), control.take_capture().expect("capture feed"));
+        std::thread::Builder::new().name("x1-d-four-recorder".into()).spawn(move || recorder.run(feed))?;
+    }
+    let app = app::App::new(control, music, config_dir.clone(), args.urbs, runtime.handle().clone(), recorder);
     let stop = Arc::new(AtomicBool::new(false));
     app.start_analysis();
 
@@ -291,7 +298,7 @@ fn analyse(query: &str, music: Option<PathBuf>, top: usize) -> anyhow::Result<()
     println!("{}  [{:.1} BPM]", name(&pick.id), index.tempo[i]);
     for band in analysis::Band::ALL {
         println!("\n  {}:", band.name().to_uppercase());
-        for (j, sim) in index.nearest(band, index.vector(band, i), top, |k| index.canonical(k) == index.canonical(i)) {
+        for (j, sim) in index.nearest(band, i, top, |k| index.canonical(k) == index.canonical(i)) {
             println!("    {:>3.0}%  {:>5.1} BPM  {}", sim * 100.0, index.tempo[j], name(&index.ids[j]));
         }
     }

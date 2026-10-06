@@ -1,9 +1,14 @@
-//! Per-track features in three bands, built from a short-time spectrum.
+//! Per-track features in three bands, built from a short-time spectrum: the
+//! band's vibe in the body of the track (its louder sections, not the intro,
+//! outro or breakdowns).
 //!
 //! - low (20-250 Hz): kick, sub and bassline. Spectral shape, its movement, the
-//!   groove (onset autocorrelation at musical subdivisions) and tempo.
-//! - mid (250-3000 Hz): harmony. Spectral shape, chroma (pitch classes) and tonality.
-//! - high (3-16 kHz): hats, percussion and air. Spectral shape, groove, brightness.
+//!   groove (onset autocorrelation), the beat pattern (where in the beat the
+//!   kicks and bass hit, anchored on the kick), how much the bass pumps, tempo.
+//! - mid (250-3000 Hz): harmony. Spectral shape, chroma, tonality, how clearly
+//!   tonal it is, how fast the harmony moves, major vs minor; and the key.
+//! - high (3-16 kHz): hats, percussion and air. Spectral shape, groove, the beat
+//!   pattern relative to the kick, density, brightness.
 //!
 //! Every vector is loudness-independent: levels are relative to the track's own mean.
 
@@ -14,7 +19,11 @@ pub const N_FFT: usize = 4096;
 pub const HOP: usize = 1024;
 /// Sub-bands per band.
 pub const SUB: usize = 8;
-pub const SECTION_SECS: f32 = 8.0;
+/// The body: the loudest half of the track's 8 s sections.
+const SECTION_SECS: f32 = 8.0;
+const BODY_SHARE: f32 = 0.5;
+/// Steps per beat in the beat patterns (16ths).
+const STEPS: usize = 4;
 
 pub const BAND_EDGES: [(f32, f32); 3] = [(20.0, 250.0), (250.0, 3000.0), (3000.0, 16000.0)];
 const CHROMA_RANGE: (f32, f32) = (110.0, 3000.0);
@@ -22,9 +31,9 @@ const CHROMA_RANGE: (f32, f32) = (110.0, 3000.0);
 const RHYTHM_LAGS: [f32; 8] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
 
 /// Layout of each band's vector, so similarity can weight groups (see `index`).
-pub const LOW_DIMS: usize = SUB * 2 + RHYTHM_LAGS.len() + 2; // shape, movement, groove, level, tempo
-pub const MID_DIMS: usize = SUB * 2 + 12 + 2; // shape, movement, chroma, flatness, level
-pub const HIGH_DIMS: usize = SUB * 2 + RHYTHM_LAGS.len() + 3; // shape, movement, groove, centroid, flatness, level
+pub const LOW_DIMS: usize = SUB * 2 + RHYTHM_LAGS.len() + STEPS + 3; // shape, movement, groove, pattern, pump, level, tempo
+pub const MID_DIMS: usize = SUB * 2 + 12 + 5; // shape, movement, chroma, flatness, level, clarity, harmonic rhythm, mode
+pub const HIGH_DIMS: usize = SUB * 2 + RHYTHM_LAGS.len() + STEPS + 4; // shape, movement, groove, pattern, density, centroid, flatness, level
 pub const DIMS: [usize; 3] = [LOW_DIMS, MID_DIMS, HIGH_DIMS];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,21 +41,62 @@ pub struct Features {
     pub tempo: f32,
     pub tempo_from_tag: bool,
     pub duration: f32,
-    /// Whole-track vectors: [low, mid, high].
+    /// The body's vectors: [low, mid, high].
     pub bands: [Vec<f32>; 3],
-    /// The same vectors per `SECTION_SECS` window, in order.
-    pub sections: Vec<[Vec<f32>; 3]>,
+    /// Estimated key: 0-11 major (C = 0), 12-23 minor (A minor = 21).
+    pub key: u8,
+    /// How clearly tonal the track is, 0..1 (chords and melody vs drums and noise).
+    pub clarity: f32,
 }
 
-impl Features {
-    /// Section index at `seconds` into the track.
-    pub fn section_at(&self, seconds: f64) -> Option<&[Vec<f32>; 3]> {
-        if self.sections.is_empty() {
-            return None;
-        }
-        let i = ((seconds.max(0.0) / SECTION_SECS as f64) as usize).min(self.sections.len() - 1);
-        Some(&self.sections[i])
+/// Krumhansl-Kessler key profiles.
+const MAJOR: [f32; 12] = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+const MINOR: [f32; 12] = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+
+fn correlate(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len() as f32;
+    let (ma, mb) = (a.iter().sum::<f32>() / n, b.iter().sum::<f32>() / n);
+    let (mut num, mut da, mut db) = (0f32, 0f32, 0f32);
+    for (x, y) in a.iter().zip(b) {
+        num += (x - ma) * (y - mb);
+        da += (x - ma).powi(2);
+        db += (y - mb).powi(2);
     }
+    num / (da * db).sqrt().max(1e-9)
+}
+
+/// Key (0-11 major, 12-23 minor) and how much more major than minor it sounds.
+fn estimate_key(chroma: &[f32; 12]) -> (u8, f32) {
+    let rotated = |profile: &[f32; 12], tonic: usize| -> Vec<f32> { (0..12).map(|i| profile[(i + 12 - tonic) % 12]).collect() };
+    let (mut best, mut key) = (f32::MIN, 0u8);
+    let (mut best_major, mut best_minor) = (f32::MIN, f32::MIN);
+    for tonic in 0..12 {
+        let maj = correlate(chroma, &rotated(&MAJOR, tonic));
+        let min = correlate(chroma, &rotated(&MINOR, tonic));
+        best_major = best_major.max(maj);
+        best_minor = best_minor.max(min);
+        if maj > best {
+            (best, key) = (maj, tonic as u8);
+        }
+        if min > best {
+            (best, key) = (min, 12 + tonic as u8);
+        }
+    }
+    (key, best_major - best_minor)
+}
+
+/// Camelot-wheel distance between two keys: 0 same, 1 relative or a fifth away, 2 two steps, more beyond.
+pub fn key_distance(a: u8, b: u8) -> u8 {
+    let camelot = |k: u8| -> (i32, bool) {
+        let (tonic, minor) = ((k % 12) as i32, k >= 12);
+        // Minor keys share a number with their relative major (three semitones up).
+        let t = if minor { (tonic + 3) % 12 } else { tonic };
+        ((t * 7 + 7) % 12, minor)
+    };
+    let ((na, ma), (nb, mb)) = (camelot(a), camelot(b));
+    let d = (na - nb).rem_euclid(12);
+    let steps = d.min(12 - d) as u8;
+    steps + u8::from(ma != mb)
 }
 
 /// Per-frame summary; the full spectrum is never kept.
@@ -225,11 +275,91 @@ pub fn estimate_tempo_from_flux(flux: &[f32], frame_rate: f32) -> f32 {
     (fine.1 * 100.0).round() / 100.0
 }
 
-/// Build the three band vectors from a run of frames.
-fn band_vectors(frames: &[Frame], tempo: f32, frame_rate: f32) -> Option<[Vec<f32>; 3]> {
-    // Ignore near-silence: frames 60 dB below the loudest.
+/// Linear interpolation into a per-frame signal (0 outside it).
+fn at(x: &[f32], t: f32) -> f32 {
+    if t < 0.0 {
+        return 0.0;
+    }
+    let i = t.floor() as usize;
+    if i + 1 >= x.len() {
+        return 0.0;
+    }
+    let f = t - i as f32;
+    x[i] * (1.0 - f) + x[i + 1] * f
+}
+
+/// Beat phase (in frames) from the low band's onsets: where the kicks land.
+fn beat_phase(low_flux: &[f32], beat: f32) -> f32 {
+    let beats = (low_flux.len() as f32 / beat) as usize;
+    let mut best = (f32::MIN, 0.0);
+    let mut o = 0.0;
+    while o < beat {
+        let score: f32 = (0..beats).map(|k| at(low_flux, o + k as f32 * beat)).sum();
+        if score > best.0 {
+            best = (score, o);
+        }
+        o += 0.25;
+    }
+    best.1
+}
+
+/// Where in the beat a band hits: its onset strength on each 16th (on, e, and, a),
+/// counted from the kick, as shares of the total; and the share of 16ths that hit hard.
+fn beat_pattern(flux: &[f32], phase: f32, beat: f32, body: &[bool]) -> ([f32; STEPS], f32) {
+    let mut pattern = [0f32; STEPS];
+    let mut steps = Vec::new();
+    let mut k = 0;
+    loop {
+        let t0 = phase + k as f32 * beat;
+        if t0 + beat >= flux.len() as f32 {
+            break;
+        }
+        if body.get(t0 as usize).copied().unwrap_or(false) {
+            for (s, p) in pattern.iter_mut().enumerate() {
+                let v = at(flux, t0 + s as f32 * beat / STEPS as f32);
+                *p += v;
+                steps.push(v);
+            }
+        }
+        k += 1;
+    }
+    let total = pattern.iter().sum::<f32>().max(1e-9);
+    let pattern = pattern.map(|p| p / total);
+    let density = if steps.is_empty() {
+        0.0
+    } else {
+        let mut sorted = steps.clone();
+        sorted.sort_by(f32::total_cmp);
+        let median = sorted[sorted.len() / 2].max(1e-6);
+        steps.iter().filter(|&&v| v > median * 1.5).count() as f32 / steps.len() as f32
+    };
+    (pattern, density)
+}
+
+/// The body: frames in the louder sections (the drops and grooves, not the intro,
+/// outro or breakdowns), plus frames above near-silence.
+fn body_mask(frames: &[Frame], frame_rate: f32) -> Vec<bool> {
+    let per = ((SECTION_SECS * frame_rate) as usize).max(1);
+    let energies: Vec<f32> = frames.chunks(per).map(|c| c.iter().map(|f| f.power).sum::<f32>() / c.len() as f32).collect();
+    // A short last section (under half the length) goes with the one before it.
+    let full = if energies.len() > 1 && frames.len() % per != 0 && frames.len() % per < per / 2 { energies.len() - 1 } else { energies.len() };
+    let mut order: Vec<usize> = (0..full).collect();
+    order.sort_by(|&a, &b| energies[b].total_cmp(&energies[a]));
+    let mut loud = vec![false; energies.len()];
+    for &i in order.iter().take(((full as f32 * BODY_SHARE).ceil() as usize).max(1)) {
+        loud[i] = true;
+    }
+    if full < energies.len() {
+        loud[full] = loud[full - 1];
+    }
     let max_power = frames.iter().map(|f| f.power).fold(0f32, f32::max);
-    let active: Vec<&Frame> = frames.iter().filter(|f| f.power > max_power * 1e-6).collect();
+    frames.iter().enumerate().map(|(i, f)| loud[i / per] && f.power > max_power * 1e-6).collect()
+}
+
+/// Build the three band vectors and the key from the frames.
+fn band_vectors(frames: &[Frame], tempo: f32, frame_rate: f32) -> Option<([Vec<f32>; 3], u8, f32)> {
+    let body = body_mask(frames, frame_rate);
+    let active: Vec<&Frame> = frames.iter().zip(&body).filter(|(_, b)| **b).map(|(f, _)| f).collect();
     if active.len() < 8 {
         return None;
     }
@@ -255,10 +385,18 @@ fn band_vectors(frames: &[Frame], tempo: f32, frame_rate: f32) -> Option<[Vec<f3
     let level = |b: usize| mean[b].iter().sum::<f32>() / SUB as f32 - global;
     let shape = |b: usize| mean[b].iter().map(|v| v - global).collect::<Vec<_>>();
     let beat = 60.0 * frame_rate / tempo.max(1.0);
+    let flux = [band_flux(frames, 0), band_flux(frames, 1), band_flux(frames, 2)];
     let groove = |b: usize| {
-        let x = demean(&band_flux(frames, b));
+        let x = demean(&flux[b]);
         RHYTHM_LAGS.iter().map(|m| acf_at(&x, beat * m)).collect::<Vec<_>>()
     };
+    let phase = beat_phase(&flux[0], beat);
+    let (low_pattern, _) = beat_pattern(&flux[0], phase, beat, &body);
+    let (high_pattern, high_density) = beat_pattern(&flux[2], phase, beat, &body);
+    // How much the bass pumps: the low band's energy swing within the body.
+    let low_energy: Vec<f32> = active.iter().map(|f| f.sub[0].iter().map(|v| 10f32.powf(*v)).sum::<f32>()).collect();
+    let le_mean = low_energy.iter().sum::<f32>() / n;
+    let pump = (low_energy.iter().map(|v| (v - le_mean).powi(2)).sum::<f32>() / n).sqrt() / le_mean.max(1e-12);
     let mut chroma = [0f32; 12];
     let mut flat = [0f32; 2];
     let mut centroid = 0f32;
@@ -270,10 +408,43 @@ fn band_vectors(frames: &[Frame], tempo: f32, frame_rate: f32) -> Option<[Vec<f3
         flat[1] += f.flat[1] / n;
         centroid += f.centroid / n;
     }
+    // Tonal clarity: how far the chroma is from flat (1 - normalised entropy).
+    let csum = chroma.iter().sum::<f32>().max(1e-9);
+    let entropy: f32 = chroma.iter().map(|c| c / csum).filter(|p| *p > 0.0).map(|p| -p * p.ln()).sum::<f32>() / 12f32.ln();
+    let clarity = ((1.0 - entropy) * 8.0).clamp(0.0, 1.0);
+    // Harmonic rhythm: how much the chroma changes from beat to beat in the body.
+    let mut changes = (0f32, 0usize);
+    let mut prev: Option<[f32; 12]> = None;
+    let mut t = phase;
+    while t + beat < frames.len() as f32 {
+        let (a, b) = (t as usize, (t + beat) as usize);
+        if body[a] {
+            let mut c = [0f32; 12];
+            for f in &frames[a..b] {
+                for i in 0..12 {
+                    c[i] += f.chroma[i];
+                }
+            }
+            if let Some(p) = prev {
+                let dot: f32 = c.iter().zip(&p).map(|(x, y)| x * y).sum();
+                let norm = (c.iter().map(|x| x * x).sum::<f32>() * p.iter().map(|x| x * x).sum::<f32>()).sqrt().max(1e-9);
+                changes.0 += 1.0 - dot / norm;
+                changes.1 += 1;
+            }
+            prev = Some(c);
+        } else {
+            prev = None;
+        }
+        t += beat;
+    }
+    let harmonic_rhythm = if changes.1 > 0 { changes.0 / changes.1 as f32 } else { 0.0 };
+    let (key, mode) = estimate_key(&chroma);
 
     let mut low = shape(0);
     low.extend(std[0]);
     low.extend(groove(0));
+    low.extend(low_pattern);
+    low.push(pump);
     low.push(level(0));
     low.push((tempo / 120.0).log2());
     let mut mid = shape(1);
@@ -281,14 +452,19 @@ fn band_vectors(frames: &[Frame], tempo: f32, frame_rate: f32) -> Option<[Vec<f3
     mid.extend(chroma);
     mid.push(flat[0]);
     mid.push(level(1));
+    mid.push(clarity);
+    mid.push(harmonic_rhythm);
+    mid.push(mode);
     let mut high = shape(2);
     high.extend(std[2]);
     high.extend(groove(2));
+    high.extend(high_pattern);
+    high.push(high_density);
     high.push(centroid);
     high.push(flat[1]);
     high.push(level(2));
     debug_assert_eq!([low.len(), mid.len(), high.len()], DIMS);
-    Some([low, mid, high])
+    Some(([low, mid, high], key, clarity))
 }
 
 /// Analyse mono samples. `tag_bpm` (from the file's tags) wins over the estimate.
@@ -297,19 +473,8 @@ pub fn analyse_samples(samples: &[f32], rate: u32, tag_bpm: Option<f64>) -> anyh
     let frame_rate = rate as f32 / HOP as f32;
     let tag = tag_bpm.map(|b| b as f32).filter(|b| (60.0..=200.0).contains(b));
     let tempo = tag.unwrap_or_else(|| estimate_tempo_from_flux(&band_flux(&frames, 0), frame_rate));
-    let bands = band_vectors(&frames, tempo, frame_rate).ok_or_else(|| anyhow::anyhow!("too little audio to analyse"))?;
-    let per_section = (SECTION_SECS * frame_rate) as usize;
-    let sections = frames
-        .chunks(per_section.max(1))
-        .map(|chunk| band_vectors(chunk, tempo, frame_rate).unwrap_or_else(|| bands.clone()))
-        .collect();
-    Ok(Features {
-        tempo,
-        tempo_from_tag: tag.is_some(),
-        duration: samples.len() as f32 / rate as f32,
-        bands,
-        sections,
-    })
+    let (bands, key, clarity) = band_vectors(&frames, tempo, frame_rate).ok_or_else(|| anyhow::anyhow!("too little audio to analyse"))?;
+    Ok(Features { tempo, tempo_from_tag: tag.is_some(), duration: samples.len() as f32 / rate as f32, bands, key, clarity })
 }
 
 /// Decode and analyse a file.
@@ -393,14 +558,62 @@ mod tests {
     }
 
     #[test]
-    fn vectors_have_the_documented_shape_and_sections() {
+    fn vectors_have_the_documented_shape() {
         let mut x = silence(30.0);
         kicks(&mut x, 126.0, 0.8);
         hats(&mut x, 126.0, 0.3);
         let f = analyse_samples(&x, RATE, None).unwrap();
         assert_eq!([f.bands[0].len(), f.bands[1].len(), f.bands[2].len()], DIMS);
-        assert_eq!(f.sections.len(), 4); // 30 s / 8 s, last one partial
-        assert!(f.section_at(9.0).is_some());
         assert!(f.bands.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn beat_patterns_hear_where_the_hits_land() {
+        // Kicks on the beat, hats on the off-beat: the low pattern peaks on step 0, the high on step 2.
+        let mut x = silence(30.0);
+        kicks(&mut x, 125.0, 0.8);
+        hats(&mut x, 125.0, 0.4);
+        let f = analyse_samples(&x, RATE, None).unwrap();
+        let p = SUB * 2 + RHYTHM_LAGS.len();
+        let low = &f.bands[0][p..p + STEPS];
+        let high = &f.bands[2][p..p + STEPS];
+        assert!(low[0] > low[1] && low[0] > low[2] && low[0] > low[3], "low {low:?}");
+        // The kick's attack reaches the highs too; the hats show as the off-beat, relative to it.
+        assert!(high[2] > high[1] && high[2] > high[3], "high {high:?}");
+        assert!(high[2] / high[0] > 4.0 * low[2] / low[0], "high {high:?} low {low:?}");
+    }
+
+    #[test]
+    fn keys_and_the_camelot_wheel() {
+        let mut x = silence(20.0);
+        chord(&mut x, &[60, 64, 67, 72], 0.1);
+        let c = analyse_samples(&x, RATE, None).unwrap();
+        assert_eq!(c.key, 0, "C major");
+        assert!(c.clarity > 0.3, "clarity {}", c.clarity);
+        let mut y = silence(20.0);
+        chord(&mut y, &[57, 60, 64, 69], 0.1);
+        assert_eq!(analyse_samples(&y, RATE, None).unwrap().key, 21, "A minor");
+        assert_eq!(key_distance(0, 21), 1, "relative minor");
+        assert_eq!(key_distance(0, 7), 1, "a fifth up");
+        assert_eq!(key_distance(0, 5), 1, "a fifth down");
+        assert_eq!(key_distance(0, 0), 0);
+        assert!(key_distance(0, 6) >= 6, "tritone is far");
+    }
+
+    #[test]
+    fn the_body_ignores_a_long_quiet_intro() {
+        // 40 s of soft hats, then 40 s of kicks over them: the body is the kick section.
+        let mut x = silence(80.0);
+        let half = x.len() / 2;
+        hats(&mut x, 125.0, 0.05);
+        kicks(&mut x[half..], 125.0, 0.8);
+        let frames = spectrum_frames(&x, RATE);
+        let frame_rate = RATE as f32 / HOP as f32;
+        let body = body_mask(&frames, frame_rate);
+        let split = (40.0 * frame_rate) as usize;
+        assert!(body[..split - 10].iter().all(|b| !b), "the intro is not the body");
+        let in_body = body[split + 10..].iter().filter(|b| **b).count();
+        // (Near-silent frames between the synthetic kicks are left out, like any silence.)
+        assert!(in_body as f32 > (body.len() - split - 10) as f32 * 0.5, "the kicks are the body: {in_body}");
     }
 }

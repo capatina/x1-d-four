@@ -30,6 +30,9 @@ pub enum ClientCommand {
     Play { deck: usize },
     Pause { deck: usize },
     PlayPause { deck: usize },
+    /// Record the mix: start (`on: true`), stop (`false`) or toggle; `pair` picks the
+    /// mixer's record pair that carries the mix (0 = channels 1/2).
+    Record { on: Option<bool>, pair: Option<usize> },
     Cue { deck: usize, pressed: bool },
     Seek { deck: usize, fraction: f64 },
     Nudge { deck: usize, seconds: f64 },
@@ -115,13 +118,6 @@ struct Leds {
     sent: HashMap<u8, Instant>,
 }
 
-#[derive(Default)]
-pub(crate) struct Clock {
-    last_ticks: u64,
-    last_at: Option<Instant>,
-    pub(crate) bpm: Option<f64>,
-}
-
 #[derive(Default, Clone, Copy)]
 struct Window {
     min_queued: Option<u32>,
@@ -132,11 +128,14 @@ pub struct App {
     pub control: Mutex<engine::Control>,
     pub shared: Arc<engine::Shared>,
     pub stats: Arc<StreamStats>,
+    /// Records the mix (the mixer's master, as it sends it back) to ~/Music/recordings.
+    pub recorder: Arc<crate::recorder::Recorder>,
+    /// Where the last `latency` message stopped reading the timing ring, and its buffer.
+    timing: Mutex<(u64, Vec<ploytec::device::Timing>)>,
     pub library: RwLock<Library>,
     pub(crate) ui: Mutex<Ui>,
     config: Mutex<Config>,
     leds: Mutex<Leds>,
-    pub(crate) clock: Mutex<Clock>,
     window: Mutex<(Instant, Window)>,
     device: Mutex<DeviceStatus>,
     midi_log: Mutex<VecDeque<Value>>,
@@ -159,6 +158,7 @@ impl App {
         config_dir: PathBuf,
         out_urbs: usize,
         runtime: tokio::runtime::Handle,
+        recorder: Arc<crate::recorder::Recorder>,
     ) -> Arc<Self> {
         let shared = control.shared.clone();
         let library = Library::scan(&music_dir);
@@ -169,6 +169,8 @@ impl App {
             control: Mutex::new(control),
             shared,
             stats: Arc::new(StreamStats::default()),
+            recorder,
+            timing: Mutex::new((0, Vec::with_capacity(ploytec::device::TIMING_RING))),
             library: RwLock::new(library),
             ui: Mutex::new(Ui {
                 query: String::new(),
@@ -179,7 +181,6 @@ impl App {
             }),
             config: Mutex::new(Config { catalog: None, mappings: None, ok: false, error: None }),
             leds: Mutex::default(),
-            clock: Mutex::default(),
             window: Mutex::new((Instant::now(), Window::default())),
             device: Mutex::new(DeviceStatus { state: DeviceState::Connecting, message: None, firmware: None }),
             midi_log: Mutex::new(VecDeque::with_capacity(MIDI_LOG)),
@@ -201,6 +202,13 @@ impl App {
 
     pub(crate) fn broadcast(&self, msg: Value) {
         let _ = self.tx.send(Arc::from(msg.to_string()));
+    }
+
+    /// Shift a deck to line up its beats, and tell the screens at once so the strip
+    /// moves with the wheel before the next `state` arrives.
+    fn shift(&self, deck: usize, ms: f64) {
+        self.send(Command::Shift { deck, frames: ms / 1000.0 * SAMPLE_RATE as f64 });
+        self.broadcast(json!({ "type": "shift", "deck": deck, "ms": ms }));
     }
 
     fn send(&self, cmd: Command) {
@@ -299,9 +307,9 @@ impl App {
             ClientCommand::Load { deck, track_id } => self.load(deck_ok(deck)?, &track_id)?,
             ClientCommand::LoadSelected { deck } => self.load_selected(deck.map(deck_ok).transpose()?)?,
             ClientCommand::Eject { deck } => self.eject(deck_ok(deck)?),
-            ClientCommand::Play { deck } => self.send(Command::Play { deck: deck_ok(deck)? }),
+            ClientCommand::Play { deck } => self.play(deck_ok(deck)?, false),
             ClientCommand::Pause { deck } => self.send(Command::Pause { deck: deck_ok(deck)? }),
-            ClientCommand::PlayPause { deck } => self.send(Command::TogglePlay { deck: deck_ok(deck)? }),
+            ClientCommand::PlayPause { deck } => self.play(deck_ok(deck)?, true),
             ClientCommand::Cue { deck, pressed } => self.send(Command::Cue { deck: deck_ok(deck)?, pressed }),
             ClientCommand::Seek { deck, fraction } => {
                 let deck = deck_ok(deck)?;
@@ -347,8 +355,12 @@ impl App {
             ClientCommand::Jog { deck, ms } => {
                 self.send(Command::Jog { deck: deck_ok(deck)?, frames: ms / 1000.0 * SAMPLE_RATE as f64 })
             }
-            ClientCommand::Shift { deck, ms } => {
-                self.send(Command::Shift { deck: deck_ok(deck)?, frames: ms / 1000.0 * SAMPLE_RATE as f64 })
+            ClientCommand::Shift { deck, ms } => self.shift(deck_ok(deck)?, ms),
+            ClientCommand::Record { on, pair } => {
+                if let Some(p) = pair {
+                    self.recorder.set_pair(p);
+                }
+                self.record(on)?;
             }
             ClientCommand::Rescan => {
                 let app = self.clone();
@@ -364,8 +376,8 @@ impl App {
 
     fn apply_intent(self: &Arc<Self>, intent: Intent) {
         let result = match intent {
-            Intent::PlayPause(d) => Ok(self.send(Command::TogglePlay { deck: self.deck_or_focused(d) })),
-            Intent::Play(d) => Ok(self.send(Command::Play { deck: self.deck_or_focused(d) })),
+            Intent::PlayPause(d) => Ok(self.play(self.deck_or_focused(d), true)),
+            Intent::Play(d) => Ok(self.play(self.deck_or_focused(d), false)),
             Intent::Pause(d) => Ok(self.send(Command::Pause { deck: self.deck_or_focused(d) })),
             Intent::Cue(d, pressed) => Ok(self.send(Command::Cue { deck: self.deck_or_focused(d), pressed })),
             Intent::LoadSelected(d) => self.load_selected(d),
@@ -401,19 +413,19 @@ impl App {
             Intent::ExploreFollow => Ok(self.explore_follow(None)),
             Intent::ExploreRootSelected => self.explore_root_selected(),
             Intent::Sync(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: None })),
-            Intent::SyncReset(d) => Ok(self.send(Command::Sync { deck: self.deck_or_focused(d), on: Some(true) })),
+            Intent::SyncReset(d) => Ok(self.send(Command::Align { deck: self.deck_or_focused(d) })),
             Intent::Loop(d) => self.toggle_loop(self.deck_or_focused(d)),
             Intent::LoopLength(d, steps) => Ok(self.send(Command::LoopLength { deck: self.deck_or_focused(d), steps })),
+            Intent::LoopMove(d, steps, beats) => Ok(self.send(Command::LoopMove { deck: self.deck_or_focused(d), steps, beats })),
             Intent::Jog(d, ticks, ms) => {
                 let deck = self.deck_or_focused(d);
                 let ms = ticks as f64 * ms * crate::mapping::jog_gain(ticks);
                 Ok(self.send(Command::Jog { deck, frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
             }
-            Intent::Shift(d, ms) => {
-                Ok(self.send(Command::Shift { deck: self.deck_or_focused(d), frames: ms / 1000.0 * SAMPLE_RATE as f64 }))
-            }
+            Intent::Shift(d, ms) => Ok(self.shift(self.deck_or_focused(d), ms)),
             Intent::BandFader(v) => Ok(self.explore_band_fader(v)),
             Intent::BandCrossfader(v) => Ok(self.explore_band_crossfader(v)),
+            Intent::Record => self.record(None),
         };
         if let Err(e) = result {
             self.broadcast(json!({ "type": "error", "message": e }));
@@ -436,6 +448,29 @@ impl App {
         let gain = gain.clamp(0.0, 2.0);
         self.ui.lock().unwrap().decks[deck].trim = gain;
         self.send(Command::Trim { deck, gain: gain as f32 });
+    }
+
+    /// Start, stop or toggle recording the mix.
+    fn record(&self, on: Option<bool>) -> Result<(), String> {
+        let want = on.unwrap_or(!self.recorder.active());
+        if want == self.recorder.active() {
+            return Ok(());
+        }
+        if want {
+            self.recorder.start()?;
+        } else {
+            self.recorder.stop();
+        }
+        Ok(())
+    }
+
+    /// Play (or toggle) a deck; a deck that starts playing takes the focus.
+    fn play(&self, deck: usize, toggle: bool) {
+        let starts = !toggle || !self.shared.deck(deck).playing;
+        self.send(if toggle { Command::TogglePlay { deck } } else { Command::Play { deck } });
+        if starts && self.ui.lock().unwrap().decks[deck].track.is_some() {
+            self.focus(deck);
+        }
     }
 
     /// Focus a deck; the tunnel re-roots on its track right away.
@@ -474,7 +509,7 @@ impl App {
             }
             match result {
                 Ok(decoded) => {
-                    tracing::info!(deck, id = %track.id, secs = decoded.seconds(), grid = ?decoded.grid, took = ?started.elapsed(), "loaded");
+                    tracing::info!(deck, id = %track.id, secs = decoded.seconds(), grid = ?decoded.grid, gain_db = 20.0 * decoded.gain.log10(), took = ?started.elapsed(), "loaded");
                     let length = decoded.seconds();
                     let peaks = decoded.peaks.clone();
                     let wave: Arc<Vec<u8>> = Arc::new(decoded.bands.iter().flatten().copied().collect());
@@ -492,6 +527,8 @@ impl App {
                         deck_loaded_json(deck, meta)
                     };
                     app.broadcast(msg);
+                    // The most recently loaded track takes the focus (and the paths grow from it).
+                    app.focus(deck);
                 }
                 Err(e) => {
                     app.ui.lock().unwrap().decks[deck].loading = false;
@@ -707,25 +744,10 @@ impl App {
 
     // ---- periodic state ----------------------------------------------------
 
-    fn bpm(&self) -> Option<f64> {
-        let ticks = self.shared.clock_ticks.load(Ordering::Relaxed);
-        let mut clock = self.clock.lock().unwrap();
-        let now = Instant::now();
-        match clock.last_at {
-            Some(at) if now.duration_since(at) >= Duration::from_secs(1) => {
-                let dt = now.duration_since(at).as_secs_f64();
-                let dticks = ticks - clock.last_ticks;
-                clock.bpm = (dticks > 0).then(|| (dticks as f64 / 24.0) * 60.0 / dt).map(|b| (b * 10.0).round() / 10.0);
-                clock.last_ticks = ticks;
-                clock.last_at = Some(now);
-            }
-            None => {
-                clock.last_ticks = ticks;
-                clock.last_at = Some(now);
-            }
-            _ => {}
-        }
-        clock.bpm
+    /// The mixer's tempo from its MIDI clock, measured on the audio thread over 8 beats.
+    pub(crate) fn bpm(&self) -> Option<f64> {
+        let bpm = f64::from_bits(self.shared.clock_bpm.load(Ordering::Relaxed));
+        (bpm > 0.0).then(|| (bpm * 10.0).round() / 10.0)
     }
 
     fn window(&self) -> Window {
@@ -791,18 +813,51 @@ impl App {
                 "max_gap_us": w.max_gap_us,
             },
             "bpm": self.bpm(),
+            "recording": self.recorder.status(),
+            // The mixer's 8 record channels coming back over USB, dBFS (−99 = silent).
+            "inputs": self.shared.inputs().map(|r| if r > 1e-5 { ((20.0 * r.log10()) * 10.0).round() / 10.0 } else { -99.0 }),
         })
     }
 
     /// Runs 60 times a second, and just after every deck command: state broadcast and LED sync.
-    pub fn tick(&self) {
+    pub fn tick(self: &Arc<Self>) {
         self.sync_leds();
         self.explore_crossfader_settle();
         self.explore_tick(false);
         if self.tx.receiver_count() > 0 {
             self.broadcast(self.state_json());
+            self.broadcast_latency();
+        }
+        // A finished recording: tell the screens, and let the library find it.
+        if let Some((path, seconds)) = self.recorder.take_saved() {
+            self.broadcast(json!({ "type": "recorded", "file": path.file_name().map(|n| n.to_string_lossy().into_owned()), "seconds": seconds }));
+            let app = self.clone();
+            self.runtime.spawn_blocking(move || app.rescan());
         }
         self.control.lock().unwrap().collect_garbage();
+    }
+
+    /// Every OUT packet's timing since the last call: the live latency feed.
+    fn broadcast_latency(&self) {
+        let mut timing = self.timing.lock().unwrap();
+        let (head, buf) = &mut *timing;
+        buf.clear();
+        *head = self.stats.read_since(*head, buf);
+        if buf.is_empty() {
+            return;
+        }
+        let interval: Vec<u32> = buf.iter().map(|t| t.interval_us).collect();
+        let render: Vec<u16> = buf.iter().map(|t| t.render_us).collect();
+        let queued: Vec<u8> = buf.iter().map(|t| t.queued).collect();
+        self.broadcast(json!({
+            "type": "latency",
+            "interval_us": interval,
+            "render_us": render,
+            "queued": queued,
+            "packet_us": ploytec::FRAMES_PER_PACKET as f64 / SAMPLE_RATE as f64 * 1e6,
+            "out_urbs": self.out_urbs,
+            "underruns": self.stats.underruns.load(Ordering::Relaxed),
+        }));
     }
 
     /// Messages a freshly connected client needs before the live stream.

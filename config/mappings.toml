@@ -6,16 +6,17 @@
 #   deck.cue                                 press and release (CDJ-style cue)
 #   deck.load_selected                       on press: load the library selection
 #   deck.eject, deck.rate_reset              on press
-#   deck.sync                                on press: beat sync on/off (locks to the master deck)
-#   deck.sync_reset                          on press: sync on and back on the master's beat (undoes deck.shift)
+#   deck.sync                                on press: tempo sync on/off (matches the master's BPM; beats are lined up by hand)
+#   deck.sync_reset                          on press: sync on and one jump onto the master's beat (never automatic)
 #   deck.loop                                on press: loop from the nearest beat (8 bars by default), press again to leave
 #   deck.loop_length                         encoder: halve/double the loop (1/8 bar .. 32 bars), live while looping
+#   deck.loop_move                           encoder: move the active loop left/right, the playhead with it; amount =
+#                                            beats per click (default 1 beat, or the loop's length when shorter)
 #   deck.jog       jog/encoder: jump through the track at once; amount = ms per tick when turning
 #                  slowly (default 5); the faster the turn, the further each tick jumps (up to 40x).
-#                  A synced, playing deck moves in whole beats so it stays on the master's beat
-#   deck.shift     jog/encoder: smooth nudge to fix a sync that's off, amount = ms per tick
-#                  (default 2); playing = speed bend, paused = glide; a synced deck keeps the new
-#                  offset against the master
+#                  A synced, playing deck moves in whole beats so its beats stay where you lined them up
+#   deck.shift     jog/encoder: smooth nudge to line up the beats by hand, amount = ms per tick
+#                  (default 2); playing = speed bend, paused = glide; the deck keeps the offset
 #   deck.focus                               on press (needs deck)
 #   deck.focus_step                          encoder: move the focus one deck per click (1-4); the tunnel grows from the focused deck
 #   deck.nudge     amount = seconds per press or per encoder step (default 0.01)
@@ -39,6 +40,10 @@
 #   explore.follow       on press: toggle following the focused deck's track
 #   explore.root         on press: start the tunnel at the library selection
 #
+# Recording:
+#   mixer.record         on press: start/stop recording the mix (the mixer's master, as it sends it back)
+#                        to ~/Music/recordings as 24-bit WAV
+#
 # led (controls with led = true only): "deck.playing", "deck.loaded", "deck.focused", "deck.synced".
 # The rings toggle on each message, so they need the mixer's host-driven ring mode
 # (third illuminated button unlit in the power-on map setup).
@@ -53,7 +58,8 @@
 #                 the library selection               focused deck's sync
 # buttons         A low, B mid, C high band,          M dive into the aimed portal
 #                 E follow the focused deck
-# encoders 1-4    loop length, push = loop deck 1-4   skip deck 1-4 by 2 s, push = sync
+# encoders 1-4    loop length, push = loop deck 1-4   move the loop, push = loop deck 1-4
+#                                                     (shift + push = sync deck 1-4)
 # faders 1-4      pitch deck 1-4 (+/-8 %)
 # crossfader      band: left low, middle mid, right high
 
@@ -224,44 +230,60 @@ action = "explore.dive"
 
 [[map]]
 control = "right.encoder1"
-action = "deck.nudge"
+action = "deck.loop_move"
 deck = 1
-amount = 2.0
 
 [[map]]
 control = "right.encoder2"
-action = "deck.nudge"
+action = "deck.loop_move"
 deck = 2
-amount = 2.0
 
 [[map]]
 control = "right.encoder3"
-action = "deck.nudge"
+action = "deck.loop_move"
 deck = 3
-amount = 2.0
 
 [[map]]
 control = "right.encoder4"
-action = "deck.nudge"
+action = "deck.loop_move"
 deck = 4
-amount = 2.0
 
 [[map]]
 control = "right.encoder1.push"
+action = "deck.loop"
+deck = 1
+
+[[map]]
+control = "shift.right.encoder1.push"
 action = "deck.sync"
 deck = 1
 
 [[map]]
 control = "right.encoder2.push"
+action = "deck.loop"
+deck = 2
+
+[[map]]
+control = "shift.right.encoder2.push"
 action = "deck.sync"
 deck = 2
 
 [[map]]
 control = "right.encoder3.push"
+action = "deck.loop"
+deck = 3
+
+[[map]]
+control = "shift.right.encoder3.push"
 action = "deck.sync"
 deck = 3
 
 [[map]]
 control = "right.encoder4.push"
+action = "deck.loop"
+deck = 4
+
+[[map]]
+control = "shift.right.encoder4.push"
 action = "deck.sync"
 deck = 4

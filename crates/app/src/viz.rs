@@ -90,7 +90,7 @@ pub fn run(app: Arc<App>, mut rx: rtrb::Consumer<f32>, stop: Arc<AtomicBool>) {
         }
 
         // Beat phase from the mixer's MIDI clock (24 ticks per beat), smoothed between ticks.
-        let bpm = app.clock.lock().unwrap().bpm;
+        let bpm = app.bpm();
         let ticks = app.shared.clock_ticks.load(Ordering::Relaxed);
         if ticks != tick_count {
             tick_count = ticks;

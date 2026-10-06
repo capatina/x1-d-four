@@ -114,6 +114,34 @@ pub struct StreamStats {
     pub last_error_ep: AtomicU32,
     pub min_inflight: AtomicU32,
     pub max_interval_us: AtomicU32,
+    /// Per OUT packet, packed by [`Timing::pack`]: the gap since the previous one, the
+    /// time to render and encode it, and the OUT URBs left queued. A ring the USB
+    /// thread writes without locking; `timing_head` counts every packet written.
+    pub timing: Box<[AtomicU64]>,
+    pub timing_head: AtomicU64,
+}
+
+/// Packets kept in the timing ring (about 6.8 s).
+pub const TIMING_RING: usize = 4096;
+
+/// One OUT packet's timing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timing {
+    /// Time since the previous OUT completion, µs (nominally 1667).
+    pub interval_us: u32,
+    /// Time to render and encode the packet, µs.
+    pub render_us: u16,
+    /// OUT URBs still queued at the device when it completed.
+    pub queued: u8,
+}
+
+impl Timing {
+    pub fn pack(self) -> u64 {
+        self.interval_us as u64 | (self.render_us as u64) << 32 | (self.queued as u64) << 48
+    }
+    pub fn unpack(v: u64) -> Self {
+        Self { interval_us: v as u32, render_us: (v >> 32) as u16, queued: (v >> 48) as u8 }
+    }
 }
 
 impl Default for StreamStats {
@@ -128,6 +156,8 @@ impl Default for StreamStats {
             last_error_ep: AtomicU32::new(0),
             min_inflight: AtomicU32::new(u32::MAX),
             max_interval_us: AtomicU32::new(0),
+            timing: (0..TIMING_RING).map(|_| AtomicU64::new(0)).collect(),
+            timing_head: AtomicU64::new(0),
         }
     }
 }
@@ -136,6 +166,24 @@ impl StreamStats {
     /// Read and reset the windowed values: (min OUT URBs left queued, max OUT completion gap in µs).
     pub fn take_window(&self) -> (u32, u32) {
         (self.min_inflight.swap(u32::MAX, Ordering::Relaxed), self.max_interval_us.swap(0, Ordering::Relaxed))
+    }
+
+    /// Record one OUT packet's timing (USB thread only).
+    pub fn record(&self, t: Timing) {
+        let head = self.timing_head.load(Ordering::Relaxed);
+        self.timing[head as usize % TIMING_RING].store(t.pack(), Ordering::Relaxed);
+        self.timing_head.store(head + 1, Ordering::Release);
+    }
+
+    /// Packets recorded since `from` (a previous `timing_head`), oldest first; at most
+    /// the ring's worth. Returns the new head.
+    pub fn read_since(&self, from: u64, out: &mut Vec<Timing>) -> u64 {
+        let head = self.timing_head.load(Ordering::Acquire);
+        let start = from.max(head.saturating_sub(TIMING_RING as u64 - 64));
+        for i in start..head {
+            out.push(Timing::unpack(self.timing[i as usize % TIMING_RING].load(Ordering::Relaxed)));
+        }
+        head
     }
 }
 
@@ -362,6 +410,8 @@ impl Xone {
                         renderer.render(&mut frames);
                         let midi = renderer.midi_out();
                         codec::encode_out_packet(&mut slot.buf, &frames, midi);
+                        let render_us = now.elapsed().as_micros().min(u16::MAX as u128) as u16;
+                        stats.record(Timing { interval_us: gap, render_us, queued: inflight_out.min(255) as u8 });
                         stats.packets_out.fetch_add(1, Ordering::Relaxed);
                         if let Err(e) = self.submit(slot) {
                             break 'run StreamEnd::Disconnected(e);
@@ -503,5 +553,34 @@ pub fn rebind_kernel_driver() -> Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.raw_os_error() == Some(libc::EBUSY) => Ok(()),
         Err(e) => Err(Error::Usb { what: "rebind kernel driver", source: e }),
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn timing_ring_reads_what_was_written() {
+        let stats = StreamStats::default();
+        let t = |i: u32| Timing { interval_us: 1600 + i, render_us: 40, queued: 2 };
+        for i in 0..10 {
+            stats.record(t(i));
+        }
+        let mut out = vec![];
+        let head = stats.read_since(0, &mut out);
+        assert_eq!(head, 10);
+        assert_eq!(out, (0..10).map(t).collect::<Vec<_>>());
+        out.clear();
+        stats.record(t(99));
+        assert_eq!(stats.read_since(head, &mut out), 11);
+        assert_eq!(out, vec![t(99)]);
+        // Far behind: only the newest ring's worth.
+        for i in 0..(TIMING_RING as u32 * 2) {
+            stats.record(t(i % 50));
+        }
+        out.clear();
+        stats.read_since(0, &mut out);
+        assert_eq!(out.len(), TIMING_RING - 64);
     }
 }

@@ -16,6 +16,7 @@ import {
   type View,
   type WaveInfo,
 } from './protocol';
+import { applyLatency } from './latency';
 import { applyViz } from './viz';
 import { waves } from './waves';
 
@@ -84,6 +85,8 @@ class Client {
 
   /** Called synchronously for every `explore` message (no effect scheduling in between). */
   readonly exploreListeners = new Set<(msg: ExploreMsg) => void>();
+  /** Every MIDI message from the mixer, in its own task (the visuals react to the data flow). */
+  readonly midiListeners = new Set<(msg: MidiMsg) => void>();
   /** performance.now() when the latest `explore` message arrived (for latency checks). */
   exploreAt = 0;
 
@@ -263,6 +266,7 @@ class Client {
         waves.drop(msg.deck);
         break;
       case 'midi':
+        for (const listener of this.midiListeners) listener(msg);
         this.midi = [{ ...msg, key: ++this.#midiSeq }, ...this.midi].slice(0, MIDI_KEEP);
         break;
       case 'mappings':
@@ -290,6 +294,18 @@ class Client {
         break;
       case 'viz':
         applyViz(msg);
+        break;
+      case 'recorded': {
+        const m = Math.floor(msg.seconds / 60);
+        const s = Math.floor(msg.seconds % 60);
+        this.toast(`Mix saved: ${msg.file ?? 'recording'} (${m}:${String(s).padStart(2, '0')}) in Music/recordings`, 'info');
+        break;
+      }
+      case 'latency':
+        applyLatency(msg);
+        break;
+      case 'shift':
+        waves.noteShift(msg.deck, msg.ms / 1000, performance.now());
         break;
     }
   }

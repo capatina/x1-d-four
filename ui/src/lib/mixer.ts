@@ -246,6 +246,7 @@ export function legend(maps: readonly Mapping[], slots: readonly LegendSlot[], v
       case 'loop':
         add(slot, 'deck.loop', (e) => `loop ${decksText(e)}`);
         add(slot, 'deck.loop_length', () => 'loop length');
+        add(slot, 'deck.loop_move', () => 'move loop');
         break;
       case 'scroll':
         add(slot, 'library.scroll', (e) => (e.amount != null && e.amount !== 1 ? `scroll ×${e.amount}` : 'scroll'));

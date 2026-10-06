@@ -14,27 +14,44 @@ The Xone:4D's built-in soundcard only has drivers for Windows and macOS. X1 D. F
 
 - **4 decks → 4 channels.** Deck *n* plays into USB pair *n*, and each mixer channel set to **SC (USB)** plays its deck. All the mixing (faders, EQ, filters, FX, cueing) stays on the mixer's analog hardware.
 - **5 ms output latency.** Each packet carries 80 frames (1.67 ms at 48 kHz), and 3 packets are in flight by default (`--urbs 2` gives 3.3 ms). The driver's output matches the packets of the reverse-engineered kernel driver byte for byte.
-- **Decks:** beat sync phase-locked to the master deck, loops from ½ beat to 32 bars (8 bars by default), a jog that jumps through a track and speeds up as you spin, a fine shift to fix a sync by ear, varispeed from the pitch faders, and click-free starts and stops. Every track gets a beat grid when it loads.
+- **Decks:** tempo sync to the mixer's global BPM, measured from its MIDI clock over 8 beats (the master deck's tempo when there's no clock; a synced deck ignores its pitch fader). It matches the BPM only: you line up the beats by hand with the right jog, like on turntables, and nothing pulls them back), loops from ½ beat to 32 bars (8 bars by default) that you can move left and right, a jog that jumps through a track and speeds up as you spin, varispeed from the pitch faders, and click-free starts and stops. Every track gets a beat grid when it loads.
+- **Volume normalization:** every track is measured when it loads (EBU R128 integrated loudness) and played at −11 LUFS. Loud masters are turned down and quiet ones up, but never so far that the peaks clip (−12…+9 dB). Your trim sits on top.
 - **Library:** everything in `~/Music`. Type anywhere to search, then load from the mixer or drag a result onto a deck. Plays MP3, FLAC, WAV, AIFF, AAC/ALAC and Vorbis.
 - **The mixer's MIDI controls**: buttons, encoders, faders and jog wheels, mapped in a TOML file that reloads on save, with LED feedback on the lit buttons. The on-screen legend shows what each control does, and `/api/midi/recent` names every control as you touch it.
-- **Readout of the mixer's own MIDI clock BPM.**
+- **Readout of the mixer's own MIDI clock BPM**, which is the tempo every synced deck plays at.
+- **Focus follows you:** loading a deck or starting one focuses it, so the paths grow from the track you just loaded or started.
+- **Record the mix:** the REC button (or a mixer button mapped to `mixer.record`) records what the mixer sends back over USB from its master, after your faders, EQ, filters and crossfader, to `~/Music/recordings` as 24-bit 48 kHz WAV. The file stays playable even if the app stops mid-recording, and it shows up in the library when you stop.
+- **Live latency scope** in the corner: the output latency now (from the URBs queued at the mixer), the jitter and render time, every USB packet's interval over the last 1.6 s, and how often each interval happens, like a spectrum analyser. A late packet shows in red.
 
 ### Visualize
 
 - **A datastream built from your library** (below): tracks similar to what's playing become paths that fork ahead of you, in the band you choose. You fly over a neon grid at the tempo, and the beat, the drops and each deck's level drive the light.
-- **Faithful 3-band waveforms** of all four decks on one timeline: kicks stand out as low peaks, breakdowns drop, and synced decks' beats line up.
+- **Faithful 3-band waveforms** of all four decks on one timeline: kicks stand out as low peaks and breakdowns drop. While you turn the right jog, the strip zooms in to ±1.6 s and the waveform moves with the wheel, so you can line up the beats by eye.
 - **Instant:** every mixer move shows in the next frame, and the scene runs at 60 fps on integrated graphics.
 
 ## Explore: the Datastream
 
 The main screen is a fast flight over an endless neon grid, in the style of the German demoscene. It moves with the tempo while you play.
 - Every track is analysed in three bands, like the mixer's EQ: **low** (kick, bass, groove), **mid** (harmony, key) and **high** (hats, percussion, air). Each band is a sector with its own neon: Sector Sub (magenta), Sector Chord (acid green), Sector Air (cyan).
+- The paths are the tracks whose vibe in the chosen band best matches the focused deck's track, and that would mix with it:
+  - **low**: the groove (where the kicks and bass hit in the beat, how the bass pumps, the sub/kick/bass balance) at a compatible tempo;
+  - **mid**: the harmony (key compatibility on the Camelot wheel, major vs minor mood, how tonal it is, how fast the chords move);
+  - **high**: the percussion (where the hats land relative to the kick, how dense and bright they are).
+  
+  Each track is described by its body (its louder half: drops and grooves, not the intro, outro or breakdowns), other edits of the same song count as one, and the paths stay put while it plays.
 - The trunk you ride splits ahead into one light rail for each similar track. Each rail ends at a spinning wireframe gate.
 - Aiming lights a branch: a head of light runs down it, a light column rises from its gate, and the gate sprouts the paths beyond it (that track's own similar tracks). Nothing moves to the front.
 - Loading the aimed track flies you down that branch and through its gate in 0.7 s. That gate's paths become the new forks ahead. Diving (M) makes the same flight without a deck, and the picture stays desaturated until a load claims the track.
+- The mixer's MIDI drives it as well: every message (buttons, encoders, faders, jogs) launches a glowing data packet from its pod's side, coloured by its deck, the data flow lights the grid and builds the world sooner, and the jogs scratch the grid back and forth with the wheel.
+- The master volume bends it: the world dims and slows as you pull the master (or the mix) down, burns brighter and faster when it's hot, and a slam from quiet to loud is a climax. It reads the mixer's master from its USB record channels, so it follows your faders and filters, not just the decks.
+- The bass drives it: a fast bass envelope pumps the grid, the rails and the gates, every kick punches the camera and sends a ring over the grid, and the flight speeds up with the low end.
+- **Worlds.** A climax in the mix (a long breakdown where the bass drops away, then the bass slamming back) hyperjumps into a new world: the view stretches, the screen whites out and you land somewhere else. Five worlds take turns: **Neon Grid**, **Chromozon** (a liquid chrome sea under a striped sunset), **Tunnelwerk** (an Amiga checkerboard tunnel), **Nachtflug** (night flight over wireframe mountains under the aurora) and **Kupferzeit** (copper bars over a checkerboard). Each has its own paths (curves, chrome swoops, angular tracks, a runway of lights, copper steps) and labels, and evolves the longer you stay.
+- **Within a world**, a new track sweeps new land in from the horizon, and when the mix moves to another deck, the colours drift to that deck's colour and the textures change.
+- The world builds up as you play (progressive generation): after a few minutes of music, wireframe ridges rise beside the paths, then neon monoliths, a hypertunnel of hexagon frames, a planet in orbit and an old-school plasma sky. Each one is announced with a title card; heavy bass and taking branches build it sooner.
 - Each deck has a copper bar in the sky and a laser that rises from its card. Both bounce on the deck's own beat, so synced decks move together. A ring races over the grid on every beat, and a drop after a breakdown flashes the screen, sends out a shock wave and makes you go faster.
 - A chrome sine scroller names where you are. Bloom, chromatic aberration and scanlines finish the frame.
-- Every response appears in the next frame; flourishes take at most 300 ms (the flight takes 720 ms).
+- The path names fade out 3 s after you last aimed and come back as soon as you turn the wheel.
+- Every response appears in the next frame; flourishes take at most 300 ms (the flight takes 720 ms, a world jump 1.5 s).
 - Analysing a 2,300-track library takes about a minute on a desktop CPU; after that it's instant from a cache.
 
 It's played entirely from the mixer:
@@ -42,10 +59,10 @@ It's played entirely from the mixer:
 | | Left pod | Right pod |
 |---|---|---|
 | Lit buttons 1–4 | load the aimed track onto deck 1–4 (and fly down its branch) | play/pause deck 1–4 |
-| Jog wheel | move through the focused deck: turn slowly for precision, spin to fly (a synced deck moves in whole beats) | shift the focused deck to fix its sync (it keeps the offset) |
-| JOG/SELECT | focus deck 1–4 (the paths grow from it); push to start from the search selection | aim between paths; push to reset the focused deck's sync |
+| Jog wheel | move through the focused deck: turn slowly for precision, spin to fly (a synced deck moves in whole beats) | shift the focused deck to line up its beats, like a hand on the platter (it keeps the offset) |
+| JOG/SELECT | focus deck 1–4 (the paths grow from it); push to start from the search selection | aim between paths; push to jump the focused deck onto the master's beat once |
 | Buttons | A low, B mid, C high band; E follow the focused deck on/off | M scout down the aimed path |
-| Encoders 1–4 | push = 8-bar loop on deck 1–4; turn = loop length | skip ±2 s; push = sync |
+| Encoders 1–4 | push = 8-bar loop on deck 1–4; turn = loop length | turn = move the loop (a beat per click, or its own length when shorter); push = loop on/off; shift + push = sync on/off |
 | Faders 1–4 | pitch ±8 % | |
 
 The crossfader picks the band: left low, middle mid, right high. It only sends MIDI with **XFADE CURVE** turned fully left.
@@ -109,7 +126,7 @@ You don't need a kernel driver at all. If you also use [Ozzy](https://github.com
                     │
           RT thread │ reap any URB:
                     │   EP 0x05 OUT  render 80 frames of 4 decks → 3856-byte packet (+1 MIDI byte) → resubmit
-                    │   EP 0x86 IN   recycle (8 record channels)
+                    │   EP 0x86 IN   the mixer's 8 record channels → meters, recording
                     │   EP 0x83 IN   MIDI from the mixer's controls
                     ▼
      lock-free queues ◀──▶ control side: mappings, library, track decoding, axum HTTP + WebSocket

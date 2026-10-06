@@ -13,8 +13,6 @@ use serde_json::{Value, json};
 /// Portals ahead of you, and how many each of them shows behind it.
 pub const CHILDREN: usize = 6;
 pub const GRANDCHILDREN: usize = 4;
-/// Weight of the section playing now in the root's query.
-pub const SECTION_WEIGHT: f32 = 0.4;
 
 pub struct Explorer {
     pub band: Band,
@@ -27,8 +25,6 @@ pub struct Explorer {
     children: Vec<(usize, f32)>,
     grandchildren: Vec<Vec<(usize, f32)>>,
     aim: usize,
-    /// Section of the root track the current tree was built from.
-    pub section: Option<usize>,
 }
 
 impl Default for Explorer {
@@ -42,7 +38,6 @@ impl Default for Explorer {
             children: Vec::new(),
             grandchildren: Vec::new(),
             aim: 0,
-            section: None,
         }
     }
 }
@@ -61,10 +56,6 @@ impl Explorer {
         self.path.last().copied()
     }
 
-    pub fn at_root(&self) -> bool {
-        self.path.len() == 1
-    }
-
     pub fn aimed(&self) -> Option<usize> {
         self.children.get(self.aim).map(|c| c.0)
     }
@@ -73,9 +64,9 @@ impl Explorer {
         self.children.iter().map(|c| c.0)
     }
 
-    /// Recompute the portals around `current`. `query` replaces current's own
-    /// vector (the root uses a blend with the section playing now).
-    pub fn rebuild(&mut self, index: &Index, query: Option<Vec<f32>>, exclude: &HashSet<usize>) {
+    /// Recompute the portals around `current`: the tracks whose vibe in the band
+    /// best matches its whole track, and would mix with it.
+    pub fn rebuild(&mut self, index: &Index, exclude: &HashSet<usize>) {
         let Some(current) = self.current() else {
             self.children.clear();
             self.grandchildren.clear();
@@ -83,16 +74,15 @@ impl Explorer {
         };
         let aimed_before = self.aimed();
         let band = self.band;
-        let query = query.unwrap_or_else(|| index.vector(band, current).to_vec());
         // Copies of a track count as the track itself.
         let mut taken: HashSet<usize> = self.path.iter().chain(exclude).map(|&t| index.canonical(t)).collect();
-        self.children = index.nearest(band, &query, CHILDREN, |i| taken.contains(&i));
+        self.children = index.nearest(band, current, CHILDREN, |i| taken.contains(&i));
         taken.extend(self.children.iter().map(|c| c.0));
         self.grandchildren = self
             .children
             .iter()
             .map(|&(child, _)| {
-                let near = index.nearest(band, index.vector(band, child), GRANDCHILDREN, |i| taken.contains(&i));
+                let near = index.nearest(band, child, GRANDCHILDREN, |i| taken.contains(&i));
                 taken.extend(near.iter().map(|n| n.0));
                 near
             })
@@ -102,17 +92,17 @@ impl Explorer {
     }
 
     /// Start a new tree at `root`.
-    pub fn reroot(&mut self, index: &Index, root: usize, deck: Option<usize>, query: Option<Vec<f32>>, exclude: &HashSet<usize>) {
+    pub fn reroot(&mut self, index: &Index, root: usize, deck: Option<usize>, exclude: &HashSet<usize>) {
         self.path = vec![root];
         self.path_sims = vec![1.0];
         self.root_deck = deck;
         self.aim = 0;
-        self.rebuild(index, query, exclude);
+        self.rebuild(index, exclude);
     }
 
-    pub fn set_band(&mut self, band: Band, index: &Index, query: Option<Vec<f32>>, exclude: &HashSet<usize>) {
+    pub fn set_band(&mut self, band: Band, index: &Index, exclude: &HashSet<usize>) {
         self.band = band;
-        self.rebuild(index, query, exclude);
+        self.rebuild(index, exclude);
     }
 
     /// Rotate the aim; returns whether it moved.
@@ -149,19 +139,18 @@ impl Explorer {
         self.path.push(child);
         self.path_sims.push(sim);
         self.aim = 0;
-        self.rebuild(index, None, exclude);
+        self.rebuild(index, exclude);
         true
     }
 
     /// Climb one step up; the node you came from stays aimed.
-    pub fn back(&mut self, index: &Index, root_query: Option<Vec<f32>>, exclude: &HashSet<usize>) -> bool {
+    pub fn back(&mut self, index: &Index, exclude: &HashSet<usize>) -> bool {
         if self.path.len() < 2 {
             return false;
         }
         let from = self.path.pop().unwrap();
         self.path_sims.pop();
-        let query = if self.at_root() { root_query } else { None };
-        self.rebuild(index, query, exclude);
+        self.rebuild(index, exclude);
         self.aim_at(from);
         true
     }
@@ -221,7 +210,8 @@ mod tests {
                     tempo_from_tag: false,
                     duration: 300.0,
                     bands: [v(analysis::features::DIMS[0], 0.0), v(analysis::features::DIMS[1], 1.0), v(analysis::features::DIMS[2], 2.0)],
-                    sections: vec![],
+                    key: 0,
+                    clarity: 0.0,
                 }
             })
             .collect();
@@ -241,7 +231,7 @@ mod tests {
         let index = index();
         let mut e = Explorer::default();
         let exclude: HashSet<usize> = [5, 6].into();
-        e.reroot(&index, 4, Some(0), None, &exclude);
+        e.reroot(&index, 4, Some(0), &exclude);
         assert_eq!(e.children.len(), CHILDREN);
         assert!(e.grandchildren.iter().all(|g| g.len() == GRANDCHILDREN));
         let ids = all_ids(&e);
@@ -257,17 +247,17 @@ mod tests {
         let index = index();
         let none = HashSet::new();
         let mut e = Explorer::default();
-        e.reroot(&index, 10, None, None, &none);
+        e.reroot(&index, 10, None, &none);
         assert!(e.aim_by(2));
         let aimed = e.aimed().unwrap();
         assert!(e.dive(&index, None, &none));
         assert_eq!(e.current(), Some(aimed));
         assert_eq!(e.path.len(), 2);
         assert!(!e.children().any(|c| c == 10), "root isn't offered again below");
-        assert!(e.back(&index, None, &none));
+        assert!(e.back(&index, &none));
         assert_eq!(e.current(), Some(10));
         assert_eq!(e.aimed(), Some(aimed), "back re-aims where you came from");
-        assert!(!e.back(&index, None, &none));
+        assert!(!e.back(&index, &none));
         assert!(e.aim_by(-1));
         assert!(!e.dive(&index, Some(39_999), &none));
     }
@@ -277,9 +267,9 @@ mod tests {
         let index = index();
         let none = HashSet::new();
         let mut e = Explorer::default();
-        e.reroot(&index, 0, Some(1), None, &none);
+        e.reroot(&index, 0, Some(1), &none);
         let low: Vec<usize> = e.children().collect();
-        e.set_band(Band::High, &index, None, &none);
+        e.set_band(Band::High, &index, &none);
         let high: Vec<usize> = e.children().collect();
         assert_eq!(e.band, Band::High);
         assert_eq!(low.len(), high.len());

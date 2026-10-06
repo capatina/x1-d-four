@@ -55,10 +55,12 @@ pub enum Action {
     SyncReset,
     Loop,
     LoopLength,
+    LoopMove,
     Jog,
     Shift,
     BandFader,
     BandCrossfader,
+    Record,
 }
 
 impl Action {
@@ -90,10 +92,12 @@ impl Action {
             "deck.sync_reset" => Self::SyncReset,
             "deck.loop" => Self::Loop,
             "deck.loop_length" => Self::LoopLength,
+            "deck.loop_move" => Self::LoopMove,
             "deck.jog" => Self::Jog,
             "deck.shift" => Self::Shift,
             "explore.band_fader" => Self::BandFader,
             "explore.band_crossfader" => Self::BandCrossfader,
+            "mixer.record" => Self::Record,
             other => bail!("unknown action {other:?}"),
         })
     }
@@ -144,6 +148,8 @@ pub enum Intent {
     Loop(Option<usize>),
     /// Halve (negative) or double (positive) the loop length this many times.
     LoopLength(Option<usize>, i32),
+    /// Move the active loop this many steps of this many beats (0 = auto).
+    LoopMove(Option<usize>, i32, f64),
     /// Jog ticks, and the ms of track time a slow tick jumps (`jog_gain` scales it).
     Jog(Option<usize>, i32, f64),
     /// Smooth nudge, in milliseconds of track time.
@@ -152,6 +158,8 @@ pub enum Intent {
     BandFader(u8),
     /// The Xone:4D crossfader's CC picking low / mid / high (see `CrossfaderBand`).
     BandCrossfader(u8),
+    /// Start or stop recording the mix.
+    Record,
 }
 
 pub struct Rule {
@@ -218,10 +226,13 @@ impl Rule {
             // One halving/doubling per click, however fast the encoder spins.
             (Action::LoopLength, Delta(n)) if n != 0 => Intent::LoopLength(d, n.signum() as i32),
             (Action::LoopLength, Press) => Intent::LoopLength(d, a.unwrap_or(1.0) as i32),
+            (Action::LoopMove, Delta(n)) if n != 0 => Intent::LoopMove(d, n as i32, a.unwrap_or(0.0)),
+            (Action::LoopMove, Press) => Intent::LoopMove(d, 1, a.unwrap_or(0.0)),
             (Action::Jog, Delta(n)) if n != 0 => Intent::Jog(d, n as i32, a.unwrap_or(5.0)),
             (Action::Shift, Delta(n)) => Intent::Shift(d, n as f64 * a.unwrap_or(2.0)),
             (Action::BandFader, Value(v)) => Intent::BandFader(v),
             (Action::BandCrossfader, Value(v)) => Intent::BandCrossfader(v),
+            (Action::Record, Press) => Intent::Record,
             _ => return None,
         })
     }
@@ -251,7 +262,7 @@ impl Mappings {
             let fits = match action {
                 Action::Rate | Action::Scroll | Action::Nudge => true,
                 Action::Trim => kind != Kind::Button,
-                Action::ExploreAim | Action::LoopLength => kind != Kind::Absolute,
+                Action::ExploreAim | Action::LoopLength | Action::LoopMove => kind != Kind::Absolute,
                 Action::Jog | Action::Shift => kind == Kind::Relative,
                 Action::BandFader | Action::BandCrossfader => kind == Kind::Absolute,
                 Action::ExploreStep | Action::ExploreBandStep | Action::FocusStep => kind == Kind::Relative,

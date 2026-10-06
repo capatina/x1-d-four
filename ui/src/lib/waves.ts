@@ -34,10 +34,23 @@ class Waves {
   stateAt = 0;
   /** Bumped on every `state`, so readers can tell a new one arrived. */
   stateSeq = 0;
+  /**
+   * Hand shifts (the right jog) the strip hasn't seen land yet, in track seconds,
+   * and when the last one arrived. The strip shows them at once and lets them
+   * glide out exactly as fast as the deck glides in.
+   */
+  readonly shiftLead = new Float64Array(DECK_COUNT);
+  readonly shiftAt = new Float64Array(DECK_COUNT).fill(-1e9);
 
   /** Per deck: load generation (guards against out-of-order fetches) and what it is for. */
   readonly #gen: number[] = Array.from({ length: DECK_COUNT }, () => 0);
   readonly #want: (string | null)[] = Array.from({ length: DECK_COUNT }, () => null);
+
+  noteShift(deck: number, seconds: number, now: number): void {
+    if (!Number.isInteger(deck) || deck < 0 || deck >= DECK_COUNT || !Number.isFinite(seconds)) return;
+    this.shiftLead[deck] += seconds;
+    this.shiftAt[deck] = now;
+  }
 
   noteState(msg: StateMsg, at: number): void {
     this.state = msg;

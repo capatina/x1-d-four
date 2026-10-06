@@ -5,10 +5,11 @@
   import { client } from '../lib/client.svelte';
   import { fmtBpm, idToName } from '../lib/format';
   import { backKey, bandKey, diveHint, EXPLORE_LEGEND, keysText, keyText } from '../lib/mixer';
-  import { BANDS, type Band, type ExploreMsg } from '../lib/protocol';
+  import { BANDS, type Band, type ExploreMsg, type MidiMsg } from '../lib/protocol';
   import { viz } from '../lib/viz';
   import DeckHud from './DeckHud.svelte';
   import type { EngineStats, ExploreEngine } from './engine';
+  import LatencyScope from './LatencyScope.svelte';
   import LibraryTicker from './LibraryTicker.svelte';
   import SearchPanel from './SearchPanel.svelte';
   import WaveStrip from './WaveStrip.svelte';
@@ -31,12 +32,22 @@
   let failed = $state<string | null>(null);
   let stats = $state.raw<EngineStats | null>(null);
   let waveMs = $state(0);
+  /** The title card of the generation that just started building (demo style). */
+  let genCard = $state<{ eyebrow: string; name: string; key: number; big?: boolean } | null>(null);
+  /** The world we're in (its index), for the labels' look. */
+  let world = $state(0);
+  let genTimer = 0;
   const showStats = new URLSearchParams(location.search).has('stats');
   const ex = $derived(client.explore);
   const band = $derived<Band>(ex?.band ?? 'low');
   const pal = $derived(bandPalette(band));
   const analysis = $derived(client.analysis);
   const bpm = $derived(client.state?.bpm ?? null);
+  const rec = $derived(client.state?.recording ?? null);
+  const recTime = $derived.by(() => {
+    const t = Math.floor(rec?.seconds ?? 0);
+    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  });
 
   const children = $derived(ex?.current ? ex.nodes.filter((n) => n.parent === ex.current) : []);
   const hasRoot = $derived(!!ex?.root);
@@ -99,6 +110,12 @@
     return `${BAND_PALETTE[b].label}: ${BAND_PALETTE[b].hint}${k ? ` (${keyText(k)})` : ''}`;
   }
 
+  function showCard(eyebrow: string, name: string, big: boolean) {
+    genCard = { eyebrow, name, big, key: (genCard?.key ?? 0) + 1 };
+    clearTimeout(genTimer);
+    genTimer = window.setTimeout(() => (genCard = null), big ? 3200 : 2600);
+  }
+
   onMount(() => {
     let cancelled = false;
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -114,6 +131,9 @@
       engine?.setExplore(msg);
     };
     client.exploreListeners.add(onExplore);
+    // The mixer's MIDI data flow drives the visuals too.
+    const onMidi = (msg: MidiMsg) => engine?.midiEvent(msg);
+    client.midiListeners.add(onMidi);
 
     // Labels keep clear of the header boxes; they only move when those change size.
     const obstacles = () => {
@@ -156,6 +176,11 @@
           onAimDelta: (delta) => client.send({ cmd: 'explore_aim', delta }),
           reducedMotion: motion.matches,
           onStats: showStats ? (s) => (stats = { ...s }) : undefined,
+          onGeneration: (level, name) => showCard(`GEN ${String(level).padStart(2, '0')}`, name, false),
+          onWorld: (w, name) => {
+            world = w;
+            showCard(`WORLD ${String(w + 1).padStart(2, '0')}`, name, true);
+          },
         });
         local.engine = engine;
         if (new URLSearchParams(location.search).has('qa')) (window as unknown as { __datastream: unknown }).__datastream = engine.qa();
@@ -170,12 +195,14 @@
     return () => {
       cancelled = true;
       client.exploreListeners.delete(onExplore);
+      client.midiListeners.delete(onMidi);
       boxes.disconnect();
       footerBox.disconnect();
       window.removeEventListener('resize', obstacles);
       window.removeEventListener('resize', decks);
       motion.removeEventListener('change', onMotion);
       local.engine = null;
+      clearTimeout(genTimer);
       engine?.dispose();
       engine = null;
     };
@@ -232,6 +259,7 @@
   style:--hot={pal.hot}
   role="application"
   aria-label="Explore: the Datastream"
+  data-world={world}
 >
   <div class="stage">
     <canvas bind:this={canvas} aria-hidden="true"></canvas>
@@ -239,6 +267,14 @@
   </div>
 
   <div class="vignette" aria-hidden="true"></div>
+  {#if genCard}
+    {#key genCard.key}
+      <div class="gen-card" class:big={genCard.big} role="status">
+        <span class="gen-n">{genCard.eyebrow}</span>
+        <span class="gen-name">{genCard.name}</span>
+      </div>
+    {/key}
+  {/if}
   <div class="gate-glow" aria-hidden="true" bind:this={gateEl}></div>
 
   <!-- Top-left: band, follow, analysis, tempo, where we are -->
@@ -268,6 +304,16 @@
         onclick={() => client.send({ cmd: 'explore_follow', follow: !(ex?.follow ?? false) })}
       >
         <span class="pip"></span>Follow {ex?.follow ? 'on' : 'off'}
+      </button>
+      <button
+        type="button"
+        class="chip rec"
+        class:on={rec?.active}
+        aria-pressed={rec?.active ?? false}
+        title={rec?.active ? `Recording the mix to Music/recordings/${rec.file ?? ''} · peak ${rec.peak_db ?? '—'} dB` : 'Record the mix (the mixer’s master) to Music/recordings'}
+        onclick={() => client.send({ cmd: 'record', on: !(rec?.active ?? false) })}
+      >
+        <span class="rec-dot"></span>{rec?.active ? recTime : 'REC'}
       </button>
       <span class="chip tempo" title="Tempo from the mixer's MIDI clock">
         <b>{fmtBpm(bpm) || '—'}</b><small>BPM</small>
@@ -326,14 +372,7 @@
 
   <!-- Top-right: tree + way out -->
   <aside class="side" bind:this={sideEl}>
-    <div
-      class="device"
-      class:ok={device?.state === 'running'}
-      class:warn={device?.state === 'connecting' || !device}
-      title={device?.firmware ? `Firmware ${device.firmware} · ${device.underruns} underruns · ${device.urb_errors} USB errors` : undefined}
-    >
-      <span class="dot"></span>{deviceLine}
-    </div>
+    <LatencyScope connected={device?.state === 'running'} label={device?.state === 'running' ? `Xone:4D${device.firmware ? ` · fw ${device.firmware}` : ''}` : deviceLine} accent={pal.css} />
     {#if ex?.root}
       <Minimap msg={ex} />
     {/if}
@@ -452,6 +491,15 @@
   .labels {
     pointer-events: none;
     overflow: hidden;
+    transition: opacity 0.15s ease-out;
+  }
+  /* The path names fade 3 s after the aim last moved; turning the wheel brings them back. */
+  .labels:global(.idle) {
+    opacity: 0;
+    transition: opacity 0.8s ease-in;
+  }
+  .labels:global(.idle) :global(.xl) {
+    pointer-events: none;
   }
   /* The edge of the view flashes in the band's hot colour as a gate passes overhead. */
   .gate-glow {
@@ -476,6 +524,48 @@
       linear-gradient(to bottom, #000000c0, #00000000 120px),
       linear-gradient(to top, #000000f0, #000000a0 140px, transparent 30%);
   }
+
+  /* A new generation of the world: a title card slammed in, demo style. */
+  .gen-card {
+    position: absolute; left: 50%; top: 34%; display: grid; justify-items: center; gap: 2px;
+    transform: translate(-50%, -50%); pointer-events: none; z-index: 3;
+    animation: gen-card 2.6s cubic-bezier(.2,.8,.2,1) both;
+  }
+  .gen-n { font: 800 13px/1 var(--font-mono); letter-spacing: .5em; color: #000; background: var(--band); padding: 4px 6px 4px 12px; }
+  .gen-name {
+    font: italic 900 clamp(44px, 6vw, 110px)/1 'Arial Black', Impact, sans-serif; text-transform: uppercase; letter-spacing: .02em;
+    background: linear-gradient(#ffffff 0%, #e6ecff 44%, var(--band) 50%, #1a0b33 80%, #ffffff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-stroke: 1px #00000090;
+    filter: drop-shadow(0 0 24px color-mix(in srgb, var(--band) 60%, transparent));
+  }
+  @keyframes gen-card {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(2.4, .2); filter: blur(6px); }
+    8% { opacity: 1; transform: translate(-50%, -50%) scale(1.06, 1.06); filter: blur(0); }
+    14% { transform: translate(-50%, -50%) scale(1); }
+    78% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.6, .05); }
+  }
+  .gen-card.big { top: 40%; animation-duration: 3.2s; }
+  .gen-card.big .gen-name { font-size: clamp(56px, 8.5vw, 150px); }
+  @media (prefers-reduced-motion: reduce) { .gen-card { animation: gen-fade 2.6s linear both; } }
+
+  /* Each world dresses the path labels its own way. */
+  /* Chromozon: chrome pills in the sunset. */
+  .explore[data-world='1'] .labels :global(.xl) { border-radius: 14px; border-color: #ff9a3d80; background: linear-gradient(#2a1030ee, #12061aee); }
+  .explore[data-world='1'] .labels :global(.xl[data-kind='aimed']) { border-color: #ffb36b; box-shadow: 0 0 24px #ff7a3d70, inset 0 1px 0 #ffffff50; }
+  .explore[data-world='1'] .labels :global(.xl[data-kind='aimed'])::before { border-radius: 13px 13px 0 0; background: linear-gradient(90deg, #ffe08a, #ff7a3d, #ff3d8a); }
+  /* Tunnelwerk: black and white blocks, a checkered header. */
+  .explore[data-world='2'] .labels :global(.xl) { border: 2px solid #ffffffb0; background: #000000f0; box-shadow: 4px 4px 0 #ffffff40; }
+  .explore[data-world='2'] .labels :global(.xl[data-kind='aimed']) { border-color: #fff; box-shadow: 6px 6px 0 #fff; }
+  .explore[data-world='2'] .labels :global(.xl[data-kind='aimed'])::before { color: #000; background: repeating-conic-gradient(#fff 0 25%, #d8d8d8 0 50%) 0 0 / 10px 10px; }
+  /* Nachtflug: HUD brackets on the night. */
+  .explore[data-world='3'] .labels :global(.xl) { border: 0; background: linear-gradient(#020a18cc, #020a18cc) padding-box; box-shadow: inset 2px 2px 0 -0px color-mix(in srgb, var(--band) 70%, transparent), inset -2px -2px 0 0 color-mix(in srgb, var(--band) 70%, transparent); }
+  .explore[data-world='3'] .labels :global(.xl[data-kind='aimed']) { box-shadow: inset 2px 2px 0 var(--band), inset -2px -2px 0 var(--band), 0 0 26px color-mix(in srgb, var(--band) 45%, transparent); }
+  .explore[data-world='3'] .labels :global(.xl[data-kind='aimed'])::before { background: transparent; color: var(--band); border-bottom: 1px solid var(--band); }
+  /* Kupferzeit: copper-bar rainbow headers on deep purple. */
+  .explore[data-world='4'] .labels :global(.xl) { border: 0; border-top: 3px solid transparent; border-image: linear-gradient(90deg, #ff3d3d, #ffb347, #fff35c, #3dff8a, #3dc8ff, #b84dff) 1; background: #140626ee; }
+  .explore[data-world='4'] .labels :global(.xl[data-kind='aimed'])::before { background: linear-gradient(90deg, #ff3d3d, #ffb347, #fff35c, #3dff8a, #3dc8ff, #b84dff); }
+  @keyframes gen-fade { 0%, 100% { opacity: 0; } 10%, 85% { opacity: 1; } }
 
   /* The sector's name: a chrome logo, demo style. */
   .realm { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; max-width: min(44vw, 560px); pointer-events: none; text-align: center; }
@@ -589,6 +679,12 @@
   button.chip {
     cursor: pointer;
   }
+  .rec { font: 800 11.5px/1 var(--font-mono); letter-spacing: 0.12em; font-variant-numeric: tabular-nums; }
+  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #5a2030; box-shadow: inset 0 0 0 1px #ff4d6d80; }
+  .rec.on { border-color: #ff4d6d; color: #fff; box-shadow: 0 0 14px #ff4d6d55; }
+  .rec.on .rec-dot { background: #ff2b4f; box-shadow: 0 0 10px #ff2b4f; animation: rec-blink 1s steps(2, start) infinite; }
+  @keyframes rec-blink { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .rec.on .rec-dot { animation: none; } }
   .chip .pip {
     width: 7px;
     height: 7px;
@@ -702,7 +798,7 @@
   }
 
   /* Side: close + minimap */
-  /* Device chip beside the minimap, so the corner stays short and labels keep their places. */
+  /* The latency scope beside the minimap; labels keep clear of the corner. */
   .side {
     position: absolute;
     top: 22px;
@@ -711,42 +807,6 @@
     flex-direction: row-reverse;
     align-items: flex-start;
     gap: 10px;
-  }
-  .device {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    max-width: 360px;
-    height: 30px;
-    padding: 0 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    background: var(--glass);
-    font: 600 12.5px/1 var(--font-ui);
-    color: var(--text-2);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .device .dot {
-    flex: none;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--bad);
-    box-shadow: 0 0 8px var(--bad);
-  }
-  .device.ok .dot {
-    background: var(--ok);
-    box-shadow: 0 0 8px var(--ok);
-  }
-  .device.warn .dot {
-    background: var(--warn);
-    box-shadow: 0 0 8px var(--warn);
-  }
-  .device:not(.ok):not(.warn) {
-    color: var(--text);
-    border-color: color-mix(in srgb, var(--bad) 55%, transparent);
   }
   .hint {
     align-self: center;

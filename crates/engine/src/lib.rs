@@ -27,18 +27,23 @@ pub enum Command {
     Seek { deck: usize, frame: f64 },
     Nudge { deck: usize, frames: f64 },
     Rate { deck: usize, rate: f64 },
-    /// Turn sync on/off; `None` toggles. Either way the deck goes back onto the
-    /// master's beat (a shift's offset is dropped).
+    /// Turn sync on/off; `None` toggles. Sync matches tempo only: the beats are
+    /// lined up by hand (`Shift`), or once on request (`Align`).
     Sync { deck: usize, on: Option<bool> },
+    /// Sync on, and one jump onto the master's beat (de-clicked). Never automatic.
+    Align { deck: usize },
     /// Start a loop at the nearest beat, or leave the active one.
     Loop { deck: usize },
     /// Halve (negative) or double (positive) the loop length.
     LoopLength { deck: usize, steps: i32 },
+    /// Move the active loop `steps` steps of `beats` (0 = a beat, or the loop's length when
+    /// shorter); the playhead moves with it.
+    LoopMove { deck: usize, steps: i32, beats: f64 },
     /// Jump this many frames of track time (+ = forward), at once. A synced deck
-    /// moves in whole beats, so it stays on the master's beat.
+    /// moves in whole beats, so its beats stay where they were lined up.
     Jog { deck: usize, frames: f64 },
     /// Smooth nudge by this many frames: playing = brief speed bend, paused = glide.
-    /// A synced deck keeps the new offset against the master's beat.
+    /// With tempo sync and no phase lock, a synced deck simply keeps the new offset.
     Shift { deck: usize, frames: f64 },
     Trim { deck: usize, gain: f32 },
     /// Raw MIDI to the mixer (LED rings), sent one byte per packet.
@@ -95,8 +100,18 @@ pub struct Shared {
     pub decks: [DeckState; DECKS],
     /// Per deck low/mid/high RMS of the last packet (f32 bits), for visuals.
     pub levels: [[AtomicU32; 3]; DECKS],
-    /// MIDI clock ticks received (24 per beat) for a BPM readout.
+    /// RMS of the 8 channels the mixer sends back over USB (its record channels),
+    /// per packet (f32 bits, 0..1 of full scale).
+    pub inputs: [AtomicU32; 8],
+    /// While set, every frame the mixer sends back goes to the capture feed (recording).
+    pub capture_on: AtomicBool,
+    /// Frames the capture feed had no room for (the writer fell behind).
+    pub capture_dropped: AtomicU64,
+    /// MIDI clock ticks received (24 per beat).
     pub clock_ticks: AtomicU64,
+    /// The mixer's tempo from its MIDI clock (f64 bits; 0 = no clock): the global
+    /// tempo every synced deck plays at.
+    pub clock_bpm: AtomicU64,
     pub events_dropped: AtomicU64,
     pub midi_out_dropped: AtomicU64,
 }
@@ -110,6 +125,11 @@ fn load(a: &AtomicU64) -> f64 {
 }
 
 impl Shared {
+    /// RMS (0..1) of the mixer's 8 record channels in the last packet.
+    pub fn inputs(&self) -> [f32; 8] {
+        std::array::from_fn(|c| f32::from_bits(self.inputs[c].load(Ordering::Relaxed)))
+    }
+
     /// Low/mid/high RMS (0..~1) of each deck's last packet.
     pub fn levels(&self) -> [[f32; 3]; DECKS] {
         std::array::from_fn(|d| std::array::from_fn(|b| f32::from_bits(self.levels[d][b].load(Ordering::Relaxed))))
@@ -149,6 +169,7 @@ pub struct Rt {
     split_coef: [f32; 2],
     /// Mono mix of all decks for the visualiser; pushes fail silently when nobody reads.
     viz: rtrb::Producer<f32>,
+    capture: rtrb::Producer<Frame>,
     sync: SyncState,
 }
 
@@ -160,17 +181,61 @@ struct SyncState {
     /// Packet count when each deck last started playing (master = longest playing).
     started: [u64; DECKS],
     master: Option<usize>,
-    /// No phase snap on this deck before this packet (lets a jump land first).
-    snap_hold: [u64; DECKS],
-    /// Until this packet the deck is being shifted: bend harder, never snap.
-    shift_until: [u64; DECKS],
+    clock: ClockTempo,
 }
 
-/// Phase errors above this many beats are fixed with a jump, smaller ones by bending speed.
-const SNAP_BEATS: f64 = 0.05;
-/// Speed bend per beat of phase error, and its limit (0.8 % is ~14 cents).
-const PHASE_GAIN: f64 = 0.3;
-const MAX_BEND: f64 = 0.008;
+/// Clock ticks the tempo is measured over (8 beats), and how long without a tick
+/// means the clock stopped (half a second, in packets).
+const CLOCK_SPAN: usize = 192;
+const CLOCK_TIMEOUT: u64 = SAMPLE_RATE as u64 / 2 / FRAMES_PER_PACKET as u64;
+
+/// The mixer's MIDI clock against our own sample clock: tick arrival times in
+/// packets (1.67 ms), measured over up to 8 beats, so USB jitter averages out.
+struct ClockTempo {
+    at: [u64; CLOCK_SPAN + 1],
+    head: usize,
+    count: usize,
+    bpm: Option<f64>,
+}
+
+impl Default for ClockTempo {
+    fn default() -> Self {
+        Self { at: [0; CLOCK_SPAN + 1], head: 0, count: 0, bpm: None }
+    }
+}
+
+impl ClockTempo {
+    fn last(&self) -> u64 {
+        self.at[(self.head + self.at.len() - 1) % self.at.len()]
+    }
+
+    fn tick(&mut self, packet: u64) {
+        let n = self.at.len();
+        if self.count > 0 && packet - self.last() > CLOCK_TIMEOUT {
+            self.count = 0;
+        }
+        self.at[self.head] = packet;
+        self.head = (self.head + 1) % n;
+        self.count = (self.count + 1).min(n);
+        // At least a beat before trusting it.
+        if self.count > 24 {
+            let oldest = self.at[(self.head + n - self.count) % n];
+            let span = (packet - oldest) as f64 * FRAMES_PER_PACKET as f64 / SAMPLE_RATE as f64;
+            if span > 0.0 {
+                self.bpm = Some((self.count - 1) as f64 / 24.0 * 60.0 / span);
+            }
+        }
+    }
+
+    /// The tempo, or None once the clock has stopped.
+    fn bpm(&mut self, packet: u64) -> Option<f64> {
+        if self.count == 0 || packet - self.last() > CLOCK_TIMEOUT {
+            self.count = 0;
+            self.bpm = None;
+        }
+        self.bpm
+    }
+}
 
 /// Band-split coefficients for 250 Hz and 3 kHz one-pole low-passes.
 fn split_coefficients() -> [f32; 2] {
@@ -181,6 +246,8 @@ fn split_coefficients() -> [f32; 2] {
 pub struct Control {
     /// Mono mix samples for the visualiser (taken once by whoever draws).
     viz: Option<rtrb::Consumer<f32>>,
+    /// The mixer's 8 record channels while `capture_on` (taken once by the recorder).
+    capture: Option<rtrb::Consumer<Frame>>,
     commands: rtrb::Producer<Command>,
     pub events: rtrb::Consumer<Event>,
     garbage: rtrb::Consumer<Arc<Track>>,
@@ -192,6 +259,8 @@ pub fn new() -> (Control, Rt) {
     let (ev_tx, ev_rx) = rtrb::RingBuffer::new(4096);
     let (gc_tx, gc_rx) = rtrb::RingBuffer::new(64);
     let (viz_tx, viz_rx) = rtrb::RingBuffer::new(8192);
+    // 4 s of the mixer's record channels, so the writer can stall on the disk for a moment.
+    let (cap_tx, cap_rx) = rtrb::RingBuffer::new(SAMPLE_RATE as usize * 4);
     let shared = Arc::new(Shared::default());
     for d in &shared.decks {
         store(&d.rate, 1.0);
@@ -208,9 +277,10 @@ pub fn new() -> (Control, Rt) {
         split: [[0.0; 2]; DECKS],
         split_coef: split_coefficients(),
         viz: viz_tx,
+        capture: cap_tx,
         sync: SyncState::default(),
     };
-    (Control { viz: Some(viz_rx), commands: cmd_tx, events: ev_rx, garbage: gc_rx, shared }, rt)
+    (Control { viz: Some(viz_rx), capture: Some(cap_rx), commands: cmd_tx, events: ev_rx, garbage: gc_rx, shared }, rt)
 }
 
 impl Control {
@@ -223,6 +293,11 @@ impl Control {
     pub fn midi_out(&mut self, msg: MidiMessage) -> Result<(), Command> {
         let (bytes, len) = msg.to_bytes();
         self.send(Command::MidiOut { bytes, len: len as u8 })
+    }
+
+    /// The recorder's feed of the mixer's record channels; `None` after the first call.
+    pub fn take_capture(&mut self) -> Option<rtrb::Consumer<Frame>> {
+        self.capture.take()
     }
 
     /// The visualiser's mono mix feed; `None` after the first call.
@@ -266,6 +341,7 @@ impl Rt {
                 self.decks[deck].toggle_loop();
             }
             Command::LoopLength { deck, steps } => self.decks[deck].change_loop_length(steps),
+            Command::LoopMove { deck, steps, beats } => self.decks[deck].move_loop(steps, beats),
             Command::Jog { deck, frames } => {
                 let d = &mut self.decks[deck];
                 let following = d.sync && d.playing && self.sync.master.is_some_and(|m| m != deck);
@@ -277,47 +353,26 @@ impl Rt {
                     let beats = rest + frames / g.beat_frames();
                     d.jog_rest = beats.fract();
                     frames = beats.trunc() * g.beat_frames();
-                    // Let the jump land before the phase lock looks again.
-                    self.sync.snap_hold[deck] = self.sync.snap_hold[deck].max(self.sync.packets + 10);
                 }
                 if frames != 0.0 {
                     d.nudge(frames);
                 }
             }
-            Command::Shift { deck, frames } => {
-                let master = self.sync.master;
-                let following = |n: usize, d: &Deck| d.sync && d.playing && d.grid().is_some() && master.is_some_and(|m| m != n);
-                let followers: Vec<usize> = (0..DECKS).filter(|&n| following(n, &self.decks[n])).collect();
-                let d = &mut self.decks[deck];
-                match d.grid() {
-                    // A synced deck keeps the shift: move where it sits against the
-                    // master's beat and let the phase lock glide it there.
-                    Some(g) if following(deck, d) => {
-                        d.phase_offset += frames / g.beat_frames();
-                        self.sync.shift_until[deck] = self.sync.packets + 60;
-                    }
-                    // The master sets the beat the others follow, so moving it would drag
-                    // them along: move every deck following it the other way instead.
-                    Some(g) if master == Some(deck) && d.playing && !followers.is_empty() => {
-                        let beats = frames / g.beat_frames();
-                        for n in followers {
-                            self.decks[n].phase_offset -= beats;
-                            self.sync.shift_until[n] = self.sync.packets + 60;
-                        }
-                    }
-                    _ => d.shift_pending += frames,
-                }
-            }
+            // The deck itself glides by the shift; nothing pulls it back.
+            Command::Shift { deck, frames } => self.decks[deck].shift_pending += frames,
             Command::Sync { deck, on } => {
                 let d = &mut self.decks[deck];
                 d.sync = on.unwrap_or(!d.sync);
-                d.phase_offset = 0.0;
                 d.jog_rest = 0.0;
-                d.shift_pending = 0.0;
                 if !d.sync {
                     d.rate = d.base_rate;
                 }
-                self.sync.snap_hold[deck] = 0;
+            }
+            Command::Align { deck } => {
+                self.decks[deck].sync = true;
+                self.decks[deck].jog_rest = 0.0;
+                self.decks[deck].shift_pending = 0.0;
+                self.align(deck);
             }
             Command::Trim { deck, gain } => self.decks[deck].trim = gain.clamp(0.0, 4.0),
             Command::MidiOut { bytes, len } => {
@@ -355,7 +410,7 @@ impl Rt {
         }
     }
 
-    /// Pick the master and steer synced decks onto its tempo and beat phase.
+    /// Pick the master and match synced decks to its tempo (not its phase).
     fn run_sync(&mut self) {
         let s = &mut self.sync;
         s.packets += 1;
@@ -365,54 +420,45 @@ impl Rt {
             }
             s.was_playing[n] = d.playing;
         }
-        // Master: the longest-playing deck with a grid, preferring one that isn't synced.
+        // Master: the longest-playing deck with a grid, preferring one that isn't synced
+        // (it's the beat `Align` lines up with).
         let candidates = || (0..DECKS).filter(|&n| self.decks[n].playing && self.decks[n].grid().is_some());
         let master = candidates()
             .filter(|&n| !self.decks[n].sync)
             .min_by_key(|&n| s.started[n])
             .or_else(|| candidates().min_by_key(|&n| s.started[n]));
         s.master = master;
-        let Some(m) = master else {
-            for d in self.decks.iter_mut().filter(|d| d.sync) {
-                d.rate = d.base_rate;
-            }
-            return;
-        };
-        let mg = self.decks[m].grid().expect("master has a grid");
-        self.decks[m].rate = self.decks[m].base_rate;
-        let master_bpm = mg.bpm * self.decks[m].rate;
-        let master_phase = mg.phase_at(self.decks[m].position);
-        let master_looping = self.decks[m].looping.is_some();
-        for n in 0..DECKS {
-            let d = &mut self.decks[n];
-            if n == m || !d.sync {
+        // The tempo is global: the mixer's MIDI clock when it sends one, else the master's.
+        let clock = s.clock.bpm(s.packets);
+        store(&self.shared.clock_bpm, clock.unwrap_or(0.0));
+        let tempo = clock.or_else(|| {
+            let d = &mut self.decks[master?];
+            d.rate = d.base_rate;
+            Some(d.grid()?.bpm * d.rate)
+        });
+        for (n, d) in self.decks.iter_mut().enumerate() {
+            if !d.sync || (clock.is_none() && Some(n) == master) {
                 continue;
             }
-            let Some(g) = d.grid() else { continue };
-            let target = master_bpm / g.bpm;
-            // A loop moves the beat on purpose (a half-beat loop shifts it every pass), so
-            // while the master or this deck loops, keep the tempo and leave the phase be.
-            if !d.playing || master_looping || d.looping.is_some() {
-                d.rate = target;
-                continue;
-            }
-            let err = (master_phase + d.phase_offset - g.phase_at(d.position) + 0.5).rem_euclid(1.0) - 0.5;
-            if s.packets < s.shift_until[n] {
-                // Being shifted by hand: glide there quickly (up to 8 %) and keep gliding
-                // until it lands, never jump.
-                d.rate = target * (1.0 + (4.0 * err).clamp(-0.08, 0.08));
-                if err.abs() > 0.005 {
-                    s.shift_until[n] = s.shift_until[n].max(s.packets + 2);
-                }
-            } else if err.abs() > SNAP_BEATS && s.packets >= s.snap_hold[n] {
-                // Jump onto the beat; the fade-out/in hides it. Both decks already run
-                // at the same tempo, so the phase holds while the fade plays out.
-                d.snap(d.position + err * g.beat_frames());
-                d.rate = target;
-                s.snap_hold[n] = s.packets + 300; // ~0.5 s
-            } else {
-                d.rate = target * (1.0 + (PHASE_GAIN * err).clamp(-MAX_BEND, MAX_BEND));
-            }
+            // Tempo only (the pitch fader doesn't move a synced deck): the beats are
+            // lined up by hand with the right jog, never pulled.
+            d.rate = match (tempo, d.grid()) {
+                (Some(t), Some(g)) => t / g.bpm,
+                _ => d.base_rate,
+            };
+        }
+    }
+
+    /// One jump onto the master's beat (with the transport fade), on request only.
+    fn align(&mut self, deck: usize) {
+        let Some(m) = self.sync.master.filter(|&m| m != deck) else { return };
+        let (Some(mg), Some(g)) = (self.decks[m].grid(), self.decks[deck].grid()) else { return };
+        let master_phase = mg.phase_at(self.decks[m].heading());
+        let d = &mut self.decks[deck];
+        let err = (master_phase - g.phase_at(d.heading()) + 0.5).rem_euclid(1.0) - 0.5;
+        if err != 0.0 {
+            // Lands where it would have been after the fade, like any nudge.
+            d.nudge(err * g.beat_frames());
         }
     }
 }
@@ -465,11 +511,27 @@ impl Renderer for Rt {
         self.midi_out.pop()
     }
 
+    fn captured(&mut self, frames: &[Frame; FRAMES_PER_PACKET]) {
+        for c in 0..8 {
+            let sq: f64 = frames.iter().map(|f| (f[c] as f64 / 8_388_608.0).powi(2)).sum();
+            let rms = (sq / FRAMES_PER_PACKET as f64).sqrt() as f32;
+            self.shared.inputs[c].store(rms.to_bits(), Ordering::Relaxed);
+        }
+        if self.shared.capture_on.load(Ordering::Relaxed) {
+            for f in frames {
+                if self.capture.push(*f).is_err() {
+                    self.shared.capture_dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
     fn midi_in(&mut self, bytes: &[u8]) {
         for &b in bytes {
             match self.parser.push(b) {
                 Some(MidiMessage::Clock) => {
                     self.shared.clock_ticks.fetch_add(1, Ordering::Relaxed);
+                    self.sync.clock.tick(self.sync.packets);
                 }
                 Some(m) => self.emit(Event::Midi(m)),
                 None => {}
@@ -545,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_locks_tempo_and_phase_to_the_master() {
+    fn sync_matches_tempo_but_leaves_the_phase() {
         let (mut control, mut rt) = new();
         let (ga, gb) = (Grid { bpm: 120.0, first_beat: 0.0 }, Grid { bpm: 125.0, first_beat: 7_000.0 });
         control.send(Command::Load { deck: 0, track: Some(grid_track(ga.bpm, ga.first_beat)) }).ok();
@@ -558,26 +620,64 @@ mod tests {
         }
         control.send(Command::Sync { deck: 1, on: Some(true) }).ok();
         control.send(Command::Play { deck: 1 }).ok();
-        for _ in 0..1200 {
+        for _ in 0..60 {
             rt.render(&mut frames);
         }
         let (a, b) = (control.shared.deck(0), control.shared.deck(1));
         assert!(a.master && !b.master && b.sync);
         let playing_bpm = (a.bpm.unwrap() * a.rate, b.bpm.unwrap() * b.rate);
-        assert!((playing_bpm.0 - playing_bpm.1).abs() < 0.2, "{playing_bpm:?}");
-        assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01, "phase {}", phase_error(&control, 0, 1, ga, gb));
-        // Moving the master's pitch carries the synced deck along.
-        control.send(Command::Rate { deck: 0, rate: 0.98 }).ok();
+        assert!((playing_bpm.0 - playing_bpm.1).abs() < 0.01, "{playing_bpm:?}");
+        // No phase lock: wherever the beats sit, they stay there.
+        let before = phase_error(&control, 0, 1, ga, gb);
         for _ in 0..1200 {
             rt.render(&mut frames);
         }
+        let after = phase_error(&control, 0, 1, ga, gb);
+        assert!((after - before).abs() < 0.002, "phase pulled from {before} to {after}");
+        // Moving the master's pitch carries the synced deck's tempo along.
+        control.send(Command::Rate { deck: 0, rate: 0.98 }).ok();
+        rt.render(&mut frames);
         let (a, b) = (control.shared.deck(0), control.shared.deck(1));
-        assert!((a.bpm.unwrap() * a.rate - b.bpm.unwrap() * b.rate).abs() < 0.2);
-        assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01);
+        assert!((a.bpm.unwrap() * a.rate - b.bpm.unwrap() * b.rate).abs() < 0.01);
         // Sync off: back to its own fader.
         control.send(Command::Sync { deck: 1, on: Some(false) }).ok();
         rt.render(&mut frames);
         assert_eq!(control.shared.deck(1).rate, 1.0);
+    }
+
+    #[test]
+    fn the_mixer_clock_sets_the_tempo_of_every_synced_deck() {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        control.send(Command::Load { deck: 0, track: Some(grid_track(120.0, 0.0)) }).ok();
+        control.send(Command::Load { deck: 1, track: Some(grid_track(128.0, 0.0)) }).ok();
+        control.send(Command::Rate { deck: 0, rate: 1.04 }).ok();
+        control.send(Command::Play { deck: 0 }).ok();
+        control.send(Command::Play { deck: 1 }).ok();
+        // 125 BPM = 50 ticks a second = a tick every 12 packets; every third one a packet late.
+        for i in 0..1200u64 {
+            let late = i % 36 == 12;
+            if i % 12 == 0 && !late {
+                rt.midi_in(&[0xF8]);
+            }
+            rt.render(&mut frames);
+            if i % 12 == 0 && late {
+                rt.midi_in(&[0xF8]);
+            }
+        }
+        let bpm = f64::from_bits(control.shared.clock_bpm.load(Ordering::Relaxed));
+        assert!((bpm - 125.0).abs() < 0.2, "clock {bpm}");
+        for d in 0..2 {
+            let s = control.shared.deck(d);
+            assert!((s.bpm.unwrap() * s.rate - 125.0).abs() < 0.2, "deck {} at {}", d + 1, s.bpm.unwrap() * s.rate);
+        }
+        // The clock stops: back to the master deck's own tempo (its pitch fader counts again).
+        for _ in 0..400 {
+            rt.render(&mut frames);
+        }
+        assert_eq!(control.shared.clock_bpm.load(Ordering::Relaxed), 0f64.to_bits());
+        let master = control.shared.deck(0);
+        assert!((master.bpm.unwrap() * master.rate - 124.8).abs() < 0.01);
     }
 
     #[test]
@@ -645,10 +745,10 @@ mod tests {
             rt.render(&mut frames);
         }
         control.send(Command::Play { deck: 1 }).ok();
-        for _ in 0..600 {
+        for _ in 0..100 {
             rt.render(&mut frames);
         }
-        assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01);
+        let start = phase_error(&control, 0, 1, ga, gb);
         // Shift deck 2 a tenth of a beat ahead, in small ticks.
         let tenth = gb.beat_frames() / 10.0;
         for _ in 0..10 {
@@ -659,7 +759,7 @@ mod tests {
             rt.render(&mut frames);
         }
         let err = phase_error(&control, 0, 1, ga, gb);
-        assert!((err + 0.1).abs() < 0.01, "stays a tenth of a beat ahead: {err}");
+        assert!((err - (start - 0.1)).abs() < 0.005, "moved a tenth of a beat and stays: {start} -> {err}");
         // Jogging moves whole beats: further along, same place against the beat.
         let before = control.shared.deck(1).position;
         control.send(Command::Jog { deck: 1, frames: 0.4 * gb.beat_frames() }).ok();
@@ -670,15 +770,15 @@ mod tests {
         }
         let jumped = control.shared.deck(1).position - before - 100.0 * FRAMES_PER_PACKET as f64;
         assert!((jumped - 2.0 * gb.beat_frames()).abs() < 0.02 * gb.beat_frames(), "jumped {jumped} frames");
-        let err = phase_error(&control, 0, 1, ga, gb);
-        assert!((err + 0.1).abs() < 0.01, "still a tenth of a beat ahead: {err}");
-        // Sync reset: back on the master's beat.
-        control.send(Command::Sync { deck: 1, on: Some(true) }).ok();
-        for _ in 0..1200 {
+        let err2 = phase_error(&control, 0, 1, ga, gb);
+        assert!((err2 - err).abs() < 0.005, "still where it was lined up: {err2}");
+        // Align (on request only): one jump onto the master's beat.
+        control.send(Command::Align { deck: 1 }).ok();
+        for _ in 0..100 {
             rt.render(&mut frames);
         }
         let err = phase_error(&control, 0, 1, ga, gb);
-        assert!(err.abs() < 0.01, "back on the beat: {err}");
+        assert!(err.abs() < 0.005, "back on the beat: {err}");
     }
 
     #[test]
@@ -775,23 +875,27 @@ mod tests {
             let range = control.shared.deck(looper).loop_range.unwrap();
             let other = 1 - looper;
             let mut last = control.shared.deck(other).position;
+            let mut inside = false;
             for _ in 0..3000 {
                 rt.render(&mut frames);
                 let p = control.shared.deck(other).position;
                 assert!(p > last, "deck {} pulled back by deck {looper}'s loop", other + 1);
                 last = p;
+                // The loop starts at the nearest beat, which may still be ahead; once in, it holds.
                 let lp = control.shared.deck(looper).position;
-                assert!(lp >= range.0 - 1.0 && lp < range.1 + 1.0, "the loop holds: {lp} in {range:?}");
+                inside |= lp >= range.0;
+                assert!(lp < range.1 + 1.0 && (!inside || lp >= range.0 - 1.0), "the loop holds: {lp} in {range:?}");
             }
         }
     }
 
     #[test]
-    fn shifting_the_master_moves_the_others_instead() {
+    fn shifting_the_master_moves_only_the_master() {
         let (mut control, mut rt, ga, gb) = two_synced(124.0);
         let mut frames = [[0; 8]; FRAMES_PER_PACKET];
         assert!(control.shared.deck(0).master);
-        assert!(phase_error(&control, 0, 1, ga, gb).abs() < 0.01);
+        let start = phase_error(&control, 0, 1, ga, gb);
+        let other = control.shared.deck(1).position;
         // A fast turn: a fifth of a beat in big ticks, then let it settle.
         for _ in 0..4 {
             control.send(Command::Shift { deck: 0, frames: ga.beat_frames() / 20.0 }).ok();
@@ -799,14 +903,32 @@ mod tests {
                 rt.render(&mut frames);
             }
         }
-        let mut was = control.shared.deck(1).position;
-        for _ in 0..1500 {
+        for _ in 0..600 {
             rt.render(&mut frames);
-            let p = control.shared.deck(1).position;
-            assert!(p - was < 2.0 * FRAMES_PER_PACKET as f64, "glides, no jump forward");
-            was = p;
         }
         let err = phase_error(&control, 0, 1, ga, gb);
-        assert!((err - 0.2).abs() < 0.01, "deck 1 now a fifth of a beat ahead of deck 2: {err}");
+        let moved = (err - start + 0.5).rem_euclid(1.0) - 0.5;
+        assert!((moved - 0.2).abs() < 0.005, "the master moved a fifth of a beat: {moved}");
+        let expected = other + (96.0 + 600.0) * FRAMES_PER_PACKET as f64 * control.shared.deck(1).rate;
+        assert!((control.shared.deck(1).position - expected).abs() < 2.0, "the other deck ran on untouched");
+    }
+
+    #[test]
+    fn the_mixers_record_channels_are_metered() {
+        let (mut control, mut rt) = new();
+        let mut frames = [[0; 8]; FRAMES_PER_PACKET];
+        for f in frames.iter_mut() {
+            f[2] = 4_194_304; // half scale on channel 3
+        }
+        rt.captured(&frames);
+        let inputs = control.shared.inputs();
+        assert!((inputs[2] - 0.5).abs() < 1e-6 && inputs[0] == 0.0, "{inputs:?}");
+        // Recording: frames reach the capture feed only while it's on.
+        let mut feed = control.take_capture().unwrap();
+        assert!(feed.pop().is_err());
+        control.shared.capture_on.store(true, Ordering::Relaxed);
+        rt.captured(&frames);
+        assert_eq!(feed.slots(), FRAMES_PER_PACKET);
+        assert_eq!(feed.pop().unwrap()[2], 4_194_304);
     }
 }

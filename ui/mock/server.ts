@@ -63,7 +63,7 @@ const { values: opts } = parseArgs({
     band: { type: 'string', default: 'low' },
     idle: { type: 'boolean', default: false },
     'analysis-seconds': { type: 'string', default: '4' },
-    'section-seconds': { type: 'string', default: '12' },
+    'section-seconds': { type: 'string', default: '0' },
     ticker: { type: 'boolean', default: false },
     loop: { type: 'boolean', default: false },
   },
@@ -591,6 +591,7 @@ function handle(cmd: Command): string | null {
       const d = decks[cmd.deck];
       if (!d.track) return null;
       d.jog += (Number(cmd.ms) || 0) / 1000;
+      broadcast({ type: 'shift', deck: cmd.deck, ms: Number(cmd.ms) || 0 });
       return null;
     }
     case 'sync': {
@@ -1296,6 +1297,24 @@ function tick() {
   tickExplore();
 }
 setInterval(tick, 1000 / TICK_HZ);
+
+// The latency feed: 600 OUT packets a second, ~1667 µs apart with USB jitter and
+// the odd late one, 3 URBs queued, as the real server sends it 60 times a second.
+const latencyUnderruns = 0;
+setInterval(() => {
+  const n = 10;
+  const interval_us: number[] = [];
+  const render_us: number[] = [];
+  const queued: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const late = Math.random() < 0.004 ? 400 + Math.random() * 500 : 0;
+    const jitter = (Math.random() + Math.random() + Math.random() - 1.5) * 40;
+    interval_us.push(Math.round(1666.7 + jitter + late));
+    render_us.push(Math.round(35 + Math.random() * 25));
+    queued.push(late > 700 ? 1 : 2);
+  }
+  broadcast({ type: 'latency', interval_us, render_us, queued, packet_us: 1666.7, out_urbs: 3, underruns: latencyUnderruns });
+}, 1000 / 60);
 
 // 120 Hz viz, only while the explore view is up.
 setInterval(() => {

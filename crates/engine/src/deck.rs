@@ -31,9 +31,6 @@ pub struct Deck {
     pub shift_pending: f64,
     /// Jog turned on a synced deck that hasn't added up to a whole beat yet, in beats.
     pub jog_rest: f64,
-    /// While synced: where this deck sits relative to the master's beat, in beats
-    /// (set by shifting a synced deck; 0 = on the beat).
-    pub phase_offset: f64,
     pub trim: f32,
     pub cue: f64,
     /// Playing only while the cue button is held.
@@ -51,6 +48,9 @@ pub struct Deck {
 pub struct RenderOutcome {
     pub ended: bool,
 }
+
+/// The largest speed bend a shift glides at while playing.
+pub const SHIFT_BEND: f64 = 0.25;
 
 impl Deck {
     pub fn new() -> Self {
@@ -77,7 +77,6 @@ impl Deck {
         self.looping = None;
         self.shift_pending = 0.0;
         self.jog_rest = 0.0;
-        self.phase_offset = 0.0;
         std::mem::replace(&mut self.track, track)
     }
 
@@ -152,6 +151,21 @@ impl Deck {
         }
     }
 
+    /// Move the active loop by `steps` steps of `beats` (0 = one beat, or the loop's
+    /// own length when that's shorter), staying inside the track. The playhead moves
+    /// with it and keeps its place in the loop. Nothing happens when not looping.
+    pub fn move_loop(&mut self, steps: i32, beats: f64) {
+        let (Some((a, b)), Some(g)) = (self.looping, self.grid()) else { return };
+        let step = if beats > 0.0 { beats } else { self.loop_beats().min(1.0) };
+        let d = (steps as f64 * step * g.beat_frames()).clamp(-a, (self.len() - b).max(0.0));
+        if d == 0.0 {
+            return;
+        }
+        self.looping = Some((a + d, b + d));
+        let at = self.pending_seek.unwrap_or(self.position);
+        self.snap(at + d);
+    }
+
     pub fn nudge(&mut self, frames: f64) {
         let from = match self.pending_seek {
             Some(to) => to,
@@ -195,10 +209,10 @@ impl Deck {
         let len = (samples.len() / 2) as f64;
         let step = 1.0 / FADE_FRAMES;
         for o in out.iter_mut() {
-            // Shift: glide through pending frames, as a speed bend of up to 8 % while
-            // playing, at up to normal speed while paused.
+            // Shift: glide through pending frames, as a speed bend of up to 25 % while
+            // playing (a hand on the platter), at up to normal speed while paused.
             if self.shift_pending != 0.0 {
-                let max = if self.playing { 0.08 * self.rate.abs().max(0.25) } else { 1.0 };
+                let max = if self.playing { SHIFT_BEND * self.rate.abs().max(0.25) } else { 1.0 };
                 let step = self.shift_pending.clamp(-max, max);
                 self.position = (self.position + step).clamp(0.0, len);
                 self.shift_pending -= step;
@@ -226,7 +240,7 @@ impl Deck {
                 }
             }
             let [l, r] = sample_at(samples, self.position);
-            let g = self.fade * self.trim;
+            let g = self.fade * self.trim * track.gain;
             *o = [l * g, r * g];
             self.position += self.rate;
             if let Some((a, b)) = self.looping {
@@ -395,6 +409,31 @@ mod tests {
         // Push again: out of the loop, playing on.
         assert!(d.toggle_loop());
         assert!(d.looping.is_none() && d.playing);
+    }
+
+    #[test]
+    fn moving_a_loop_carries_the_playhead() {
+        let mut d = Deck::new();
+        d.load(Some(gridded(48_000 * 60, 120.0, 0.0)));
+        d.seek(24_000.0 * 4.0 + 1000.0);
+        assert!(d.toggle_loop());
+        let (a, b) = d.looping.unwrap();
+        // 8 bars long: each click moves a beat.
+        d.move_loop(2, 0.0);
+        assert_eq!(d.looping, Some((a + 48_000.0, b + 48_000.0)));
+        assert_eq!(d.position, 24_000.0 * 6.0 + 1000.0, "the playhead keeps its place in the loop");
+        // Half a beat long: each click moves the loop's own length.
+        d.change_loop_length(-20);
+        let (a, _) = d.looping.unwrap();
+        d.move_loop(-1, 0.0);
+        assert_eq!(d.looping.unwrap().0, a - 12_000.0);
+        // It stops at the start of the track, and does nothing without a loop.
+        d.move_loop(-1000, 0.0);
+        assert_eq!(d.looping.unwrap().0, 0.0);
+        d.toggle_loop();
+        let at = d.position;
+        d.move_loop(3, 0.0);
+        assert_eq!(d.position, at);
     }
 
     #[test]

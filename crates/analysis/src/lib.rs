@@ -17,7 +17,7 @@ pub use features::{Features, analyse_file};
 pub use index::{Band, Index};
 
 /// Bump when features change shape or meaning; old caches are then ignored.
-pub const CACHE_VERSION: u32 = 1;
+pub const CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 pub struct Entry {
@@ -175,7 +175,8 @@ mod tests {
             tempo_from_tag: false,
             duration: 300.0,
             bands: [vec![1.0; 3], vec![2.0; 3], vec![3.0; 3]],
-            sections: vec![[vec![0.5], vec![0.25], vec![0.125]]],
+            key: 9,
+            clarity: 0.5,
         };
         c.entries.insert("a.mp3".into(), Entry { size: 10, mtime: 20, result: Ok(f.clone()) });
         c.entries.insert("b.mp3".into(), Entry { size: 1, mtime: 2, result: Err("bad".into()) });

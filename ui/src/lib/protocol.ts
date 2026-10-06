@@ -88,7 +88,24 @@ export type StateMsg = {
   bpm: number | null;
   /** Which view is up. The mixer can switch it, so the UI follows this. */
   view: View;
+  /** Recording the mix. */
+  recording?: RecordingStatus;
+  /** The mixer's 8 record channels coming back over USB, dBFS (−99 = silent). */
+  inputs?: number[];
 };
+
+export type RecordingStatus = {
+  active: boolean;
+  /** The mixer's record pair that carries its mix (0 = channels 1/2). */
+  pair: number;
+  seconds?: number;
+  file?: string | null;
+  peak_db?: number;
+  dropped?: number;
+};
+
+/** A recording of the mix was saved to ~/Music/recordings. */
+export type RecordedMsg = { type: 'recorded'; file: string | null; seconds: number };
 
 export type BrowserMsg = {
   type: 'browser';
@@ -234,7 +251,30 @@ export type VizMsg = {
   bpm: number | null;
 };
 
+/**
+ * Every OUT packet's timing since the last message (about 10 at a time, 60 a
+ * second): the live latency feed.
+ */
+export type LatencyMsg = {
+  type: 'latency';
+  /** Gap since the previous OUT completion, µs (nominally `packet_us`). */
+  interval_us: number[];
+  /** Time to render and encode each packet, µs. */
+  render_us: number[];
+  /** OUT URBs still queued at the device when each completed. */
+  queued: number[];
+  packet_us: number;
+  out_urbs: number;
+  underruns: number;
+};
+
+/** A deck was shifted by hand (the right jog), sent the moment it happens. */
+export type ShiftMsg = { type: 'shift'; deck: number; ms: number };
+
 export type ServerMsg =
+  | RecordedMsg
+  | LatencyMsg
+  | ShiftMsg
   | StateMsg
   | BrowserMsg
   | DeckLoadedMsg
@@ -271,6 +311,8 @@ export type Command =
   | { cmd: 'sync'; deck: number; on?: boolean }
   | { cmd: 'loop'; deck: number }
   | { cmd: 'loop_length'; deck: number; steps: number }
+  /** Start (`on: true`), stop (`false`) or toggle recording the mix. */
+  | { cmd: 'record'; on?: boolean; pair?: number }
   /** Jump ± ms of track time at once; a synced, playing deck moves in whole beats. */
   | { cmd: 'jog'; deck: number; ms: number }
   /** Smooth nudge in ± ms of track time: playing = brief speed bend, paused = glide. */

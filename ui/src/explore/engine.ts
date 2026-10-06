@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { client } from '../lib/client.svelte';
 import { DECK_COLORS } from '../lib/decks';
-import type { ExploreMsg, ExploreNode, Track } from '../lib/protocol';
+import type { ExploreMsg, ExploreNode, MidiMsg, Track } from '../lib/protocol';
 import type { VizFrame } from '../lib/viz';
 import { waves } from '../lib/waves';
 import {
@@ -19,16 +19,24 @@ import {
   LOOK_D,
   LOOK_Y,
   makeFloor,
+  makeMonoliths,
+  makePackets,
+  makePlanet,
   makePost,
   makeRails,
   makeShared,
   makeSky,
   makeStreaks,
+  makeTunnel,
+  makeWorldTunnel,
   MAX_CHILDREN,
   MAX_GRANDS,
+  PACKETS,
   padGeometry,
   PATH_SAMPLES,
   RAIL_SEGMENTS,
+  RING_GAP,
+  RINGS,
   rotY,
   scrollerTexture,
   SPLIT_Z,
@@ -66,7 +74,58 @@ export type EngineOptions = {
   onAimDelta: (delta: number) => void;
   reducedMotion: boolean;
   onStats?: (stats: EngineStats) => void;
+  /** A new generation of the world has started building (1-based), for the title card. */
+  onGeneration?: (level: number, name: string) => void;
+  /** We jumped into another world (its index into WORLDS), for the title card and the labels' look. */
+  onWorld?: (world: number, name: string) => void;
 };
+
+/**
+ * The worlds a climax jumps between, in order. Each tints the band's colour
+ * toward its own, and sets the scanlines, the bloom and the shape of the paths
+ * (0 curves, 1 swoops, 2 angles, 3 waves, 4 steps).
+ */
+export const WORLDS = [
+  { name: 'Neon Grid', tint: '#ffffff', mix: 0, scan: 0.2, bloom: 1 },
+  { name: 'Chromozon', tint: '#ff9a3d', mix: 0.5, scan: 0.12, bloom: 1.15 },
+  { name: 'Tunnelwerk', tint: '#f0f4ff', mix: 0.35, scan: 0.35, bloom: 0.9 },
+  { name: 'Nachtflug', tint: '#3de0ff', mix: 0.55, scan: 0.12, bloom: 1.25 },
+  { name: 'Kupferzeit', tint: '#ffb347', mix: 0.25, scan: 0.4, bloom: 1.05 },
+] as const;
+/** Which generations each world shows: ridges, monoliths, hexagon tunnel, orbit (1 = always). */
+const WORLD_LAYERS: readonly (readonly [number, number, number, number])[] = [
+  [1, 1, 1, 1],
+  [0, 0, 0, 0],
+  [0, 0, -1, 0],
+  [0, 1, 0, 1],
+  [0, 1, 1, 0],
+];
+/** A world evolves fully over this much music. */
+const EVO_S = 240;
+/** The hyperjump: 1.5 s, the world swapping under the white-out at 43 %. */
+const JUMP_MS = 1500;
+const JUMP_SWAP = 0.43;
+/** A climax: the bass under 40 % of its usual level for 6 s, then back over 85 %; jumps at least 30 s apart. */
+const CLIMAX_LOW = 0.4;
+const CLIMAX_HIGH = 0.85;
+const CLIMAX_HOLD_S = 6;
+const CLIMAX_GAP_MS = 30_000;
+
+/**
+ * Progressive generation: the world builds up as the music plays, one layer at a
+ * time, sooner when the bass is heavy and each time you take a branch.
+ */
+export const GENERATIONS = [
+  { at: 0.4, name: 'Ridges' },
+  { at: 1.5, name: 'Monoliths' },
+  { at: 3, name: 'Hypertunnel' },
+  { at: 5, name: 'Orbit' },
+  { at: 8, name: 'Plasma' },
+] as const;
+/** Each generation builds over this many seconds. */
+const GEN_BUILD_S = 5;
+/** Taking a branch counts as this much music toward the next generation. */
+const GEN_PER_BRANCH_S = 20;
 
 const FOV = 54;
 /** Aim: the head of light runs down the branch in 160 ms; the paths beyond sprout over 220 ms after 60 ms. */
@@ -197,6 +256,11 @@ export class ExploreEngine {
   readonly #sky: THREE.Mesh;
   readonly #floor: THREE.Mesh;
   readonly #streaks: THREE.LineSegments;
+  readonly #monoliths: THREE.Mesh;
+  readonly #packets: THREE.Points;
+  readonly #worldTunnel: THREE.Mesh;
+  readonly #tunnel: THREE.Mesh;
+  readonly #planet: ReturnType<typeof makePlanet>;
   readonly #trees: [Tree, Tree];
   #tree: Tree;
   #old: Tree;
@@ -256,15 +320,56 @@ export class ExploreEngine {
   #bandT0 = -1e9;
   #accentHex = BAND_PALETTE.low.css;
 
+  // Bass: a fast envelope, auto-levelled, and kicks found on its rising edges
+  #bass = 0;
+  #bassPeak = 0.1;
+  #bassSlow = 0;
+  #bassN = 0;
+  #kickAt = -1e9;
+  #kickSide = 1;
+  // Progressive generation: seconds of (weighted) music, and the generations announced
+  #genTime = 0;
+  #genShown = 0;
+  // The MIDI data flow: packets launched, activity, and the jogs' scratch (units of course to apply)
+  #packetNext = 0;
+  #data = 0;
+  #dataGenAt = -1e9;
+  #scratch = 0;
+  // Worlds: where we are, how long we've been here (music s), the jump in progress, the climax watch
+  #world = 0;
+  #worldTime = 0;
+  #jumps = 0;
+  #jumpT0 = -1e9;
+  #jumpSwapped = true;
+  #lastJump = -1e9;
+  #bassRef = 0;
+  #lowFor = 0;
+  #lowEndAt = -1e9;
+  #band: 'low' | 'mid' | 'high' = 'low';
+  /**
+   * The mix as the room hears it: the mixer's master, from its record channels
+   * (after faders, EQ, filters, crossfader). Smoothed level 0..1, when it last had
+   * signal (the bend only applies while it does), and the swell watch.
+   */
+  #master = 0;
+  #masterDb = -99;
+  #masterSeenAt = -1e9;
+  #masterLowAt = -1e9;
+  /** The path labels fade out 3 s after the aim last moved, and come back when it does. */
+  #labelsAt = -1e9;
+  #labelsIdle = false;
+  // The land's seed (reseeded on track changes, swept in from the horizon) and the loudest channel
+  #seedT0 = -1e9;
+  #dominant = -1;
+  #challenger = -1;
+  #challengeFor = 0;
+  #bandMs = 180;
+
   // Music
   readonly #levels = new Float32Array(3);
   #onsets = 0;
   #vigil = 0;
-  #breakdown = 0;
-  #breakdownEnd = -1e9;
-  #lowBelowAt = -1e9;
   #dropT0 = -1e9;
-  #lastDrop = -1e9;
 
   // Decks: their cards (for the lasers)
   readonly #deckX = new Float32Array(4);
@@ -320,8 +425,14 @@ export class ExploreEngine {
     this.#floor = makeFloor(s);
     this.#streaks = makeStreaks(s);
     this.#camera.add(this.#streaks);
+    this.#monoliths = makeMonoliths(s);
+    this.#packets = makePackets(s);
+    this.#worldTunnel = makeWorldTunnel(s);
+    this.#worldTunnel.visible = false;
+    this.#tunnel = makeTunnel(s);
+    this.#planet = makePlanet(s, geos[3]);
     this.#renderer.sortObjects = true;
-    this.#scene.add(this.#sky, this.#floor, this.#trees[0].group, this.#trees[1].group, this.#camera);
+    this.#scene.add(this.#sky, this.#floor, this.#worldTunnel, this.#monoliths, this.#planet.planet, this.#trees[0].group, this.#trees[1].group, this.#tunnel, this.#packets, this.#camera);
 
     this.#setBand('low', true);
     this.#rest.position.set(0, CAM_H, 0);
@@ -359,7 +470,12 @@ export class ExploreEngine {
     const children = msg.nodes.filter((n) => n.parent === msg.current).slice(0, MAX_CHILDREN);
     const moved = !!prev && prev.current !== msg.current;
     const banded = !!prev && prev.band !== msg.band;
-    if (banded || !prev) this.#setBand(msg.band, !prev);
+    if (banded || !prev) {
+      this.#bandMs = 180;
+      this.#setBand(msg.band, !prev);
+    }
+    // A new track (a new root, or taking a branch): new land.
+    if (prev && (prev.root !== msg.root || prev.current !== msg.current)) this.#reseed(now);
     // Commit and scout fly down the branch that was aimed: its slot is where current came from.
     const forward = moved && (msg.reason === 'commit' || msg.reason === 'dive');
     const taken = forward ? this.#children.findIndex((c) => c.id === msg.current) : -1;
@@ -370,9 +486,11 @@ export class ExploreEngine {
     else this.#localAim = null;
 
     if (fresh) {
+      this.#showLabels(now);
       this.#endFlight();
       const from = this.#tree;
       this.#children = children;
+      if (taken >= 0) this.#genTime += GEN_PER_BRANCH_S;
       if (!this.#reduced && taken >= 0) this.#fly(from, taken, false, msg, now);
       else if (!this.#reduced && moved && msg.reason === 'back') this.#fly(from, -1, true, msg, now);
       else {
@@ -393,6 +511,31 @@ export class ExploreEngine {
     this.#aim(children.findIndex((n) => n.id === aim), now, !fresh);
     this.#writeScroller();
     if (this.#qa) this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
+  }
+
+  /**
+   * A MIDI message from the mixer: it launches a data packet from its pod's side
+   * (coloured by its deck), lifts the data glow, builds the world a little, and a
+   * jog scratches the grid back and forth with the wheel.
+   */
+  midiEvent(msg: MidiMsg) {
+    if (msg.action === '(LED echo ignored)' || !msg.event || msg.event === 'release') return;
+    const now = this.#now();
+    const control = msg.control ?? '';
+    const side = control.startsWith('left') || control.startsWith('shift.left') ? -1 : control.startsWith('right') || control.startsWith('shift.right') ? 1 : 0;
+    const deck = /(?:lit|encoder|fader|upper|lower)(\d)/.exec(control);
+    const v = msg.value ?? 0;
+    const value = msg.event === 'value' ? v / 127 : msg.event === 'delta' ? Math.min(1, Math.abs(v) / 4) : 1;
+    this.#data = Math.min(1, this.#data + 0.18);
+    if (now - this.#dataGenAt > 150) {
+      this.#dataGenAt = now;
+      this.#genTime += 1;
+    }
+    if (msg.event === 'delta' && /jog$/.test(control)) this.#scratch += v * (control.includes('right') ? 0.6 : 2.2);
+    if (this.#reduced) return;
+    const p = this.#shared.uPackets.value[this.#packetNext];
+    this.#packetNext = (this.#packetNext + 1) % PACKETS;
+    p.set(side + (Math.random() - 0.5) * 0.3, this.#time, value, deck ? Number(deck[1]) - 1 : -1);
   }
 
   /** Scouting ahead (dives since the last load): the signal beyond is weak. */
@@ -453,6 +596,7 @@ export class ExploreEngine {
     this.#aimSlot = slot;
     this.#labels.setAim(slot >= 0 ? this.#children[slot].id : null);
     if (slot === prev) return;
+    this.#showLabels(now);
     const t = this.#tree;
     if (slot >= 0) {
       t.u.uLit.value[slot] = 1;
@@ -470,16 +614,162 @@ export class ExploreEngine {
   #setBand(band: 'low' | 'mid' | 'high', instant: boolean) {
     const s = this.#shared;
     const pal = BAND_PALETTE[band];
+    this.#band = band;
     this.#accentHex = pal.css;
     this.#accentFrom.copy(s.uAccent.value);
     this.#hotFrom.copy(s.uHot.value);
+    // The band's colour, tinted toward the world's, then toward the loudest deck's.
+    const w = WORLDS[this.#world];
     hexVec(pal.css, this.#accentTo);
+    hexVec(w.tint, this.#tint);
+    this.#accentTo.lerp(this.#tint, w.mix);
+    if (this.#dominant >= 0) {
+      hexVec(DECK_COLORS[this.#dominant], this.#tint);
+      // Deck colours are soft; push them to neon before mixing in.
+      const l = this.#tint.x * 0.299 + this.#tint.y * 0.587 + this.#tint.z * 0.114;
+      this.#tint.set(l + (this.#tint.x - l) * 2.4, l + (this.#tint.y - l) * 2.4, l + (this.#tint.z - l) * 2.4).clampScalar(0, 1);
+      this.#accentTo.lerp(this.#tint, 0.35);
+    }
     hexVec(pal.hot, this.#hotTo);
-    this.#hotTo.multiplyScalar(0.55);
+    this.#hotTo.lerp(this.#tint, w.mix * 0.6).multiplyScalar(0.55);
     this.#bandT0 = instant ? -1e9 : this.#now();
     if (instant) {
       s.uAccent.value.copy(this.#accentTo);
       s.uHot.value.copy(this.#hotTo);
+    }
+  }
+
+  readonly #tint = new THREE.Vector3();
+
+  #showLabels(now: number) {
+    this.#labelsAt = now;
+    if (this.#labelsIdle) {
+      this.#labelsIdle = false;
+      this.#o.labels.classList.remove('idle');
+    }
+  }
+
+  /** Land in world `w`: its look, its path shapes, its title card. */
+  #enterWorld(w: number, now: number) {
+    this.#world = w;
+    this.#worldTime = 0;
+    const s = this.#shared;
+    s.uWorld.value = w;
+    s.uEvo.value = 0;
+    s.uJumps.value = this.#jumps;
+    this.#floor.visible = w !== 2;
+    this.#worldTunnel.visible = w === 2;
+    this.#setBand(this.#band, true);
+    this.#post.composite.uniforms.uScan.value = WORLDS[w].scan;
+    // The paths take the new world's shape (same slots, so the labels stay put).
+    if (this.#msg?.current && this.#children.length && !this.#flight) this.#build(this.#tree, this.#msg, now, true);
+    this.#o.onWorld?.(w, WORLDS[w].name);
+  }
+
+  /**
+   * The master: its level bends the world (a fader pulled down dims and slows it,
+   * a swell brightens and speeds it), and a slam from quiet to loud is a climax.
+   * Only while the record channels carry signal, so a silent pair changes nothing.
+   */
+  #masterFrame(now: number, dt: number) {
+    const st = waves.state;
+    const inputs = st?.inputs;
+    const pair = st?.recording?.pair ?? 0;
+    const db = inputs ? Math.max(inputs[pair * 2] ?? -99, inputs[pair * 2 + 1] ?? -99) : -99;
+    // Fast up, slower down, in dB.
+    this.#masterDb += (db - this.#masterDb) * (1 - Math.exp(-dt / (db > this.#masterDb ? 0.03 : 0.3)));
+    if (this.#masterDb > -45) this.#masterSeenAt = now;
+    const n = Math.max(0, Math.min(1, (this.#masterDb + 45) / 39));
+    const was = this.#master;
+    this.#master = n;
+    if (n < 0.3) this.#masterLowAt = now;
+    if (n > 0.7 && was <= 0.7 && now - this.#masterLowAt < 1200 && now - this.#lastJump > CLIMAX_GAP_MS && this.#masterLive(now)) this.#jump(now);
+  }
+  #masterLive(now: number) {
+    return now - this.#masterSeenAt < 20_000;
+  }
+  /** How much the master bends things now: 0 neutral, −1 pulled right down, up to +0.4 hot. */
+  #masterBend(now: number) {
+    return this.#masterLive(now) ? Math.max(-1, Math.min(0.4, (this.#master - 0.7) / 0.7)) : 0;
+  }
+
+  /** A new track: new land, swept in from the horizon to the camera in 2.5 s. */
+  #reseed(now: number) {
+    const s = this.#shared;
+    s.uSeedA.value = s.uSeedB.value;
+    s.uSeedB.value = (s.uSeedB.value + 1 + Math.random() * 7) % 97;
+    this.#seedT0 = this.#reduced ? -1e9 : now;
+    if (this.#reduced) s.uSeedA.value = s.uSeedB.value;
+  }
+
+  /**
+   * The loudest channel: when another deck stays clearly louder (×1.3) for 1.5 s,
+   * the colours drift toward its deck colour and the textures switch to its variant
+   * under a short tear.
+   */
+  #channel(now: number, dt: number) {
+    let best = -1,
+      level = 0.02;
+    for (let i = 0; i < 4; i++) if (this.#deckLevel[i] > level) (best = i), (level = this.#deckLevel[i]);
+    const current = this.#dominant >= 0 ? this.#deckLevel[this.#dominant] : 0;
+    if (best >= 0 && best !== this.#dominant && level > current * 1.3) {
+      if (best !== this.#challenger) (this.#challenger = best), (this.#challengeFor = 0);
+      this.#challengeFor += dt;
+      if (this.#challengeFor >= 1.5 || this.#dominant < 0) {
+        this.#dominant = best;
+        this.#challenger = -1;
+        this.#shared.uVariant.value = best;
+        this.#bandMs = 1200;
+        this.#setBand(this.#band, false);
+        if (!this.#reduced) this.#cutT0 = now;
+      }
+    } else this.#challenger = -1;
+  }
+
+  /** The hyperjump into the next world: stretch, white-out, swap, land. */
+  #jump(now: number) {
+    if (this.#jumpT0 + JUMP_MS > now) return;
+    this.#lastJump = now;
+    this.#jumps++;
+    this.#drop(now);
+    if (this.#reduced) {
+      this.#enterWorld((this.#world + 1) % WORLDS.length, now);
+      return;
+    }
+    this.#jumpT0 = now;
+    this.#jumpSwapped = false;
+  }
+
+  /** 0..1 through the jump, or -1. Swaps the world under the white-out. */
+  #jumpFrame(now: number) {
+    const j = (now - this.#jumpT0) / JUMP_MS;
+    if (j < 0 || j >= 1) return -1;
+    if (!this.#jumpSwapped && j >= JUMP_SWAP) {
+      this.#jumpSwapped = true;
+      this.#enterWorld((this.#world + 1) % WORLDS.length, now);
+    }
+    return j;
+  }
+
+  /**
+   * Climax watch: a long breakdown (bass under 40 % of its usual level for 6 s)
+   * that ends in the bass coming back hard (over 85 %) jumps to the next world.
+   */
+  #climax(now: number, dt: number, live: boolean) {
+    if (!this.#playing || !live) return;
+    const b = this.#bass;
+    if (this.#bassRef < 0.02) this.#bassRef = b;
+    if (b > this.#bassRef * 0.5) this.#bassRef += (b - this.#bassRef) * (1 - Math.exp(-dt / 20));
+    else if (this.#lowFor > 30) this.#bassRef *= Math.exp(-dt / 30);
+    if (b < this.#bassRef * CLIMAX_LOW) this.#lowFor += dt;
+    else {
+      if (this.#lowFor >= CLIMAX_HOLD_S) this.#lowEndAt = now;
+      this.#lowFor = 0;
+    }
+    const afterBreakdown = this.#lowFor >= CLIMAX_HOLD_S || now - this.#lowEndAt < 2500;
+    if (afterBreakdown && b > this.#bassRef * CLIMAX_HIGH && now - this.#lastJump > CLIMAX_GAP_MS) {
+      this.#lowEndAt = -1e9;
+      this.#jump(now);
     }
   }
 
@@ -542,14 +832,13 @@ export class ExploreEngine {
       const len = Math.hypot(dx, dz) || 1;
       const tx = dx / len,
         tz = dz / len;
-      t.heading[i] = Math.atan2(-tx, -tz);
-      const ax = 0,
-        az = SPLIT_Z,
-        bx = 0,
-        bz = SPLIT_Z - len * 0.38,
-        cx = gx - tx * len * 0.38,
-        cz = gz - tz * len * 0.38;
-      const curve = (u: number, o: { x: number; y: number }) => bezier(ax, az, bx, bz, cx, cz, gx, gz, u, o);
+      const curve = pathCurve(this.#world, gx, gz, tx, tz, len, i);
+      // Arrive heading the way the curve does (the flight lands facing along it).
+      const q0 = { x: 0, y: 0 },
+        q1 = { x: 0, y: 0 };
+      curve(0.97, q0);
+      curve(1, q1);
+      t.heading[i] = Math.atan2(-(q1.x - q0.x), -(q1.y - q0.y));
       seg = strip(r, seg, i, RAIL_SEGMENTS, 0.26, curve);
       // The flight: 8 samples down the trunk from the camera, then the branch.
       const P = t.paths,
@@ -809,10 +1098,31 @@ export class ExploreEngine {
       energy += this.#levels[i] / 3;
     }
     if (viz.onsets !== this.#onsets) this.#onsets = viz.onsets;
+    this.#bassFrame(now, dt, live);
+    this.#data *= Math.exp(-dt / 0.8);
+    s.uData.value = this.#data;
+    this.#generation(dt, live);
 
     this.#travel(now, dt, energy, live);
     this.#decays(now, dt);
-    this.#progression(now, dt, live);
+    this.#climax(now, dt, live);
+    this.#masterFrame(now, dt);
+    this.#channel(now, dt);
+    if (!this.#labelsIdle && now - this.#labelsAt > 3000 && this.#children.length) {
+      this.#labelsIdle = true;
+      this.#o.labels.classList.add('idle');
+    }
+    {
+      const u = (now - this.#seedT0) / 2500;
+      if (u >= 0 && u < 1) s.uSeedFront.value = 900 * (1 - u) * (1 - u);
+      else {
+        s.uSeedFront.value = -1;
+        s.uSeedA.value = s.uSeedB.value;
+      }
+    }
+    // The world evolves as the music plays.
+    if (this.#playing && live) this.#worldTime += dt * (0.7 + 0.6 * Math.min(1, this.#bassN));
+    s.uEvo.value = Math.min(1, this.#worldTime / EVO_S);
 
     // The beat: a sharp attack on every master beat, scaled by the low end.
     const beats = this.#masterBeats(now);
@@ -831,16 +1141,30 @@ export class ExploreEngine {
     if (this.#old.group.visible) this.#animateGates(this.#old, dt, pulse);
 
     // Camera: at rest in the current fan (a flight overrides), with a beat bob and a drop's shake.
+    const kick = s.uKick.value;
     if (!this.#flightFrame(now)) {
       const drop = Math.max(0, 1 - (now - this.#dropT0) / 600);
-      const shake = this.#reduced ? 0 : drop * 0.5;
-      this.#camera.position.set(Math.sin(this.#time * 61) * shake, CAM_H + pulse * 0.08 + Math.sin(this.#time * 47) * shake, 0);
-      this.#camera.lookAt(0, LOOK_Y, -LOOK_D);
+      const m = this.#reduced ? 0 : 1;
+      const shake = m * (drop * 0.5 + kick * 0.12);
+      const t = this.#time;
+      // Always drifting a little; the kick punches down, the bass rocks it.
+      const sway = m * (0.4 + 0.6 * this.#energyS);
+      this.#camera.position.set(
+        Math.sin(t * 0.29) * 0.9 * sway + Math.sin(t * 61) * shake,
+        CAM_H + m * (pulse * 0.08 - kick * 0.55 + Math.sin(t * 0.41) * 0.3 * sway) + Math.sin(t * 47) * shake,
+        0,
+      );
+      this.#camera.lookAt(Math.sin(t * 0.17) * 2 * sway, LOOK_Y, -LOOK_D);
+      this.#camera.rotateZ(m * (Math.sin(t * 0.19) * 0.022 * sway + this.#kickSide * kick * 0.012 + Math.sin(t * 0.7) * 0.006 * this.#bassN));
       this.#passFlash = 0;
     }
     const fovKick = this.#flight && !this.#flight.back ? Math.sin(Math.PI * Math.min(1, (now - this.#flight.t0) / this.#flight.dur)) * 10 : 0;
     const dropKick = Math.max(0, 1 - (now - this.#dropT0) / 500) * 6;
-    const fov = FOV + (this.#reduced ? 0 : fovKick + dropKick);
+    // The hyperjump: the view stretches to the white-out, then snaps back in the new world.
+    const j = this.#jumpFrame(now);
+    const stretch = j < 0 ? 0 : j < JUMP_SWAP ? Math.pow(j / JUMP_SWAP, 2) : Math.pow(1 - (j - JUMP_SWAP) / (1 - JUMP_SWAP), 3);
+    this.#stretch = stretch;
+    const fov = FOV + (this.#reduced ? 0 : fovKick + dropKick + kick * 2.2 + stretch * 50 + 4 * this.#masterBend(now));
     if (fov !== this.#camera.fov) {
       this.#camera.fov = fov;
       this.#camera.updateProjectionMatrix();
@@ -848,6 +1172,23 @@ export class ExploreEngine {
     this.#camera.updateMatrixWorld();
     this.#sky.position.copy(this.#camera.position);
     this.#floor.position.set(this.#camera.position.x, 0, this.#camera.position.z);
+    rotY(this.#camera.position.x, this.#camera.position.z, this.#gridYaw, this.#v2);
+    s.uCamGrid.value.set(this.#v2.x + this.#gridOff.x, this.#v2.y + this.#gridOff.y);
+    s.uTunnel.value = this.#course % (RINGS * RING_GAP);
+    const planet = this.#planet;
+    planet.planet.visible = s.uGen.value.w > 0.001;
+    if (planet.planet.visible) {
+      planet.planet.position.set(this.#camera.position.x - 380, 75, this.#camera.position.z - 800);
+      planet.planet.rotation.y += dt * 0.05;
+      planet.planet.rotation.z = 0.35;
+      planet.planet.scale.setScalar(120 * (1 + 0.035 * this.#bassN + 0.03 * kick));
+      planet.alpha.value = s.uGen.value.w;
+      planet.lit.value = 0.1 + 0.3 * this.#bassN;
+      planet.ringLit.value = 0.3 + 0.6 * this.#bassN;
+    }
+    this.#monoliths.visible = s.uGen.value.y > 0.001;
+    if (this.#worldTunnel.visible) this.#worldTunnel.position.set(this.#camera.position.x, 10, this.#camera.position.z);
+    this.#tunnel.visible = s.uGen.value.z > 0.001;
     this.#postFrame(now, pulse, live);
 
     if (!draw) return;
@@ -886,6 +1227,7 @@ export class ExploreEngine {
   }
 
   #bpm = 120;
+  #stretch = 0;
 
   /** Course from tempo only (never from deck position): fast, and faster with energy. */
   #travel(now: number, dt: number, energy: number, live: boolean) {
@@ -923,12 +1265,15 @@ export class ExploreEngine {
     this.#energyS += (energy - this.#energyS) * (1 - Math.exp(-dt / 2));
     // Units per beat: 14 at rest, up to 30 with energy; a drop surges ×2.5.
     const surge = 1 + 1.5 * Math.exp(-(now - this.#dropT0) / 600);
-    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge;
+    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge * (1 + 0.45 * this.#bassN + 0.4 * this.#shared.uKick.value) * (1 + 7 * this.#stretch) * (1 + 0.6 * this.#masterBend(now));
     this.#speed = this.#reduced ? 0 : v;
-    const ds = this.#speed * dt;
+    // A jog scratches the world with the wheel (applied over ~50 ms).
+    const scratch = this.#reduced ? 0 : this.#scratch * (1 - Math.exp(-dt / 0.05));
+    this.#scratch -= scratch;
+    const ds = this.#speed * dt + scratch;
     this.#course += ds;
     // The grid streams under a resting camera (a flight moves the camera itself).
-    if (!this.#flight && ds) {
+    if (!this.#flight && ds !== 0) {
       rotY(0, -ds, this.#gridYaw, this.#v2);
       this.#gridOff.x += this.#v2.x;
       this.#gridOff.y += this.#v2.y;
@@ -967,8 +1312,8 @@ export class ExploreEngine {
       glit[i] = 0.12 + 0.88 * lit[i];
     }
     lit[TRUNK_SLOT] = 0.55 + 0.45 * (this.#aimSlot >= 0 ? 1 : 0);
-    // Band colours settle in 180 ms.
-    const u = Math.min(1, (now - this.#bandT0) / 180);
+    // Band colours settle in 180 ms (a change of channel crossfades slower).
+    const u = Math.min(1, (now - this.#bandT0) / this.#bandMs);
     const e = 1 - (1 - u) * (1 - u);
     s.uAccent.value.lerpVectors(this.#accentFrom, this.#accentTo, e);
     s.uHot.value.lerpVectors(this.#hotFrom, this.#hotTo, e);
@@ -1038,35 +1383,67 @@ export class ExploreEngine {
     const drop = Math.max(0, 1 - (now - this.#dropT0) / 160);
     const cut = this.#reduced ? 0 : Math.max(0, 1 - (now - this.#cutT0) / CUT_MS);
     const flying = this.#flight ? 1 : 0;
-    c.uFlash.value = this.#reduced ? 0 : this.#passFlash + drop * 0.55 + cut * 0.08 + pulse * 0.02 * this.#energyS;
-    c.uAberr.value = this.#reduced ? 0 : pulse * 0.8 + flying * 2.5 + drop * 5 + cut * 3;
+    const kick = this.#shared.uKick.value;
+    const st2 = this.#stretch;
+    const white = this.#jumpT0 + JUMP_MS > now ? Math.max(0, 1 - Math.abs((now - this.#jumpT0) / JUMP_MS - JUMP_SWAP) / 0.12) : 0;
+    c.uFlash.value = this.#reduced ? 0 : this.#passFlash + drop * 0.55 + cut * 0.08 + kick * 0.035 + white * 1.4;
+    c.uAberr.value = this.#reduced ? 0 : pulse * 0.5 + kick * 2 + flying * 2.5 + drop * 5 + cut * 3 + st2 * 10;
     c.uCut.value = cut;
     c.uMist.value = this.#mist;
     c.uTime.value = this.#time;
-    c.uBloom.value = 1 + 0.25 * pulse;
+    c.uBloom.value = (1 + 0.15 * pulse + 0.25 * this.#bassN + st2) * WORLDS[this.#world].bloom;
+    // The master's level: the world dims as the fader comes down, and burns brighter hot.
+    const bend = this.#masterBend(now);
+    c.uExposure.value = 1 + (bend < 0 ? 0.65 * bend : 0.35 * bend);
     const ripple = (now - this.#dropT0) / 1200;
     this.#shared.uRipple.value = ripple >= 0 && ripple < 1 && !this.#reduced ? ripple : -1;
   }
 
-  /** A drop after a breakdown (low band under 0.25 for 8 s, then back above 0.6): flash, shock wave, surge. */
-  #progression(now: number, dt: number, live: boolean) {
-    const low = this.#levels[0];
-    const playing = this.#playing && live;
-    if (playing && low < 0.25) {
-      this.#breakdown += dt;
-      this.#lowBelowAt = now;
-    } else {
-      if (this.#breakdown >= 8) this.#breakdownEnd = now;
-      this.#breakdown = 0;
+  /**
+   * Bass: the low band through a fast envelope (12 ms attack, 160 ms release),
+   * levelled against its recent peak so quiet and loud tracks both move the
+   * world; a kick is a sharp rise above the slow average.
+   */
+  #bassFrame(now: number, dt: number, live: boolean) {
+    const s = this.#shared;
+    const raw = live && this.#playing ? Math.max(this.#o.viz.bands[0], (this.#o.viz.spectrum[0] + this.#o.viz.spectrum[1] + this.#o.viz.spectrum[2]) / 3) : 0;
+    this.#bass += (raw - this.#bass) * (1 - Math.exp(-dt / (raw > this.#bass ? 0.012 : 0.16)));
+    this.#bassPeak = Math.max(0.08, this.#bass, this.#bassPeak * Math.exp(-dt / 6));
+    const n = Math.min(1.3, this.#bass / this.#bassPeak);
+    this.#bassSlow += (n - this.#bassSlow) * (1 - Math.exp(-dt / 0.25));
+    if (n > 0.7 && n - this.#bassSlow > 0.22 && now - this.#kickAt > 160) {
+      this.#kickAt = now;
+      this.#kickSide = -this.#kickSide;
     }
-    const after = this.#breakdown >= 8 || now - this.#breakdownEnd < 4000;
-    if (playing && after && low > 0.6 && now - this.#lowBelowAt < 2000 && now - this.#lastDrop > 20_000) {
-      this.#breakdownEnd = -1e9;
-      this.#drop(now);
+    this.#bassN = this.#reduced ? n * 0.4 : n;
+    s.uBass.value = this.#bassN * (1 - this.#vigil);
+    const age = (now - this.#kickAt) / 1000;
+    s.uKick.value = this.#reduced ? 0 : Math.exp(-age / 0.09);
+    s.uKickAge.value = Math.min(99, age);
+    const spec = s.uSpectrum.value;
+    const k = 1 - Math.exp(-dt / 0.06);
+    for (let i = 0; i < 32; i++) spec[i] += ((live ? (this.#o.viz.spectrum[i * 2] + this.#o.viz.spectrum[i * 2 + 1]) / 2 : 0) - spec[i]) * k;
+  }
+
+  /** Progressive generation: each layer builds over 5 s once enough music has played. */
+  #generation(dt: number, live: boolean) {
+    if (this.#playing && live) this.#genTime += dt * (0.6 + 0.8 * Math.min(1, this.#bassN));
+    const s = this.#shared;
+    const minutes = this.#genTime / 60;
+    const level = (i: number) => Math.max(0, Math.min(1, (minutes - GENERATIONS[i].at) * 60 / GEN_BUILD_S));
+    const m = WORLD_LAYERS[this.#world];
+    const gate = (i: number) => (m[i] < 0 ? 1 : m[i] * level(i));
+    s.uGen.value.set(gate(0), gate(1), gate(2), gate(3));
+    s.uGen5.value = level(4);
+    let reached = 0;
+    for (let i = 0; i < GENERATIONS.length; i++) if (minutes >= GENERATIONS[i].at) reached = i + 1;
+    if (reached > this.#genShown) {
+      this.#genShown = reached;
+      this.#o.onGeneration?.(reached, GENERATIONS[reached - 1].name);
     }
   }
+
   #drop(now: number) {
-    this.#lastDrop = now;
     this.#dropT0 = now;
   }
 
@@ -1234,6 +1611,24 @@ export class ExploreEngine {
       },
       /** Force a drop (flash, shock wave, surge). */
       drop: () => this.#drop(this.#now()),
+      /** Jump to generation `n` (0–5), fully built. */
+      setGen: (n: number) => {
+        this.#genTime = n > 0 ? (GENERATIONS[Math.min(n, GENERATIONS.length) - 1].at * 60 + GEN_BUILD_S + 0.1) : 0;
+        this.#genShown = Math.min(this.#genShown, n);
+      },
+      /** Feed a MIDI message as if it came from the mixer, e.g. midi('left.lit2', 'press'). */
+      midi: (control: string, event: 'press' | 'value' | 'delta', value: number | null = null) =>
+        this.midiEvent({ type: 'midi', t: 0, raw: '', desc: '', control, event, value, action: null }),
+      /** Jump to the next world now, as a climax would. */
+      climax: () => this.#jump(this.#now()),
+      /** Go straight to world `n` (no jump). */
+      world: (n: number) => this.#enterWorld(((n % WORLDS.length) + WORLDS.length) % WORLDS.length, this.#now()),
+      /** A new track's land, swept in. */
+      reseed: () => this.#reseed(this.#now()),
+      /** Evolve the current world to `e` (0..1). */
+      evolve: (e: number) => (this.#worldTime = e * EVO_S),
+      /** Force a kick. */
+      kick: () => (this.#kickAt = this.#now()),
       gpuMedian: async (ms = 3000) => {
         qa.gpu.length = 0;
         await new Promise((r) => setTimeout(r, ms));
@@ -1288,6 +1683,7 @@ export class ExploreEngine {
     this.#rtC = make(w >> 3, h >> 3);
     this.#rtD = make(w >> 3, h >> 3);
     this.#post.composite.uniforms.uRes.value.set(w, h);
+    this.#shared.uDpr.value = this.#dpr;
   }
   #pick(e: MouseEvent) {
     const rect = this.#o.canvas.getBoundingClientRect();
@@ -1345,7 +1741,7 @@ export class ExploreEngine {
     this.#labels.clear();
     for (const t of this.#trees) t.dispose();
     for (const g of this.#geos) g.dispose();
-    for (const m of [this.#sky, this.#floor, this.#streaks]) {
+    for (const m of [this.#sky, this.#floor, this.#streaks, this.#monoliths, this.#tunnel, this.#packets, this.#worldTunnel]) {
       m.geometry.dispose();
       (m.material as THREE.Material).dispose();
     }
@@ -1422,6 +1818,58 @@ function bezier(ax: number, az: number, bx: number, bz: number, cx: number, cz: 
     d = u * u * u;
   o.x = a * ax + b * bx + c * cx + d * dx;
   o.y = a * az + b * bz + c * cz + d * dz;
+}
+
+/**
+ * A branch from the split to its gate, in the shape of the world: 0 curves,
+ * 1 swoops (Chromozon), 2 angles (Tunnelwerk), 3 waves (Nachtflug), 4 steps (Kupferzeit).
+ */
+function pathCurve(world: number, gx: number, gz: number, tx: number, tz: number, len: number, i: number) {
+  const az = SPLIT_Z;
+  switch (world) {
+    case 1:
+      return (u: number, o: Pt) => bezier(0, az, -gx * 0.35, az - len * 0.45, gx * 1.15, gz + len * 0.25, gx, gz, u, o);
+    case 2: {
+      // Straight out, one hard turn, straight in.
+      const kx = gx * 0.18,
+        kz = az + (gz - az) * 0.55;
+      return (u: number, o: Pt) => {
+        if (u < 0.5) {
+          const v = u / 0.5;
+          o.x = kx * v;
+          o.y = az + (kz - az) * v;
+        } else {
+          const v = (u - 0.5) / 0.5;
+          o.x = kx + (gx - kx) * v;
+          o.y = kz + (gz - kz) * v;
+        }
+      };
+    }
+    case 3: {
+      const bz = az - len * 0.38,
+        cx = gx - tx * len * 0.38,
+        cz = gz - tz * len * 0.38;
+      const phase = i * 1.3;
+      return (u: number, o: Pt) => {
+        bezier(0, az, 0, bz, cx, cz, gx, gz, u, o);
+        // A runway that weaves, still at the split and at the gate.
+        const w = Math.sin(u * Math.PI * 3 + phase) * 2.6 * Math.sin(u * Math.PI);
+        o.x += -tz * w;
+        o.y += tx * w;
+      };
+    }
+    case 4:
+      return (u: number, o: Pt) => {
+        o.x = gx * smoothstep(0.25, 0.75, u);
+        o.y = az + (gz - az) * u;
+      };
+    default: {
+      const bz = az - len * 0.38,
+        cx = gx - tx * len * 0.38,
+        cz = gz - tz * len * 0.38;
+      return (u: number, o: Pt) => bezier(0, az, 0, bz, cx, cz, gx, gz, u, o);
+    }
+  }
 }
 
 function smoothstep(a: number, b: number, v: number) {

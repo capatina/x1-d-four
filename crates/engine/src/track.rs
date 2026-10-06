@@ -31,7 +31,17 @@ pub struct Track {
     pub bands: Vec<[u8; 3]>,
     /// Beat grid, if known: needed for sync.
     pub grid: Option<Grid>,
+    /// Volume normalization: the gain that brings the track to `TARGET_LUFS` (1 = none).
+    pub gain: f32,
 }
+
+/// Loudness every loaded track is brought to (EBU R128 integrated loudness).
+pub const TARGET_LUFS: f64 = -11.0;
+/// Normalization never cuts more than this or boosts more than this (dB).
+const MIN_GAIN_DB: f64 = -12.0;
+const MAX_GAIN_DB: f64 = 9.0;
+/// A boost stops where the loudest sample would reach this.
+const PEAK_CEILING: f32 = 0.98;
 
 /// Tempo and first beat of a track, in its own 48 kHz frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -64,15 +74,83 @@ impl Track {
     pub fn from_samples(path: PathBuf, samples: Vec<f32>) -> Self {
         let peaks = peaks(&samples);
         let bands = band_levels(&samples);
-        Self { path, samples, peaks, bands, grid: None }
+        Self { path, samples, peaks, bands, grid: None, gain: 1.0 }
     }
+
+    /// Set `gain` so the track plays at `TARGET_LUFS`, without boosting it into clipping.
+    pub fn normalize(&mut self) {
+        self.gain = normalization_gain(&self.samples);
+    }
+}
+
+/// Gain toward `TARGET_LUFS`: clamped to −12…+9 dB, and a boost only as far as the peak allows.
+pub fn normalization_gain(samples: &[f32]) -> f32 {
+    let Some(lufs) = integrated_loudness(samples) else { return 1.0 };
+    let db = (TARGET_LUFS - lufs).clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+    let mut gain = 10f64.powf(db / 20.0) as f32;
+    if gain > 1.0 {
+        let peak = samples.iter().fold(0f32, |m, v| m.max(v.abs()));
+        if peak > 0.0 {
+            gain = gain.min((PEAK_CEILING / peak).max(1.0));
+        }
+    }
+    gain
+}
+
+/// EBU R128 / ITU-R BS.1770 integrated loudness of 48 kHz interleaved stereo, in LUFS:
+/// K-weighting, 400 ms blocks every 100 ms, absolute gate at −70 LUFS, relative gate
+/// 10 LU below. None for silence.
+pub fn integrated_loudness(samples: &[f32]) -> Option<f64> {
+    // K-weighting at 48 kHz: high shelf, then the RLB high-pass.
+    const SHELF: ([f64; 3], [f64; 2]) = ([1.53512485958697, -2.69169618940638, 1.19839281085285], [-1.69065929318241, 0.73248077421585]);
+    const HIGHPASS: ([f64; 3], [f64; 2]) = ([1.0, -2.0, 1.0], [-1.99004745483398, 0.99007225036621]);
+    const HOP: usize = SAMPLE_RATE as usize / 10;
+    let frames = samples.len() / 2;
+    if frames < HOP * 4 {
+        return None;
+    }
+    // Per 100 ms hop: the K-weighted energy of both channels.
+    let mut hops = Vec::with_capacity(frames / HOP);
+    let mut state = [[0f64; 4]; 4]; // [channel * 2 + stage][x1, x2, y1, y2]
+    let mut acc = 0f64;
+    for f in 0..frames {
+        for c in 0..2 {
+            let mut x = samples[f * 2 + c] as f64;
+            for (k, (b, a)) in [SHELF, HIGHPASS].iter().enumerate() {
+                let st = &mut state[c * 2 + k];
+                let y = b[0] * x + b[1] * st[0] + b[2] * st[1] - a[0] * st[2] - a[1] * st[3];
+                st[1] = st[0];
+                st[0] = x;
+                st[3] = st[2];
+                st[2] = y;
+                x = y;
+            }
+            acc += x * x;
+        }
+        if (f + 1) % HOP == 0 {
+            hops.push(acc / HOP as f64);
+            acc = 0.0;
+        }
+    }
+    let blocks: Vec<f64> = hops.windows(4).map(|w| w.iter().sum::<f64>() / 4.0).collect();
+    let lufs = |power: f64| -0.691 + 10.0 * power.log10();
+    let gated = |threshold: f64| blocks.iter().copied().filter(move |&p| p > 0.0 && lufs(p) > threshold);
+    let mean = |it: &mut dyn Iterator<Item = f64>| {
+        let (sum, n) = it.fold((0.0, 0usize), |(s, n), p| (s + p, n + 1));
+        (n > 0).then(|| sum / n as f64)
+    };
+    let absolute = mean(&mut gated(-70.0))?;
+    let relative = lufs(absolute) - 10.0;
+    mean(&mut gated(relative)).map(lufs)
 }
 
 /// Decode a file into a playable track.
 pub fn load(path: &Path) -> anyhow::Result<Track> {
     let (rate, samples) = decode(path, 2)?;
     let samples = if rate == SAMPLE_RATE { samples } else { resample(&samples, rate, SAMPLE_RATE)? };
-    Ok(Track::from_samples(path.to_owned(), samples))
+    let mut track = Track::from_samples(path.to_owned(), samples);
+    track.normalize();
+    Ok(track)
 }
 
 /// Decode to mono f32 at the file's own rate (left/right averaged), for analysis.
@@ -303,5 +381,33 @@ mod tests {
         let peak = track.samples.iter().fold(0f32, |m, s| m.max(s.abs()));
         assert!((0.45..0.52).contains(&peak), "peak {peak}");
         assert_eq!(track.peaks.len(), PEAK_BUCKETS);
+    }
+
+    fn sine(amplitude: f32, seconds: usize) -> Vec<f32> {
+        (0..SAMPLE_RATE as usize * seconds)
+            .flat_map(|i| {
+                let v = amplitude * (std::f32::consts::TAU * 1000.0 * i as f32 / SAMPLE_RATE as f32).sin();
+                [v, v]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn loudness_of_a_full_scale_sine() {
+        // BS.1770: a 0 dBFS 1 kHz sine in both channels measures about 0 LUFS.
+        let l = integrated_loudness(&sine(1.0, 5)).unwrap();
+        assert!(l.abs() < 0.3, "{l}");
+        let quiet = integrated_loudness(&sine(0.1, 5)).unwrap();
+        assert!((quiet - (l - 20.0)).abs() < 0.1, "{quiet}");
+    }
+
+    #[test]
+    fn normalization_cuts_loud_and_boosts_quiet_without_clipping() {
+        let loud = normalization_gain(&sine(1.0, 5));
+        assert!((20.0 * loud.log10() - TARGET_LUFS as f32).abs() < 0.3, "cuts to the target: {loud}");
+        // About −26 LUFS wants +15 dB: held to +9 dB, then to the peak ceiling.
+        let quiet = normalization_gain(&sine(0.05, 5));
+        assert!(quiet > 1.0 && quiet * 0.05 <= PEAK_CEILING + 1e-4, "{quiet}");
+        assert_eq!(normalization_gain(&vec![0.0; 96_000 * 2]), 1.0, "silence is left alone");
     }
 }

@@ -11,9 +11,9 @@ use engine::{DECKS, SAMPLE_RATE};
 use serde_json::{Value, json};
 
 use crate::app::App;
-use crate::explore::{Explorer, SECTION_WEIGHT};
+use crate::explore::Explorer;
 
-/// Analysis results the explorer reads: the index and the cached features (for sections).
+/// Analysis results the explorer reads: the index and the cached features.
 pub struct AnalysisData {
     pub index: Index,
     pub cache: Cache,
@@ -142,23 +142,6 @@ impl App {
         ui.decks.iter().filter_map(|d| d.track.as_ref()).filter_map(|t| data.index.position(&t.id)).collect()
     }
 
-    /// The root's query: its own vector blended with the section playing now.
-    fn root_query(&self, data: &AnalysisData, ex: &Explorer) -> Option<Vec<f32>> {
-        let (root, deck) = (ex.root()?, ex.root_deck?);
-        let snap = self.shared.deck(deck);
-        let features = data.cache.features(&data.index.ids[root])?;
-        let section = features.section_at(snap.position / SAMPLE_RATE as f64)?;
-        let own = data.index.vector(ex.band, root);
-        let now = data.index.embed(ex.band, &section[ex.band.index()]);
-        Some(Index::blend(own, &now, SECTION_WEIGHT))
-    }
-
-    fn section_of(&self, ex: &Explorer) -> Option<usize> {
-        let deck = ex.root_deck?;
-        let snap = self.shared.deck(deck);
-        snap.playing.then(|| (snap.position / SAMPLE_RATE as f64 / analysis::features::SECTION_SECS as f64) as usize)
-    }
-
     /// Publish the tree and make the aimed portal the library selection.
     fn explore_changed(&self, data: &AnalysisData, ex: &Explorer, reason: &str) {
         self.broadcast(ex.to_json(&data.index, reason));
@@ -183,7 +166,7 @@ impl App {
         }
     }
 
-    /// Follow the playing deck and the section it's in. Runs about twice a second.
+    /// Follow the focused deck's track. Runs about twice a second.
     pub fn explore_tick(&self, force: bool) {
         {
             let mut last = self.explore.last_tick.lock().unwrap();
@@ -205,11 +188,9 @@ impl App {
 
         if let Some((deck, track)) = candidate_track.filter(|_| ex.follow || ex.root().is_none()) {
             if ex.root() != Some(track) {
-                ex.reroot(&data.index, track, Some(deck), None, &exclude);
+                // Matched on the whole track: the paths stay put while it plays.
+                ex.reroot(&data.index, track, Some(deck), &exclude);
                 ex.root_deck = Some(deck);
-                let q = self.root_query(&data, &ex);
-                ex.rebuild(&data.index, q, &exclude);
-                ex.section = self.section_of(&ex);
                 self.explore_changed(&data, &ex, "root");
                 return;
             }
@@ -219,33 +200,19 @@ impl App {
             // Nothing playing yet: start from the library selection so there's something to fly through.
             let selected = self.ui.lock().unwrap().selected.clone();
             if let Some(track) = selected.and_then(|id| data.index.position(&id)) {
-                ex.reroot(&data.index, track, None, None, &exclude);
+                ex.reroot(&data.index, track, None, &exclude);
                 self.explore_changed(&data, &ex, "init");
             }
             return;
-        }
-        // Section updates only while standing on the root, so a dive isn't pulled away.
-        if ex.at_root() {
-            let section = self.section_of(&ex);
-            if section.is_some() && section != ex.section {
-                ex.section = section;
-                let before: Vec<usize> = ex.children().collect();
-                let q = self.root_query(&data, &ex);
-                ex.rebuild(&data.index, q, &exclude);
-                if ex.children().collect::<Vec<_>>() != before {
-                    self.explore_changed(&data, &ex, "section");
-                }
-            }
         }
     }
 
     // ---- commands -------------------------------------------------------------
 
     pub fn explore_band(&self, band: Band) {
-        self.with_tree("band", |app, data, ex, exclude| {
+        self.with_tree("band", |_, data, ex, exclude| {
             ex.band = band;
-            let query = if ex.at_root() { app.root_query(data, ex) } else { None };
-            ex.set_band(band, &data.index, query, exclude);
+            ex.set_band(band, &data.index, exclude);
             true
         });
     }
@@ -340,10 +307,8 @@ impl App {
     }
 
     pub fn explore_back(&self) {
-        self.with_tree("back", |app, data, ex, exclude| {
-            // `back` only uses the root query if it lands on the root.
-            let q = app.root_query(data, ex);
-            ex.back(&data.index, q, exclude)
+        self.with_tree("back", |_, data, ex, exclude| {
+            ex.back(&data.index, exclude)
         });
     }
 
@@ -365,7 +330,7 @@ impl App {
         let exclude = self.exclusions(&data);
         let mut ex = self.explore.explorer.lock().unwrap();
         ex.follow = false;
-        ex.reroot(&data.index, track, None, None, &exclude);
+        ex.reroot(&data.index, track, None, &exclude);
         self.explore_changed(&data, &ex, "root");
         Ok(())
     }
@@ -525,7 +490,8 @@ mod tests {
         }
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (control, _rt) = engine::new();
-        let app = App::new(control, dir.clone(), dir.join("config"), 2, runtime.handle().clone());
+        let recorder = crate::recorder::Recorder::new(control.shared.clone(), dir.join("recordings"));
+        let app = App::new(control, dir.clone(), dir.join("config"), 2, runtime.handle().clone(), recorder);
         // 40 tracks on a circle in every band: neighbours by index are similar.
         let feats: Vec<Features> = (0..40)
             .map(|i| {
@@ -538,7 +504,8 @@ mod tests {
                     tempo_from_tag: false,
                     duration: 300.0,
                     bands: [v(analysis::features::DIMS[0], 0.0), v(analysis::features::DIMS[1], 1.0), v(analysis::features::DIMS[2], 2.0)],
-                    sections: vec![],
+                    key: 0,
+                    clarity: 0.0,
                 }
             })
             .collect();

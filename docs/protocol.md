@@ -101,6 +101,18 @@ type Track = {
 
 **`error`**: `{ type: "error", message: string }`. Something the user should see, such as a track failing to load.
 
+**`latency`** (60 a second while a screen is connected): every OUT packet's timing since the last message, the live latency feed.
+```ts
+{ type: "latency", interval_us: number[], render_us: number[], queued: number[], packet_us: number, out_urbs: number, underruns: number }
+```
+`interval_us` is the gap since the previous OUT completion (nominally `packet_us`, 1666.7), `render_us` the time to render and encode the packet, `queued` the OUT URBs still at the device when it completed (output latency ≈ (queued + 1) × `packet_us`).
+
+**`recorded`**: `{ type: "recorded", file: string | null, seconds: number }`, when a recording of the mix has been saved to `~/Music/recordings`.
+
+`state` also carries `recording: { active, pair, seconds?, file?, peak_db?, dropped? }` (`pair` is the mixer's record pair that carries its mix, 0 = channels 1/2) and `inputs: number[]`, the level of each of the mixer's 8 record channels in dBFS (−99 = silent).
+
+**`shift`**: `{ type: "shift", deck: number, ms: number }`, sent the moment a deck is shifted by hand (the right jog), so the waveform strip moves with the wheel before the next `state`. The deck glides through the shift at up to a 25 % speed bend while playing, at normal speed while paused.
+
 ## Client → server (WS or `POST /api/command`)
 
 ```ts
@@ -118,7 +130,9 @@ type Track = {
 { cmd: "select", track_id: string }
 { cmd: "scroll", delta: number }                  // move the selection within the filtered list
 { cmd: "rescan" }
-{ cmd: "sync", deck: number, on?: boolean }      // beat sync on/off (toggle if on is left out)
+{ cmd: "sync", deck: number, on?: boolean }      // tempo sync on/off (toggle if on is left out): the deck plays at the mixer's MIDI clock BPM (or the master's without a clock); the beats are lined up by hand
+{ cmd: "shift", deck: number, ms: number }       // glide the deck this far to line up its beats (it keeps the offset)
+{ cmd: "record", on?: boolean, pair?: number }   // start/stop (toggle if on is left out) recording the mix; pair = the mixer's record pair carrying it
 { cmd: "loop", deck: number }                    // loop from the nearest beat, or leave the loop
 { cmd: "loop_length", deck: number, steps: number } // halve (<0) or double (>0) the loop length
 { cmd: "midi_out", bytes: number[] }              // 1-3 raw bytes to the mixer (LED tests)
