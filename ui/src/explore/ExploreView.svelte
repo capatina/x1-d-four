@@ -24,7 +24,6 @@
   let sideEl: HTMLElement;
   let gateEl: HTMLElement;
   let footerEl: HTMLElement;
-  let realmEl: HTMLElement | undefined = $state();
 
   let engine = $state.raw<ExploreEngine | null>(null);
   /** Height of the legend + deck HUD, so toasts can sit above it. */
@@ -138,7 +137,7 @@
     // Labels keep clear of the header boxes; they only move when those change size.
     const obstacles = () => {
       if (!engine) return;
-      const rects = [infoEl, sideEl, realmEl].filter((el): el is HTMLElement => !!el).map((el) => el.getBoundingClientRect());
+      const rects = [infoEl, sideEl].map((el) => el.getBoundingClientRect());
       engine.setObstacles(rects.map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
     };
     const boxes = new ResizeObserver(obstacles);
@@ -206,18 +205,6 @@
       engine?.dispose();
       engine = null;
     };
-  });
-
-  // The sector title comes and goes with the root.
-  $effect(() => {
-    const el = realmEl;
-    if (!el || !engine) return;
-    const ro = new ResizeObserver(() => {
-      const rects = [infoEl, sideEl, el].map((e) => e.getBoundingClientRect());
-      engine?.setObstacles(rects.map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
   });
 
   $effect(() => {
@@ -318,7 +305,7 @@
       <span class="chip tempo" title="Tempo from the mixer's MIDI clock">
         <b>{fmtBpm(bpm) || '—'}</b><small>BPM</small>
       </span>
-      {#if analysis?.running && !hasRoot}
+      {#if analysis?.running}
         <span class="chip analysis" title="Analysing the library: routes appear as tracks are analysed">
           <span class="k">Analysing</span>
           <b>{analysis.done}<small>/{analysis.total}</small></b>
@@ -350,25 +337,6 @@
       {/if}
     {/if}
   </header>
-
-  {#if hasRoot}
-    <div class="realm" aria-live="polite" bind:this={realmEl}>
-      <span class="eyebrow">{pal.detail.toLowerCase()}</span>
-      <h1>{pal.place}</h1>
-      <p>
-        {#if analysis?.running}
-          <span class="analysis" title="Analysing the library: routes appear as tracks are analysed"
-            >analysing <b>{analysis.done}<small>/{analysis.total}</small></b>
-            <span class="meter"><span style:transform="scaleX({analysis.total ? analysis.done / analysis.total : 0})"></span></span></span
-          ><i>·</i>
-        {/if}
-        {children.length} {children.length === 1 ? 'path' : 'paths'} ahead <i>·</i> aim to branch, load to fly
-        {#if (ex?.path.length ?? 0) > 1}
-          <button type="button" class="upstream" onclick={() => client.send({ cmd: 'explore_back' })}>← Upstream</button>
-        {/if}
-      </p>
-    </div>
-  {/if}
 
   <!-- Top-right: tree + way out -->
   <aside class="side" bind:this={sideEl}>
@@ -567,22 +535,6 @@
   .explore[data-world='4'] .labels :global(.xl[data-kind='aimed'])::before { background: linear-gradient(90deg, #ff3d3d, #ffb347, #fff35c, #3dff8a, #3dc8ff, #b84dff); }
   @keyframes gen-fade { 0%, 100% { opacity: 0; } 10%, 85% { opacity: 1; } }
 
-  /* The sector's name: a chrome logo, demo style. */
-  .realm { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; max-width: min(44vw, 560px); pointer-events: none; text-align: center; }
-  .realm .eyebrow { font: 700 11px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: .32em; color: var(--band); text-shadow: 0 0 10px var(--band); }
-  .realm h1 {
-    margin: 2px 0 0; font: italic 900 clamp(26px, 2.6vw, 46px)/1 'Arial Black', 'Helvetica Neue', Impact, sans-serif; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap;
-    background: linear-gradient(#ffffff 0%, #e6ecff 44%, var(--band) 50%, #1a0b33 78%, #ffffff 100%);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    -webkit-text-stroke: 1px #00000080;
-    filter: drop-shadow(0 0 14px color-mix(in srgb, var(--band) 55%, transparent));
-  }
-  .realm p { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; font: 600 11px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: .12em; color: #d6d9f0; }
-  .realm i { font-style: normal; color: var(--band); }
-  .realm .analysis { display: inline-flex; align-items: center; gap: 6px; color: var(--band); }
-  .realm .analysis b { font: 650 11px var(--font-mono); font-variant-numeric: tabular-nums; color: #fff; letter-spacing: 0; }
-  .realm .analysis small { font-size: 10px; color: #a4a8c8; }
-  .upstream { pointer-events: auto; padding: 3px 8px; border: 1px solid var(--band); border-radius: 0; background: var(--glass); color: #fff; font: 700 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .1em; cursor: pointer; }
   .growth { display: block; opacity: .8; }
 
   /* Path labels: black glass, a neon hairline, mono type; the aimed one locks on and grows upward only. */

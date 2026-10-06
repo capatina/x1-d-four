@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { channels, updateChannels } from '../lib/channels';
   import { client } from '../lib/client.svelte';
   import { deckColor } from '../lib/decks';
   import { fmtLoop, fmtRatePct, idToName } from '../lib/format';
@@ -80,6 +82,36 @@
       lastBeats[i] = beats;
     }
   });
+
+  // Volume meters: written straight to the DOM every frame (no Svelte updates at 60 Hz).
+  const vuFill: HTMLElement[] = [];
+  const vuPeak: HTMLElement[] = [];
+  const vuDb: HTMLElement[] = [];
+  const vuBox: HTMLElement[] = [];
+  onMount(() => {
+    let raf = 0;
+    const shown = ['', '', '', ''];
+    const frame = (now: number) => {
+      raf = requestAnimationFrame(frame);
+      updateChannels(now);
+      for (let i = 0; i < 4; i++) {
+        if (!vuFill[i]) continue;
+        vuFill[i].style.transform = `scaleY(${channels.level[i].toFixed(3)})`;
+        vuPeak[i].style.bottom = `calc(${(channels.peak[i] * 100).toFixed(1)}% - 2px)`;
+        vuPeak[i].style.opacity = channels.peak[i] > 0.03 ? '1' : '0';
+        const db = channels.db[i];
+        const text = db <= -60 ? '−∞' : `${Math.round(db)}`.replace('-', '−');
+        if (text !== shown[i]) {
+          shown[i] = text;
+          vuDb[i].textContent = text;
+        }
+        vuBox[i].dataset.post = channels.postFader[i] ? '1' : '0';
+        vuBox[i].dataset.hot = channels.peak[i] > 0.94 ? '1' : '0';
+      }
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  });
 </script>
 
 <div class="hud" role="group" aria-label="Decks">
@@ -121,6 +153,16 @@
           <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="0.6" /><rect x="7" y="1.5" width="3" height="9" rx="0.6" /></svg>
         {/if}
       </span>
+      <span
+        class="vu"
+        data-post="0"
+        data-hot="0"
+        bind:this={vuBox[d.i]}
+        title="Channel {d.i + 1} volume: after the mixer's fader and EQ when its soundcard input reports it (bright), else what deck {d.i + 1} sends (dim)"
+      >
+        <span class="vu-meter"><span class="vu-fill" bind:this={vuFill[d.i]}></span><span class="vu-peak" bind:this={vuPeak[d.i]}></span></span>
+        <span class="vu-db" bind:this={vuDb[d.i]}>−∞</span>
+      </span>
       <span class="bar" aria-hidden="true"><span style:transform="scaleX({d.progress})"></span></span>
     </button>
   {/each}
@@ -135,7 +177,7 @@
   .deck {
     position: relative;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
     align-items: center;
     gap: 10px;
     min-width: 0;
@@ -269,6 +311,18 @@
     fill: var(--accent);
     filter: drop-shadow(0 0 4px var(--accent));
   }
+  /* The channel's volume: a meter green to amber to red, with a peak hold and its dB. */
+  .vu { display: grid; grid-template-columns: 8px auto; align-items: center; gap: 5px; height: 40px; opacity: 0.6; }
+  .vu:global([data-post='1']) { opacity: 1; }
+  .vu-meter { position: relative; width: 8px; height: 40px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+  .vu-fill {
+    position: absolute; inset: 0; transform-origin: bottom; transform: scaleY(0);
+    background: linear-gradient(to top, #3dff8a 0%, #3dff8a 62%, #ffd23f 80%, #ff4d6d 100%);
+    background-size: 100% 40px; background-position: bottom;
+  }
+  .vu-peak { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #fff; opacity: 0; }
+  .vu:global([data-hot='1']) .vu-meter { box-shadow: 0 0 8px #ff4d6d; }
+  .vu-db { min-width: 22px; font: 700 11px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-2); text-align: right; }
   .bar {
     position: absolute;
     left: 0;

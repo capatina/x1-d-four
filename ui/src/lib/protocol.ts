@@ -92,6 +92,8 @@ export type StateMsg = {
   recording?: RecordingStatus;
   /** The mixer's 8 record channels coming back over USB, dBFS (−99 = silent). */
   inputs?: number[];
+  /** Each record pair's [low, mid, high] RMS: 1/2, 3/4, 5/6 = channels 1-3 (post fader), 7/8 = main mix. */
+  returns?: number[][];
 };
 
 export type RecordingStatus = {

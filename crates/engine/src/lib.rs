@@ -103,6 +103,10 @@ pub struct Shared {
     /// RMS of the 8 channels the mixer sends back over USB (its record channels),
     /// per packet (f32 bits, 0..1 of full scale).
     pub inputs: [AtomicU32; 8],
+    /// Low/mid/high RMS of each record pair (1/2, 3/4, 5/6, 7/8) in the last packet (f32 bits):
+    /// with channels 1-3's soundcard inputs on their channel post-fader, each mixer
+    /// channel as you hear it, after its fader and EQ.
+    pub input_bands: [[AtomicU32; 3]; 4],
     /// While set, every frame the mixer sends back goes to the capture feed (recording).
     pub capture_on: AtomicBool,
     /// Frames the capture feed had no room for (the writer fell behind).
@@ -125,6 +129,11 @@ fn load(a: &AtomicU64) -> f64 {
 }
 
 impl Shared {
+    /// Low/mid/high RMS (0..~1) of each of the mixer's 4 record pairs in the last packet.
+    pub fn input_bands(&self) -> [[f32; 3]; 4] {
+        std::array::from_fn(|p| std::array::from_fn(|b| f32::from_bits(self.input_bands[p][b].load(Ordering::Relaxed))))
+    }
+
     /// RMS (0..1) of the mixer's 8 record channels in the last packet.
     pub fn inputs(&self) -> [f32; 8] {
         std::array::from_fn(|c| f32::from_bits(self.inputs[c].load(Ordering::Relaxed)))
@@ -170,6 +179,8 @@ pub struct Rt {
     /// Mono mix of all decks for the visualiser; pushes fail silently when nobody reads.
     viz: rtrb::Producer<f32>,
     capture: rtrb::Producer<Frame>,
+    /// Band-split states of the 4 record pairs.
+    input_split: [[f32; 2]; 4],
     sync: SyncState,
 }
 
@@ -278,6 +289,7 @@ pub fn new() -> (Control, Rt) {
         split_coef: split_coefficients(),
         viz: viz_tx,
         capture: cap_tx,
+        input_split: [[0.0; 2]; 4],
         sync: SyncState::default(),
     };
     (Control { viz: Some(viz_rx), capture: Some(cap_rx), commands: cmd_tx, events: ev_rx, garbage: gc_rx, shared }, rt)
@@ -516,6 +528,24 @@ impl Renderer for Rt {
             let sq: f64 = frames.iter().map(|f| (f[c] as f64 / 8_388_608.0).powi(2)).sum();
             let rms = (sq / FRAMES_PER_PACKET as f64).sqrt() as f32;
             self.shared.inputs[c].store(rms.to_bits(), Ordering::Relaxed);
+        }
+        // Each record pair split into low/mid/high, like the decks.
+        let [a1, a2] = self.split_coef;
+        for p in 0..4 {
+            let [mut lp1, mut lp2] = self.input_split[p];
+            let mut sq = [0f32; 3];
+            for f in frames {
+                let x = 0.5 * (f[p * 2] + f[p * 2 + 1]) as f32 / 8_388_608.0;
+                lp1 += a1 * (x - lp1);
+                lp2 += a2 * (x - lp2);
+                sq[0] += lp1 * lp1;
+                sq[1] += (lp2 - lp1) * (lp2 - lp1);
+                sq[2] += (x - lp2) * (x - lp2);
+            }
+            self.input_split[p] = [lp1, lp2];
+            for (b, v) in sq.iter().enumerate() {
+                self.shared.input_bands[p][b].store((v / FRAMES_PER_PACKET as f32).sqrt().to_bits(), Ordering::Relaxed);
+            }
         }
         if self.shared.capture_on.load(Ordering::Relaxed) {
             for f in frames {

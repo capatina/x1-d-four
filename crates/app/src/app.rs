@@ -814,6 +814,9 @@ impl App {
             },
             "bpm": self.bpm(),
             "recording": self.recorder.status(),
+            // Each record pair's low/mid/high level (linear RMS): with channels 1-3's soundcard
+            // inputs on post-fader, each mixer channel after its fader and EQ; 7/8 is the main mix.
+            "returns": self.shared.input_bands().map(|b| b.map(|v| (v * 1000.0).round() / 1000.0)),
             // The mixer's 8 record channels coming back over USB, dBFS (−99 = silent).
             "inputs": self.shared.inputs().map(|r| if r > 1e-5 { ((20.0 * r.log10()) * 10.0).round() / 10.0 } else { -99.0 }),
         })

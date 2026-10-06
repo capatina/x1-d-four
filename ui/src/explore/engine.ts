@@ -3,6 +3,7 @@ import { client } from '../lib/client.svelte';
 import { DECK_COLORS } from '../lib/decks';
 import type { ExploreMsg, ExploreNode, MidiMsg, Track } from '../lib/protocol';
 import type { VizFrame } from '../lib/viz';
+import { channels, updateChannels } from '../lib/channels';
 import { waves } from '../lib/waves';
 import {
   CAM_H,
@@ -38,7 +39,6 @@ import {
   RING_GAP,
   RINGS,
   rotY,
-  scrollerTexture,
   SPLIT_Z,
   TRUNK_FROM,
   TRUNK_SEGMENTS,
@@ -264,8 +264,6 @@ export class ExploreEngine {
   readonly #trees: [Tree, Tree];
   #tree: Tree;
   #old: Tree;
-  readonly #scroller = scrollerTexture();
-  #scrollText = '';
   readonly #labels: Labels;
   readonly #resize: ResizeObserver;
   readonly #point = new THREE.Vector3();
@@ -318,7 +316,6 @@ export class ExploreEngine {
   readonly #hotFrom = new THREE.Vector3();
   readonly #hotTo = new THREE.Vector3();
   #bandT0 = -1e9;
-  #accentHex = BAND_PALETTE.low.css;
 
   // Bass: a fast envelope, auto-levelled, and kicks found on its rising edges
   #bass = 0;
@@ -353,7 +350,7 @@ export class ExploreEngine {
    */
   #master = 0;
   #masterDb = -99;
-  #masterSeenAt = -1e9;
+  #mix = 0;
   #masterLowAt = -1e9;
   /** The path labels fade out 3 s after the aim last moved, and come back when it does. */
   #labelsAt = -1e9;
@@ -409,7 +406,6 @@ export class ExploreEngine {
     this.#dpr = this.#maxDpr;
     this.#adaptive = params.get('adaptive') !== '0';
     const s = this.#shared;
-    s.uScroller.value = this.#scroller.tex;
     for (let i = 0; i < 4; i++) hexInto(DECK_COLORS[i], s.uDeckColor.value, i * 3);
     this.#post.composite.uniforms.uDeckColor.value.set(s.uDeckColor.value);
 
@@ -509,7 +505,6 @@ export class ExploreEngine {
       this.#layoutLabels();
     }
     this.#aim(children.findIndex((n) => n.id === aim), now, !fresh);
-    this.#writeScroller();
     if (this.#qa) this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
   }
 
@@ -587,7 +582,6 @@ export class ExploreEngine {
   refreshLabels() {
     this.#labels.refresh();
     this.#layoutLabels();
-    this.#writeScroller();
   }
 
   /** Frame 0: the branch is lit and its head of light starts down it; the old aim decays from where it is. */
@@ -615,7 +609,6 @@ export class ExploreEngine {
     const s = this.#shared;
     const pal = BAND_PALETTE[band];
     this.#band = band;
-    this.#accentHex = pal.css;
     this.#accentFrom.copy(s.uAccent.value);
     this.#hotFrom.copy(s.uHot.value);
     // The band's colour, tinted toward the world's, then toward the loudest deck's.
@@ -667,30 +660,34 @@ export class ExploreEngine {
   }
 
   /**
-   * The master: its level bends the world (a fader pulled down dims and slows it,
-   * a swell brightens and speeds it), and a slam from quiet to loud is a climax.
-   * Only while the record channels carry signal, so a silent pair changes nothing.
+   * The mix volume drives the world: silence flattens and darkens it, the mix
+   * coming up raises and lights it, a hot mix burns brighter. It reads the
+   * mixer's main mix (its record pair); without a mixer, the decks' own level.
+   * A slam from quiet to loud is a climax.
    */
   #masterFrame(now: number, dt: number) {
     const st = waves.state;
-    const inputs = st?.inputs;
-    const pair = st?.recording?.pair ?? 0;
-    const db = inputs ? Math.max(inputs[pair * 2] ?? -99, inputs[pair * 2 + 1] ?? -99) : -99;
-    // Fast up, slower down, in dB.
-    this.#masterDb += (db - this.#masterDb) * (1 - Math.exp(-dt / (db > this.#masterDb ? 0.03 : 0.3)));
-    if (this.#masterDb > -45) this.#masterSeenAt = now;
-    const n = Math.max(0, Math.min(1, (this.#masterDb + 45) / 39));
+    const inputs = st?.device?.state === 'running' ? st.inputs : undefined;
+    let n: number;
+    if (inputs) {
+      const pair = st?.recording?.pair ?? 3;
+      const db = Math.max(inputs[pair * 2] ?? -99, inputs[pair * 2 + 1] ?? -99);
+      // Fast up, slower down, in dB.
+      this.#masterDb += (db - this.#masterDb) * (1 - Math.exp(-dt / (db > this.#masterDb ? 0.03 : 0.3)));
+      n = Math.max(0, Math.min(1, (this.#masterDb + 48) / 40));
+    } else n = Math.min(1, this.#energyS * 2.5 * (this.#playing ? 1 : 0));
     const was = this.#master;
     this.#master = n;
     if (n < 0.3) this.#masterLowAt = now;
-    if (n > 0.7 && was <= 0.7 && now - this.#masterLowAt < 1200 && now - this.#lastJump > CLIMAX_GAP_MS && this.#masterLive(now)) this.#jump(now);
+    if (n > 0.7 && was <= 0.7 && now - this.#masterLowAt < 1200 && now - this.#lastJump > CLIMAX_GAP_MS) this.#jump(now);
+    // The world's level: rises quickly with the mix, sinks slower when it goes.
+    this.#mix += (n - this.#mix) * (1 - Math.exp(-dt / (n > this.#mix ? 0.08 : 0.7)));
+    this.#shared.uMix.value = this.#reduced ? Math.max(0.5, this.#mix) : this.#mix;
   }
-  #masterLive(now: number) {
-    return now - this.#masterSeenAt < 20_000;
-  }
-  /** How much the master bends things now: 0 neutral, −1 pulled right down, up to +0.4 hot. */
-  #masterBend(now: number) {
-    return this.#masterLive(now) ? Math.max(-1, Math.min(0.4, (this.#master - 0.7) / 0.7)) : 0;
+  /** −1 silent … 0 at a normal mix … +1 hot. */
+  #mixBend() {
+    const m = this.#shared.uMix.value;
+    return m < 0.75 ? (m - 0.75) / 0.75 : (m - 0.75) / 0.25;
   }
 
   /** A new track: new land, swept in from the horizon to the camera in 2.5 s. */
@@ -771,20 +768,6 @@ export class ExploreEngine {
       this.#lowEndAt = -1e9;
       this.#jump(now);
     }
-  }
-
-  #writeScroller() {
-    const msg = this.#msg;
-    let text = 'X1 D·FOUR  ✦  LOAD A TRACK TO ENTER THE DATASTREAM';
-    if (msg?.current) {
-      const t = this.#o.track(msg.current);
-      const n = this.#children.length;
-      const pal = BAND_PALETTE[msg.band];
-      text = `NOW AT ${t?.title ?? msg.current}${t?.artist ? ` — ${t.artist}` : ''}  ✦  ${n} ${n === 1 ? 'PATH' : 'PATHS'} AHEAD  ✦  ${pal.place}  ✦  X1 D·FOUR`;
-    }
-    if (text === this.#scrollText) return;
-    this.#scrollText = text;
-    this.#scroller.draw(text, this.#accentHex);
   }
 
   // ---------------------------------------------------------------------------
@@ -1107,6 +1090,10 @@ export class ExploreEngine {
     this.#decays(now, dt);
     this.#climax(now, dt, live);
     this.#masterFrame(now, dt);
+    // Each mixer channel's bands, each driving its own part of the world.
+    updateChannels(now);
+    s.uChan.value.set(channels.bands);
+    const ch = channels.bands;
     this.#channel(now, dt);
     if (!this.#labelsIdle && now - this.#labelsAt > 3000 && this.#children.length) {
       this.#labelsIdle = true;
@@ -1134,7 +1121,6 @@ export class ExploreEngine {
     s.uTime.value = this.#time;
     this.#vigil = this.#playing ? Math.max(0, this.#vigil - dt / 0.4) : Math.min(1, this.#vigil + dt / 1.2);
     s.uVigil.value = this.#vigil;
-    s.uScroll.value = (s.uScroll.value + dt * (0.035 + 0.05 * this.#speedF)) % 1;
 
     // Gates spin faster when lit and kick on the beat.
     this.#animateGates(this.#tree, dt, pulse);
@@ -1164,7 +1150,7 @@ export class ExploreEngine {
     const j = this.#jumpFrame(now);
     const stretch = j < 0 ? 0 : j < JUMP_SWAP ? Math.pow(j / JUMP_SWAP, 2) : Math.pow(1 - (j - JUMP_SWAP) / (1 - JUMP_SWAP), 3);
     this.#stretch = stretch;
-    const fov = FOV + (this.#reduced ? 0 : fovKick + dropKick + kick * 2.2 + stretch * 50 + 4 * this.#masterBend(now));
+    const fov = FOV + (this.#reduced ? 0 : fovKick + dropKick + kick * 2.2 + stretch * 50 + 4 * this.#mixBend() + 5 * (ch[10] - 0.4));
     if (fov !== this.#camera.fov) {
       this.#camera.fov = fov;
       this.#camera.updateProjectionMatrix();
@@ -1265,7 +1251,7 @@ export class ExploreEngine {
     this.#energyS += (energy - this.#energyS) * (1 - Math.exp(-dt / 2));
     // Units per beat: 14 at rest, up to 30 with energy; a drop surges ×2.5.
     const surge = 1 + 1.5 * Math.exp(-(now - this.#dropT0) / 600);
-    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge * (1 + 0.45 * this.#bassN + 0.4 * this.#shared.uKick.value) * (1 + 7 * this.#stretch) * (1 + 0.6 * this.#masterBend(now));
+    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge * (1 + 0.45 * this.#bassN + 0.4 * this.#shared.uKick.value) * (1 + 7 * this.#stretch) * (0.2 + 0.8 * Math.min(1, this.#shared.uMix.value / 0.75) + 0.25 * Math.max(0, this.#mixBend())) * (0.75 + 0.6 * channels.bands[9]);
     this.#speed = this.#reduced ? 0 : v;
     // A jog scratches the world with the wheel (applied over ~50 ms).
     const scratch = this.#reduced ? 0 : this.#scratch * (1 - Math.exp(-dt / 0.05));
@@ -1286,7 +1272,7 @@ export class ExploreEngine {
     s.uTravel.value = this.#course % 230;
     s.uSpeed.value = this.#speed + (this.#flight && !this.#flight.back ? 90 : 0);
     // Light packets race down the rails a little faster than we travel.
-    this.#flow = (this.#flow + (this.#reduced ? 0 : (this.#speed * 1.2 + 14 * (1 - this.#vigil)) * dt)) % (11.42397 * 600);
+    this.#flow = (this.#flow + (this.#reduced ? 0 : (this.#speed * 1.2 + 14 * (1 - this.#vigil)) * (0.7 + 1.5 * channels.bands[8]) * dt)) % (11.42397 * 600);
     s.uFlow.value = this.#flow;
   }
 
@@ -1331,7 +1317,7 @@ export class ExploreEngine {
       g.spin += dt * still * (0.5 + 2.8 * l + this.#speedF * 0.6) * (1 + pulse * 0.8);
       g.outer.rotation.set(g.tilt + g.spin * 0.37, g.spin, 0);
       g.inner!.rotation.set(-g.spin * 0.9, -g.spin * 1.6, g.tilt);
-      const size = GATE_R * (0.8 + 0.4 * t.sim[i]) * (1 + 0.14 * pulse * (0.4 + l) + 0.18 * l);
+      const size = GATE_R * (0.8 + 0.4 * t.sim[i]) * (1 + 0.14 * pulse * (0.4 + l) + 0.18 * l) * (0.55 + 0.45 * Math.min(1, this.#shared.uMix.value / 0.75));
       g.outer.scale.setScalar(size);
       g.inner!.scale.setScalar(size * 0.42);
       g.outerU.uLit.value = l;
@@ -1387,14 +1373,14 @@ export class ExploreEngine {
     const st2 = this.#stretch;
     const white = this.#jumpT0 + JUMP_MS > now ? Math.max(0, 1 - Math.abs((now - this.#jumpT0) / JUMP_MS - JUMP_SWAP) / 0.12) : 0;
     c.uFlash.value = this.#reduced ? 0 : this.#passFlash + drop * 0.55 + cut * 0.08 + kick * 0.035 + white * 1.4;
-    c.uAberr.value = this.#reduced ? 0 : pulse * 0.5 + kick * 2 + flying * 2.5 + drop * 5 + cut * 3 + st2 * 10;
+    c.uAberr.value = this.#reduced ? 0 : pulse * 0.5 + kick * 2 + flying * 2.5 + drop * 5 + cut * 3 + st2 * 10 + channels.bands[11] * 1.5;
     c.uCut.value = cut;
     c.uMist.value = this.#mist;
     c.uTime.value = this.#time;
     c.uBloom.value = (1 + 0.15 * pulse + 0.25 * this.#bassN + st2) * WORLDS[this.#world].bloom;
-    // The master's level: the world dims as the fader comes down, and burns brighter hot.
-    const bend = this.#masterBend(now);
-    c.uExposure.value = 1 + (bend < 0 ? 0.65 * bend : 0.35 * bend);
+    // The mix volume: near black in silence, full at a normal mix, brighter hot.
+    const m = this.#shared.uMix.value;
+    c.uExposure.value = 0.08 + 0.92 * Math.pow(Math.min(1, m / 0.75), 0.8) + 0.3 * Math.max(0, this.#mixBend());
     const ripple = (now - this.#dropT0) / 1200;
     this.#shared.uRipple.value = ripple >= 0 && ripple < 1 && !this.#reduced ? ripple : -1;
   }
@@ -1747,7 +1733,6 @@ export class ExploreEngine {
     }
     for (const m of [this.#post.bright, this.#post.blur, this.#post.composite]) m.dispose();
     for (const rt of [this.#rtScene, this.#rtA, this.#rtB, this.#rtC, this.#rtD]) rt.dispose();
-    this.#scroller.tex.dispose();
     this.#renderer.dispose();
   }
 }

@@ -16,8 +16,9 @@ use engine::{SAMPLE_RATE, Shared};
 use ploytec::Frame;
 use serde_json::{Value, json};
 
-/// The mixer's record pair that carries its mix by default (0 = channels 1/2).
-pub const DEFAULT_PAIR: usize = 0;
+/// The mixer's record pair that carries its mix: soundcard input 7/8, with channel 4's
+/// soundcard input switch on "Mix" (the only pair that can carry the main mix).
+pub const DEFAULT_PAIR: usize = 3;
 const BYTES_PER_FRAME: u32 = 6;
 const HEADER_EVERY: Duration = Duration::from_secs(2);
 

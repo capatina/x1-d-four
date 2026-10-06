@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 /**
  * The Datastream's building blocks: an infinite neon grid, a sky with copper
- * bars and a sine scroller, branching light rails, wireframe gates, speed
+ * bars, branching light rails, wireframe gates, speed
  * streaks and the post chain (bloom, deck lasers, chromatic aberration,
  * scanlines, flashes and cuts). Everything is a ShaderMaterial on shared
  * uniforms; nothing here allocates per frame.
@@ -45,8 +45,6 @@ export function makeShared() {
     uDeckColor: { value: new Float32Array(12) },
     uDeckLevel: { value: new Float32Array(4) },
     uDeckPhase: { value: new Float32Array(4) },
-    uScroller: { value: null as THREE.Texture | null },
-    uScroll: { value: 0 },
     uRipple: { value: -1 },
     /** Bass: a fast envelope of the low band, auto-levelled (0..~1.2), and the kick's flash (1 → 0). */
     uBass: { value: 0 },
@@ -65,6 +63,13 @@ export function makeShared() {
     uData: { value: 0 },
     uPackets: { value: Array.from({ length: 48 }, () => new THREE.Vector4(0, -100, 0, -1)) },
     uDpr: { value: 1 },
+    /** The mix volume, 0 silent … 1 hot: silence flattens the world. */
+    uMix: { value: 1 },
+    /**
+     * Each mixer channel's low/mid/high (ch × 3 + band, 0..1), each with its own part
+     * of the world: 1 the ground, 2 the sky, 3 the paths, 4 the motion.
+     */
+    uChan: { value: new Float32Array(12).fill(0.5) },
     /**
      * The world (0 Neon Grid, 1 Chromozon, 2 Tunnelwerk, 3 Nachtflug, 4 Kupferzeit),
      * how far it has evolved since we arrived (0..1), and how many jumps so far.
@@ -86,7 +91,8 @@ export function makeShared() {
 export type Shared = ReturnType<typeof makeShared>;
 
 const COMMON = /* glsl */ `
-  uniform float uTime, uFlow, uTravel, uSpeed, uBeat, uBeatPhase, uEnergy, uVigil, uBass, uKick, uKickAge, uData, uWorld, uEvo, uJumps, uSeedA, uSeedB, uSeedFront, uVariant;
+  uniform float uTime, uFlow, uTravel, uSpeed, uBeat, uBeatPhase, uEnergy, uVigil, uBass, uKick, uKickAge, uData, uWorld, uEvo, uJumps, uSeedA, uSeedB, uSeedFront, uVariant, uMix;
+  uniform float uChan[12];
   uniform vec3 uAccent, uHot;
   uniform vec4 uGen;
   float hash11(float p) { p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
@@ -158,7 +164,11 @@ export function makeFloor(s: Shared) {
           float near = max(smoothstep(60.0, 160.0, abs(rel.x)), smoothstep(160.0, 320.0, -rel.y)) * step(rel.y, 60.0);
           h = ridged(ps * 0.009) * (40.0 + 50.0 * uEvo) * near * (0.8 + 0.35 * uBass + 0.4 * spec);
         }
-        w.y += h;
+        // Silence flattens the land; the mix raises it.
+        // Channel 1's low raises the land.
+        float flat = (0.06 + 0.94 * smoothstep(0.0, 0.75, uMix)) * (0.55 + 0.9 * uChan[0]);
+        w.y += h * flat;
+        h *= flat;
         vHeight = h;
         vWorld = w.xyz;
         vGrid = p;
@@ -230,6 +240,10 @@ export function makeFloor(s: Shared) {
           col += mix(accent, vec3(1.0), 0.5) * sweep * fade * 0.6;
           col += accent * (0.04 + 0.1 * bass) * (1.0 - fade) * (1.0 - 0.5 * uVigil);
         }
+        // Channel 1's mids light the ground's lines; its highs make it shimmer.
+        col *= 0.65 + 0.8 * uChan[1];
+        float glint = step(0.985, hash21(floor(vGrid * 0.5) + floor(uTime * 12.0)));
+        col += mix(accent, vec3(1.0), 0.6) * glint * uChan[2] * 1.4 * fade * (0.3 + lines);
         // The new land's front, sweeping in from the horizon.
         if (uSeedFront > 0.0) col += mix(accent, vec3(1.0), 0.6) * exp(-abs(dist - uSeedFront) * 0.08) * 1.2;
         // Everywhere: the kick's ring, the beat's ring, the data flow, a drop's shock wave.
@@ -272,7 +286,7 @@ export function makeWorldTunnel(s: Shared) {
       varying float vDepth;
       void main() {
         float along = vUv.y * 1000.0;
-        float twist = sin(along * 0.004 + uTime * 0.6) * (0.4 + 1.6 * uEvo) + uTime * 0.05;
+        float twist = (sin(along * 0.004 + uTime * 0.6) * (0.4 + 1.6 * uEvo) + uTime * 0.05) * (0.2 + 0.8 * smoothstep(0.0, 0.75, uMix));
         vec2 c = vec2((vUv.x + twist * 0.1) * (16.0 + 16.0 * floor(uEvo * 2.0 + 0.5)), (along + uTravel * 1.0) / 22.0);
         vec2 fw = fwidth(c);
         vec2 sq = smoothstep(-fw, fw, fract(c) - 0.5);
@@ -397,7 +411,7 @@ export function makeMonoliths(s: Shared) {
         float keep = step(h0, 0.42) * (1.0 - step(abs(rel.x), 70.0) * step(rel.y, 40.0) * step(-130.0, rel.y));
         float grow = smoothstep(h0 * 0.6, h0 * 0.6 + 0.4, uGen.y);
         float pump = 1.0 + 0.35 * uBass * (0.5 + 0.5 * sin(h1 * 40.0 + uTime * 2.0)) + 0.25 * uKick;
-        float height = (10.0 + 46.0 * h2 * h2) * grow * pump * keep;
+        float height = (10.0 + 46.0 * h2 * h2) * grow * pump * keep * (0.08 + 0.92 * smoothstep(0.0, 0.75, uMix));
         float width = (2.5 + 4.0 * h1) * keep * step(0.01, grow);
         vec3 p = position * vec3(width, height, width);
         vec4 w = vec4(p.x + wxz.x, p.y, p.z + wxz.y, 1.0);
@@ -527,7 +541,7 @@ export function makePlanet(s: Shared, geo: THREE.BufferGeometry) {
 }
 
 // ---------------------------------------------------------------------------
-// Sky: black to violet, stars, the horizon glow, four copper bars (the decks) and the scroller.
+// Sky: black to violet, stars, the horizon glow and four copper bars (the decks).
 
 export function makeSky(s: Shared) {
   const geo = new THREE.SphereGeometry(500, 48, 24);
@@ -535,7 +549,7 @@ export function makeSky(s: Shared) {
     side: THREE.BackSide,
     depthWrite: false,
     depthTest: false,
-    uniforms: { ...pick(s), uDeckColor: s.uDeckColor, uDeckLevel: s.uDeckLevel, uDeckPhase: s.uDeckPhase, uScroller: s.uScroller, uScroll: s.uScroll, uGen5: s.uGen5 },
+    uniforms: { ...pick(s), uDeckColor: s.uDeckColor, uDeckLevel: s.uDeckLevel, uDeckPhase: s.uDeckPhase, uGen5: s.uGen5 },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
       void main() {
@@ -548,8 +562,7 @@ export function makeSky(s: Shared) {
       uniform float uDeckColor[12];
       uniform float uDeckLevel[4];
       uniform float uDeckPhase[4];
-      uniform sampler2D uScroller;
-      uniform float uScroll, uGen5;
+      uniform float uGen5;
       varying vec3 vDir;
       void main() {
         vec3 d = normalize(vDir);
@@ -582,7 +595,7 @@ export function makeSky(s: Shared) {
             curtain += band * (0.5 + 0.5 * streak);
           }
           vec3 aur = mix(vec3(0.1, 1.0, 0.6), vec3(0.6, 0.2, 1.0), smoothstep(0.08, 0.25, el));
-          col += aur * curtain * (0.25 + 0.6 * uEvo) * (0.7 + 0.8 * uBass) * dim;
+          col += aur * curtain * (0.25 + 0.6 * uEvo) * (0.5 + 0.5 * uBass + 0.9 * uChan[4]) * dim;
         } else if (world(4.0)) {
           // Kupferzeit: rainbow copper bars fill the sky, more of them as it evolves.
           col = vec3(0.01, 0.0, 0.02);
@@ -595,11 +608,11 @@ export function makeSky(s: Shared) {
             vec3 hue = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + fi * 0.9 + uTime * 0.3);
             col = mix(col, mix(hue * 0.4, hue + 0.3, t * t), step(0.001, t) * t);
           }
-          col *= 0.8 + 0.5 * uBass;
+          col *= 0.6 + 0.4 * uBass + 0.7 * uChan[4];
         } else {
           col = mix(vec3(0.05, 0.0, 0.09), vec3(0.0, 0.0, 0.012), smoothstep(-0.02, 0.45, el));
         }
-        if (!world(1.0) && !world(2.0)) col += accent * exp(-abs(el) * 30.0) * (0.2 + 0.45 * uBass) * dim;
+        if (!world(1.0) && !world(2.0)) col += accent * exp(-abs(el) * 30.0) * (0.15 + 0.35 * uBass + 0.5 * uChan[3]) * dim;
         if (uGen5 > 0.0 && (world(0.0) || world(4.0))) {
           vec2 q = vec2(az * 3.0, el * 9.0);
           float t = uTime * (0.4 + 0.8 * uBass);
@@ -615,7 +628,7 @@ export function makeSky(s: Shared) {
           vec2 f = fract(sp) - vec2(hash21(cell + 7.1), hash21(cell + 3.7));
           float density = world(3.0) ? 0.8 : 0.93 - 0.05 * uEvo;
           float star = step(density, h) * exp(-dot(f, f) * 90.0) * (0.5 + 0.5 * sin(uTime * (2.0 + h * 5.0) + h * 40.0));
-          col += vec3(0.8, 0.85, 1.0) * star * smoothstep(0.03, 0.2, el) * (world(1.0) ? 0.3 : 1.0);
+          col += vec3(0.8, 0.85, 1.0) * star * smoothstep(0.03, 0.2, el) * (world(1.0) ? 0.3 : 1.0) * (0.4 + 1.6 * uChan[5]);
         }
         // Copper bars: one per deck, bouncing on the deck's own beat, lit by its level.
         for (int i = 0; i < 4; i++) {
@@ -624,14 +637,7 @@ export function makeSky(s: Shared) {
           float t = abs(el - centre) / 0.008;
           float bar = max(0.0, 1.0 - t);
           vec3 copper = mix(dc * 0.5, dc + 0.35, pow(bar, 3.0));
-          col += copper * bar * bar * uDeckLevel[i] * 0.55 * dim * (world(2.0) ? 0.0 : 1.0);
-        }
-        // The sine scroller, chrome on the sky.
-        float y = (el - 0.142) / 0.017 + sin(az * 7.0 + uTime * 2.6) * 0.3;
-        if (abs(y) < 1.0 && abs(az) < 1.4) {
-          vec4 tx = texture2D(uScroller, vec2(fract(az / 1.25 + uScroll), 0.5 + y * 0.5));
-          float edge = smoothstep(1.4, 1.0, abs(az));
-          col = mix(col, tx.rgb * (0.85 + 0.4 * uBeat), tx.a * 0.8 * edge * dim);
+          col += copper * bar * bar * uDeckLevel[i] * 0.55 * dim * (world(2.0) ? 0.0 : 1.0) * (0.6 + 0.8 * uChan[4]);
         }
         gl_FragColor = vec4(col, 1.0);
       }`,
@@ -640,46 +646,6 @@ export function makeSky(s: Shared) {
   mesh.frustumCulled = false;
   mesh.renderOrder = -10;
   return mesh;
-}
-
-/** The scroller's strip: chrome text, repeated to fill, redrawn when the place changes. */
-export function scrollerTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 4096;
-  canvas.height = 128;
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.anisotropy = 4;
-  tex.colorSpace = THREE.NoColorSpace;
-  const draw = (text: string, accent: string) => {
-    const g = canvas.getContext('2d')!;
-    g.clearRect(0, 0, canvas.width, canvas.height);
-    g.font = 'italic 900 92px "JetBrains Mono", "Arial Black", Impact, sans-serif';
-    g.textBaseline = 'middle';
-    const unit = `${text.toUpperCase()}   ✦   `;
-    // Squeeze or stretch slightly so a whole number of repeats fills the strip: no seam where it wraps.
-    const natural = Math.max(1, g.measureText(unit).width);
-    const reps = Math.max(1, Math.round(canvas.width / natural));
-    const w = canvas.width / reps;
-    g.setTransform(w / natural, 0, 0, 1, 0, 0);
-    const grad = g.createLinearGradient(0, 18, 0, 110);
-    grad.addColorStop(0, '#ffffff');
-    grad.addColorStop(0.45, '#d8e4ff');
-    grad.addColorStop(0.5, accent);
-    grad.addColorStop(0.8, '#20103a');
-    grad.addColorStop(1, '#ffffff');
-    g.lineWidth = 5;
-    g.strokeStyle = '#000000';
-    g.fillStyle = grad;
-    for (let r = 0; r < reps; r++) {
-      g.strokeText(unit, r * natural, 66);
-      g.fillText(unit, r * natural, 66);
-    }
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    tex.needsUpdate = true;
-  };
-  return { tex, draw };
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +736,7 @@ export function makeRails(s: Shared, u: TreeUniforms) {
           halo = 0.0;
           base = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + dist * 0.06 - uTime * 0.8);
         }
-        vec3 col = base * (core + halo) * (0.22 + 0.9 * lit) * (0.7 + 0.8 * uBass) * look;
+        vec3 col = base * (core + halo) * (0.22 + 0.9 * lit) * (0.6 + 0.5 * uBass + 0.7 * uChan[6]) * look;
         col += vec3(1.0) * core * uKick * (0.25 + 0.6 * lit);
         col += mix(accent, vec3(1.0), 0.55) * packet * core * (0.25 + 1.6 * lit) * (1.0 - 0.8 * uVigil);
         col += uHot * core * lit * (0.35 + 0.4 * uBeat);
@@ -862,7 +828,7 @@ export function wireMaterial(s: Shared, alpha: { value: number }) {
         }
         vec3 col = c * (wire * (0.6 + 0.9 * uLit) + glow * (0.18 + 0.35 * uLit) + fill * (0.4 + 0.6 * uLit));
         col += accent * rim * (0.04 + 0.12 * uLit);
-        col *= (0.55 + 0.45 * uSim) * (0.8 + 0.6 * uBass + 0.6 * uKick + 0.4 * uBeat * uLit) * (1.0 - 0.5 * uVigil);
+        col *= (0.55 + 0.45 * uSim) * (0.6 + 0.4 * uBass + 0.6 * uKick + 0.4 * uBeat * uLit + 0.7 * uChan[7]) * (1.0 - 0.5 * uVigil);
         col *= uAlpha * exp(-vDepth * uFog);
         gl_FragColor = vec4(col, 1.0);
       }`,
@@ -972,7 +938,7 @@ export function makeStreaks(s: Shared, count = 1400) {
       varying float vA;
       void main() {
         float k = clamp(uSpeed / 40.0, 0.0, 1.0);
-        gl_FragColor = vec4(mix(neon(uAccent), vec3(1.0), 0.6) * vA * (0.15 + 0.85 * k) * (0.6 + 0.8 * uBass + 0.6 * uData) * (1.0 - uVigil * (1.0 - uData)), 1.0);
+        gl_FragColor = vec4(mix(neon(uAccent), vec3(1.0), 0.6) * vA * (0.15 + 0.85 * k) * (0.4 + 0.6 * uBass + 0.6 * uData + 1.0 * uChan[11]) * (1.0 - uVigil * (1.0 - uData)), 1.0);
       }`,
   });
   const mesh = new THREE.LineSegments(geo, mat);
@@ -1128,6 +1094,8 @@ function pick(s: Shared) {
     uSeedB: s.uSeedB,
     uSeedFront: s.uSeedFront,
     uVariant: s.uVariant,
+    uMix: s.uMix,
+    uChan: s.uChan,
   };
 }
 
