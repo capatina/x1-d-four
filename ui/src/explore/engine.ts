@@ -4,24 +4,43 @@ import { DECK_COLORS } from '../lib/decks';
 import type { ExploreMsg, ExploreNode, Track } from '../lib/protocol';
 import type { VizFrame } from '../lib/viz';
 import { waves } from '../lib/waves';
-import { KEEPER_FIGURE, keeperAtlas, runeAtlas } from './atlas';
-import { Labels, type Obstacle } from './labels';
-import { makeGrass, makeLand, makeLife, makeSky, makeTrees, makeWater, type Wrapped } from './meshes';
-import { AGES, BAND_PALETTE, REALM_SHADER } from './palette';
-import { makeDragon, makeProps, PROP_PERIOD } from './props';
 import {
+  CAM_H,
+  columnGeometry,
+  GATE_R,
+  GATE_Y,
+  gateGeometries,
+  glowMaterial,
+  GRAND_R,
   GRAND_SEGMENTS,
-  makeBillboards,
-  makeKeepers,
-  makeRoutes,
-  makeSpires,
+  GRAND_Y,
+  hashString,
+  hexInto,
+  LOOK_D,
+  LOOK_Y,
+  makeFloor,
+  makePost,
+  makeRails,
+  makeShared,
+  makeSky,
+  makeStreaks,
   MAX_CHILDREN,
   MAX_GRANDS,
-  ROUTE_SEGMENTS,
-  SPIRE_TOPS,
-  TAKEN_SLOT,
-} from './realm';
-import { framePacker, hashString, hexInto, LAND_DX, LAND_DZ, makeShared, RIPPLE_PERIOD, riverW, widthAt } from './shared';
+  padGeometry,
+  PATH_SAMPLES,
+  RAIL_SEGMENTS,
+  rotY,
+  scrollerTexture,
+  SPLIT_Z,
+  TRUNK_FROM,
+  TRUNK_SEGMENTS,
+  TRUNK_SLOT,
+  wireMaterial,
+  type Shared,
+  type TreeUniforms,
+} from './demo';
+import { Labels, type Obstacle } from './labels';
+import { BAND_PALETTE } from './palette';
 
 export type EngineStats = {
   fps: number;
@@ -32,15 +51,13 @@ export type EngineStats = {
   frameMs: number;
   /** GPU time of the world, ms (only with ?qa, from timer queries). */
   gpuMs: number;
-  growth: number;
-  age: number;
   course: number;
   speed: number;
 };
 export type EngineOptions = {
   canvas: HTMLCanvasElement;
   labels: HTMLElement;
-  /** Vignette edge that brightens as a gate passes overhead (CSS opacity, compositor only). */
+  /** Edge glow that flashes as a gate passes overhead (CSS opacity, compositor only). */
   gate?: HTMLElement | null;
   viz: VizFrame;
   track: (id: string) => Track | undefined;
@@ -51,204 +68,213 @@ export type EngineOptions = {
   onStats?: (stats: EngineStats) => void;
 };
 
-const FOV = 52;
-const CAMERA = new THREE.Vector3(0, 8, 27);
-const TARGET = new THREE.Vector3(0, 3, -65);
-/** The Wayfinder floats this far down the Current (traveller z), where it shows above the strip. */
-const WAY_Z = -16;
-/** Shard top and scale of a child spire; its gate is a rune ring hovering round the shard's tip. */
-const SPIRE_Y = 6.3;
-const SPIRE_SCALE = 0.86;
-const GATE_Y = 3.75;
-const GATE_R = 1.75;
-const GRAND_Y = 5.4;
-const GRAND_SCALE = 0.35;
-/** The seed wipe: new land arrives from the horizon to 40 units ahead in 300 ms. */
-const WIPE_NEAR = -40;
-const WIPE_FAR = -380;
-const WIPE_MS = 300;
-/** Course travelled past a wipe before its old segment is forgotten (out of sight behind). */
-const WIPE_FORGET = 245;
-const NONE = -1e6;
-/** Realm colours settle in 180 ms; the aim in 120 ms; the over-brightness lasts 90 ms. */
-const BAND_MS = 180;
-const AIM_MS = 120;
-const FLOURISH_MS = 90;
-/** Course impulse of a passage: ×6, decaying with τ 220 ms. */
-const IMPULSE_TAU = 0.22;
-/** The passage: heading swing (±22° max, back to 0 by 300 ms), the gate sweep (160 ms). */
-const PASSAGE_MS = 300;
-const SWING_MAX = (22 * Math.PI) / 180;
-const SWEEP_MS = 160;
-const SWEEP_R = 40;
-/** Keepers' lantern pools and loop rings lie this far down the Current. */
-const POOL_Z = -12;
-/** Waystones pass this line (the near water above the strip) on each phrase downbeat. */
-const BOW_Z = -8;
-/** Mix minutes → age: dawn 0–12, day 12–40, dusk 40–70, night 70+, a second dawn after 150. */
-const AGE_KEYS: [number, number][] = [
-  [0, 0],
-  [8, 0],
-  [16, 1],
-  [36, 1],
-  [44, 2],
-  [66, 2],
-  [74, 3],
-  [146, 3],
-  [154, 4],
-];
-/**
- * Sun (or moon) directions for dawn, day, dusk and night. Until dusk the sun keeps to
- * the right edge, in the top fifth of the frame, clear of the labels (even an aimed
- * slot-5 label growing upward) and never behind slot 0 (left).
- */
-const SUN_DIRS = [
-  [0.6, 0.28, -0.75],
-  [0.58, 0.31, -0.75],
-  [0.62, 0.13, -0.77],
-  [0.34, 0.36, -0.87],
-] as const;
-const FLYOVER_COOLDOWN = 180_000;
+const FOV = 54;
+/** Aim: the head of light runs down the branch in 160 ms; the paths beyond sprout over 220 ms after 60 ms. */
+const HEAD_MS = 160;
+const SPROUT_DELAY = 60;
+const SPROUT_MS = 220;
+const STUB = 0.22;
+const AIM_FALL_MS = 140;
+/** The flight down a taken branch, and back up the trunk. */
+const FLIGHT_MS = 720;
+const BACK_MS = 480;
+const BACK_D = 55;
+/** A cut (new root, band, re-shuffle): the frame tears for 220 ms. */
+const CUT_MS = 220;
+const MIST_MS = 300;
+
+type Gate = {
+  outer: THREE.Mesh;
+  inner: THREE.Mesh | null;
+  pad: THREE.Mesh | null;
+  column: THREE.Mesh | null;
+  outerU: { uLit: { value: number }; uSim: { value: number } };
+  innerU: { uLit: { value: number }; uSim: { value: number } } | null;
+  padU: { uLit: { value: number } } | null;
+  columnU: { uLit: { value: number } } | null;
+  spin: number;
+  tilt: number;
+};
 
 /**
- * The Wayfaring: one forward render pass over a world that streams toward a
- * fixed camera. State changes land in the message frame (`setExplore` is
- * synchronous and writes labels, aim and uniforms at once); flourish decays
- * from there. The frame loop allocates nothing.
+ * One fan of paths: the trunk under the camera splits into a branch per child,
+ * each ending at a wireframe gate; the aimed gate sprouts its own branches
+ * (the grandchildren). Built in its own frame, where the camera rests at the
+ * origin looking down −z.
+ */
+class Tree {
+  readonly group = new THREE.Group();
+  readonly u: TreeUniforms = {
+    uLit: { value: new Float32Array(8) },
+    uHead: { value: new Float32Array(8).fill(-9) },
+    uGrandLit: { value: new Float32Array(6) },
+    uGrandGrow: { value: new Float32Array(6) },
+    uAlpha: { value: 1 },
+  };
+  readonly rails: ReturnType<typeof makeRails>;
+  readonly gates: Gate[] = [];
+  readonly grands: Gate[] = [];
+  readonly slotX = new Float32Array(MAX_CHILDREN);
+  readonly slotZ = new Float32Array(MAX_CHILDREN);
+  readonly heading = new Float32Array(MAX_CHILDREN);
+  readonly sim = new Float32Array(MAX_CHILDREN);
+  /** Camera flight per child: trunk then branch, (x, z) pairs. */
+  readonly paths = new Float32Array(MAX_CHILDREN * PATH_SAMPLES * 2);
+  readonly grandParent = new Int8Array(MAX_GRANDS);
+  readonly grandSim = new Float32Array(MAX_GRANDS);
+  count = 0;
+  grandCount = 0;
+  readonly headT0 = new Float64Array(MAX_CHILDREN).fill(-1e9);
+  readonly sproutT0 = new Float64Array(MAX_CHILDREN).fill(-1e9);
+  readonly sproutFrom = new Float32Array(MAX_CHILDREN);
+
+  constructor(s: Shared, geos: THREE.BufferGeometry[], pad: THREE.BufferGeometry, column: THREE.BufferGeometry) {
+    this.rails = makeRails(s, this.u);
+    this.group.add(this.rails.mesh);
+    const a = this.u.uAlpha;
+    for (let i = 0; i < MAX_CHILDREN; i++) {
+      const om = wireMaterial(s, a),
+        im = wireMaterial(s, a),
+        pm = glowMaterial(s, a, false),
+        cm = glowMaterial(s, a, true);
+      im.uniforms.uWidth.value = 1.1;
+      const g: Gate = {
+        outer: new THREE.Mesh(geos[0], om),
+        inner: new THREE.Mesh(geos[1], im),
+        pad: new THREE.Mesh(pad, pm),
+        column: new THREE.Mesh(column, cm),
+        outerU: om.uniforms as Gate['outerU'],
+        innerU: im.uniforms as Gate['outerU'],
+        padU: pm.uniforms as { uLit: { value: number } },
+        columnU: cm.uniforms as { uLit: { value: number } },
+        spin: 0,
+        tilt: 0,
+      };
+      for (const m of [g.outer, g.inner!, g.pad!, g.column!]) {
+        m.frustumCulled = false;
+        m.visible = false;
+        this.group.add(m);
+      }
+      this.gates.push(g);
+    }
+    for (let i = 0; i < MAX_GRANDS; i++) {
+      const om = wireMaterial(s, a);
+      om.uniforms.uWidth.value = 1.1;
+      const g: Gate = { outer: new THREE.Mesh(geos[0], om), inner: null, pad: null, column: null, outerU: om.uniforms as Gate['outerU'], innerU: null, padU: null, columnU: null, spin: 0, tilt: 0 };
+      g.outer.frustumCulled = false;
+      g.outer.visible = false;
+      this.group.add(g.outer);
+      this.grands.push(g);
+    }
+  }
+
+  dispose() {
+    this.rails.mesh.geometry.dispose();
+    (this.rails.mesh.material as THREE.Material).dispose();
+    for (const g of [...this.gates, ...this.grands])
+      for (const m of [g.outer, g.inner, g.pad, g.column]) if (m) (m.material as THREE.Material).dispose();
+  }
+}
+
+/**
+ * The Datastream: a demoscene flight over an endless neon grid. The trunk you
+ * ride splits ahead into one light rail per similar track, each ending at a
+ * spinning wireframe gate; aiming lights a branch and sprouts the paths beyond
+ * its gate; loading the aimed track flies you down that branch, through the
+ * gate, onto its own forks. State changes land in the message frame
+ * (`setExplore` is synchronous); flourish decays from there. The frame loop
+ * allocates nothing.
  */
 export class ExploreEngine {
   readonly #o: EngineOptions;
   readonly #renderer: THREE.WebGLRenderer;
   readonly #scene = new THREE.Scene();
-  readonly #camera = new THREE.PerspectiveCamera(FOV, 1, 0.2, 650);
-  /** Never yawed: projects the fixed slots for the labels. */
-  readonly #rest = new THREE.PerspectiveCamera(FOV, 1, 0.2, 650);
+  readonly #camera = new THREE.PerspectiveCamera(FOV, 1, 0.2, 1200);
+  /** Resting camera in a tree's own frame: projects the labels' anchors. */
+  readonly #rest = new THREE.PerspectiveCamera(FOV, 1, 0.2, 1200);
   readonly #shared = makeShared();
-  readonly #wrapped: Wrapped[] = [];
-  readonly #spires = makeSpires(this.#shared);
-  readonly #routes = makeRoutes(this.#shared);
-  readonly #bills = makeBillboards(this.#shared);
+  readonly #post = makePost();
+  readonly #sky: THREE.Mesh;
+  readonly #floor: THREE.Mesh;
+  readonly #streaks: THREE.LineSegments;
+  readonly #trees: [Tree, Tree];
+  #tree: Tree;
+  #old: Tree;
+  readonly #scroller = scrollerTexture();
+  #scrollText = '';
   readonly #labels: Labels;
   readonly #resize: ResizeObserver;
   readonly #point = new THREE.Vector3();
-  readonly #stats: EngineStats = {
-    fps: 0,
-    calls: 0,
-    triangles: 0,
-    dpr: 1,
-    frameMs: 0,
-    gpuMs: 0,
-    growth: 0,
-    age: 0,
-    course: 0,
-    speed: 0,
-  };
+  readonly #v2 = { x: 0, y: 0 };
+  readonly #stats: EngineStats = { fps: 0, calls: 0, triangles: 0, dpr: 1, frameMs: 0, gpuMs: 0, course: 0, speed: 0 };
+
+  // Render targets
+  #rtScene!: THREE.WebGLRenderTarget;
+  #rtA!: THREE.WebGLRenderTarget;
+  #rtB!: THREE.WebGLRenderTarget;
+  #rtC!: THREE.WebGLRenderTarget;
+  #rtD!: THREE.WebGLRenderTarget;
+  #rtType: THREE.TextureDataType = THREE.HalfFloatType;
 
   // Explore state
   #msg: ExploreMsg | null = null;
   #children: ExploreNode[] = [];
   #aimSlot = -1;
-  #aimAt = -1e9;
   #localAim: string | null = null;
   #localAimAt = -1e9;
-  readonly #slotX = new Float32Array(MAX_CHILDREN);
-  readonly #slotZ = new Float32Array(MAX_CHILDREN);
-  readonly #slotTop = new Float32Array(MAX_CHILDREN);
   readonly #anchors = new Float32Array(MAX_CHILDREN * 2);
   readonly #gates = new Float32Array(MAX_CHILDREN * 2);
-  #grandCount = 0;
   #obstacles: Obstacle[] = [];
 
-  // Travel
+  // Travel and the frame of the grid (rotation, offset) across rebases
   #course = 0;
+  #flow = 0;
   #speedF = 0;
+  #speed = 0;
   #playing = false;
   #rampFrom = 0;
   #rampT0 = -1e9;
   #energyS = 0;
-  #speed = 0;
-  #impulseT0 = -1e9;
-  #impulseDir = 1;
+  #gridYaw = 0;
+  readonly #gridOff = new THREE.Vector2();
 
-  // Land segments (the seed wipe)
-  readonly #seeds = [0, 0, 0];
-  readonly #bounds = [NONE, NONE];
-  readonly #realms = [0, 0, 0];
-  readonly #starts = [NONE, NONE];
-  #sweep = -1;
-  #sweepT0 = -1e9;
-  #sweepFrom = 0;
-  #sweepTo = 0;
-
-  // Realm colours
-  #bandTarget = 0;
-  #bandFrom = 0;
-  #bandT0 = -1e9;
-  readonly #accentFrom = new THREE.Vector3();
-  readonly #accentTo = new THREE.Vector3();
-
-  // Wayfinder
-  #wayX = 0;
-  #beamT0 = -1e9;
-
-  // The passage (commit, scout, back) and the mist of scouting
-  #passT0 = -1e9;
-  #passDir = 0;
-  #passYaw = 0;
-  #yawFrom = 0;
-  #yaw = 0;
-  #passX = 0;
-  #passZ = 0;
-  #takenSlot = -1;
+  // The flight
+  #flight: { t0: number; dur: number; back: boolean; slot: number; x: number; z: number; yaw: number } | null = null;
+  readonly #flightPath = new Float32Array(PATH_SAMPLES * 2);
+  #cutT0 = -1e9;
+  #passFlash = 0;
   #mistFrom = 0;
   #mistTo = 0;
   #mistT0 = -1e9;
-  #routeRise = 1;
+  #mist = 0;
 
-  // Keepers
-  readonly #keepers: ReturnType<typeof makeKeepers>;
-  readonly #keeperX = new Float32Array(4);
-  #keeperBase = 0;
-  readonly #keeperLevel = new Float32Array(4);
-  readonly #flareAt = new Float64Array(4).fill(-1e9);
-  readonly #wasLoading = [false, false, false, false];
-  readonly #wasTrack: (string | null)[] = [null, null, null, null];
+  // Band colour
+  readonly #accentFrom = new THREE.Vector3();
+  readonly #accentTo = new THREE.Vector3();
+  readonly #hotFrom = new THREE.Vector3();
+  readonly #hotTo = new THREE.Vector3();
+  #bandT0 = -1e9;
+  #accentHex = BAND_PALETTE.low.css;
+
+  // Music
+  readonly #levels = new Float32Array(3);
+  #onsets = 0;
   #vigil = 0;
-  #blend = 0;
-
-  // Ages, structures, the dragon
-  readonly #props: ReturnType<typeof makeProps>;
-  readonly #dragon: ReturnType<typeof makeDragon>;
-  readonly #ageCourse = [1e9, 1e9, 1e9];
-  #bars = 0;
-  #perBar = 4.5;
-  #flow = 0;
-  #low = 0;
   #breakdown = 0;
   #breakdownEnd = -1e9;
   #lowBelowAt = -1e9;
-  #onsetRate = 0;
-  #onsetMedian = 0;
-  readonly #barEnergy = new Float32Array(17);
-  #barIndex = -1;
-  #buildUp = false;
-  #dragonMode = 0;
-  #dragonT = 0;
-  #dragonD = 15;
-  #dragonSeed = 0;
-  #lastFlyover = -1e9;
-  #flownRoot: string | null = null;
-  #waveAt = -1e9;
-  readonly #sunA = new THREE.Vector3();
-  readonly #sunB = new THREE.Vector3();
-  readonly #tmp = new THREE.Vector3();
-  #pack: () => void = () => {};
+  #dropT0 = -1e9;
+  #lastDrop = -1e9;
 
-  // Time, music, frame pacing
+  // Decks: their cards (for the lasers)
+  readonly #deckX = new Float32Array(4);
+  #deckBase = 0;
+  readonly #deckLevel = new Float32Array(4);
+
+  // Time, frame pacing
   #raf = 0;
   #last = 0;
   #time = 0;
-  #musicTime = 0;
   #width = 1;
   #height = 1;
   #bottomInset = 300;
@@ -263,82 +289,43 @@ export class ExploreEngine {
   #adaptive = true;
   #wheel = 0;
   #wheelAt = 0;
-  readonly #levels = new Float32Array(3);
-  readonly #flicker = new Float32Array(8);
-  #onsets = 0;
-  #gust = 0;
 
   constructor(o: EngineOptions) {
     this.#o = o;
     this.#reduced = o.reducedMotion;
     this.#labels = new Labels(o.labels, o.track);
     const params = new URLSearchParams(location.search);
-    this.#renderer = new THREE.WebGLRenderer({
-      canvas: o.canvas,
-      antialias: true,
-      alpha: false,
-      stencil: false,
-      powerPreference: 'high-performance',
-    });
-    this.#renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.#renderer = new THREE.WebGLRenderer({ canvas: o.canvas, antialias: false, alpha: false, stencil: false, depth: true, powerPreference: 'high-performance' });
+    this.#renderer.autoClear = true;
+    this.#renderer.setClearColor(0x000000, 1);
+    const gl = this.#renderer.getContext();
+    if (!gl.getExtension('EXT_color_buffer_half_float') && !gl.getExtension('EXT_color_buffer_float')) this.#rtType = THREE.UnsignedByteType;
     this.#maxDpr = Math.min(1.5, Math.max(0.75, Number(params.get('dpr')) || window.devicePixelRatio || 1));
     this.#dpr = this.#maxDpr;
     this.#adaptive = params.get('adaptive') !== '0';
     const s = this.#shared;
-    const runes = new THREE.CanvasTexture(runeAtlas());
-    runes.flipY = false;
-    runes.generateMipmaps = true;
-    runes.minFilter = THREE.LinearMipmapLinearFilter;
-    runes.anisotropy = 4;
-    s.uRunes.value = runes;
+    s.uScroller.value = this.#scroller.tex;
     for (let i = 0; i < 4; i++) hexInto(DECK_COLORS[i], s.uDeckColor.value, i * 3);
-    const keeperTex = new THREE.CanvasTexture(keeperAtlas());
-    keeperTex.flipY = false;
-    this.#keepers = makeKeepers(s, keeperTex);
-    this.#props = makeProps(s);
-    this.#dragon = makeDragon(s);
-    const grass = makeGrass(s);
-    const trees = makeTrees(s);
-    const swallows = makeLife(s, false);
-    const butterflies = makeLife(s, true);
-    this.#wrapped.push(grass, trees[0], trees[1], butterflies);
-    // Added in draw order, and three's per-frame sort is off (it allocated every frame):
-    // opaque front to back with the sky last on the far plane, then routes, gates, Keepers.
-    this.#renderer.sortObjects = false;
-    this.#scene.add(
-      makeLand(s),
-      makeWater(s),
-      grass,
-      ...trees,
-      swallows,
-      butterflies,
-      this.#spires.mesh,
-      ...this.#props.meshes,
-      this.#dragon.mesh,
-      makeSky(s),
-      this.#routes.mesh,
-      this.#bills.mesh,
-      this.#keepers.mesh,
-    );
-    this.#pack = framePacker(
-      {
-        ...s,
-        uWrapGrass: grass.userData.wrap,
-        uWrapTrees: trees[0].userData.wrap,
-        uWrapLife: butterflies.userData.wrap,
-        uWrapProps: this.#props.wrap,
-        uDragon: { value: this.#dragon.dragon },
-        uAges: { value: this.#props.ages },
-        uView: { value: this.#keepers.view },
-        uGunwale: { value: this.#gunwale },
-      },
-      s.uFrame.value,
-    );
-    this.#setBand(0, true);
-    this.#camera.position.copy(CAMERA);
-    this.#camera.lookAt(TARGET);
-    this.#rest.position.copy(CAMERA);
-    this.#rest.lookAt(TARGET);
+    this.#post.composite.uniforms.uDeckColor.value.set(s.uDeckColor.value);
+
+    const geos = gateGeometries();
+    const pad = padGeometry(),
+      column = columnGeometry();
+    this.#trees = [new Tree(s, geos, pad, column), new Tree(s, geos, pad, column)];
+    this.#tree = this.#trees[0];
+    this.#old = this.#trees[1];
+    this.#old.group.visible = false;
+    this.#geos = geos;
+    this.#sky = makeSky(s);
+    this.#floor = makeFloor(s);
+    this.#streaks = makeStreaks(s);
+    this.#camera.add(this.#streaks);
+    this.#renderer.sortObjects = true;
+    this.#scene.add(this.#sky, this.#floor, this.#trees[0].group, this.#trees[1].group, this.#camera);
+
+    this.#setBand('low', true);
+    this.#rest.position.set(0, CAM_H, 0);
+    this.#rest.lookAt(0, LOOK_Y, -LOOK_D);
     this.#resize = new ResizeObserver(this.#onResize);
     this.#resize.observe(o.canvas.parentElement ?? o.canvas);
     this.#onResize();
@@ -350,6 +337,7 @@ export class ExploreEngine {
     document.addEventListener('visibilitychange', this.#visibility);
     this.#start();
   }
+  readonly #geos: THREE.BufferGeometry[];
 
   // ---------------------------------------------------------------------------
   // Explore messages: everything that changes, changes here, synchronously.
@@ -363,159 +351,64 @@ export class ExploreEngine {
       this.#children = [];
       this.#labels.clear();
       this.#aimSlot = -1;
-      this.#spires.mesh.geometry.instanceCount = 0;
-      this.#routes.mesh.geometry.setDrawRange(0, 0);
-      this.#hideGates();
+      this.#endFlight();
+      this.#tree.count = 0;
+      this.#build(this.#tree, null, now);
       return;
     }
     const children = msg.nodes.filter((n) => n.parent === msg.current).slice(0, MAX_CHILDREN);
-    const band = msg.band === 'mid' ? 1 : msg.band === 'high' ? 2 : 0;
     const moved = !!prev && prev.current !== msg.current;
     const banded = !!prev && prev.band !== msg.band;
-    const seed = 40 + hashString(`${msg.current}|${msg.band}`) * 320;
-    if (!prev || !prev.current) {
-      this.#seeds[0] = seed;
-      this.#realms[0] = band;
-      this.#setBand(band, true);
-    } else {
-      if (banded) this.#setBand(band, false);
-      if (moved || banded) this.#wipe(seed, band, now);
-    }
-    if (moved && !this.#reduced) {
-      this.#impulseT0 = now;
-      this.#impulseDir = msg.reason === 'back' ? -1 : 1;
-    }
-    // Commit and scout take the route that was aimed: its slot is where current now came from.
+    if (banded || !prev) this.#setBand(msg.band, !prev);
+    // Commit and scout fly down the branch that was aimed: its slot is where current came from.
     const forward = moved && (msg.reason === 'commit' || msg.reason === 'dive');
     const taken = forward ? this.#children.findIndex((c) => c.id === msg.current) : -1;
-    if (taken >= 0) {
-      this.#passX = this.#slotX[taken];
-      this.#passZ = this.#slotZ[taken];
-    }
-    this.#takenSlot = taken;
-
     const fresh = !prev || moved || banded || children.length !== this.#children.length;
-    this.#children = children;
-    // A local aim (keys, wheel, click) wins until the server has caught up with it.
+
     let aim = msg.aim;
     if (this.#localAim && now - this.#localAimAt < 350 && msg.reason === 'aim' && !fresh) aim = this.#localAim;
     else this.#localAim = null;
+
     if (fresh) {
-      this.#layoutSlots(msg);
-      this.#writeRoutes(msg);
+      this.#endFlight();
+      const from = this.#tree;
+      this.#children = children;
+      if (!this.#reduced && taken >= 0) this.#fly(from, taken, false, msg, now);
+      else if (!this.#reduced && moved && msg.reason === 'back') this.#fly(from, -1, true, msg, now);
+      else {
+        this.#build(this.#tree, msg, now);
+        if (prev && !this.#reduced) this.#cutT0 = now;
+      }
       this.#labels.replace(children, aim, msg.reason === 'back' ? 'back' : moved ? 'forward' : 'swap', this.#reduced, this.#width);
+      this.#project();
       this.#layoutLabels();
-      this.#shared.uRoute.value.fill(0);
-      this.#shared.uGate.value.fill(0);
       this.#aimSlot = -1;
     } else {
-      this.#layoutGrands(msg);
-      this.#writeRoutes(msg);
+      this.#children = children;
+      this.#build(this.#tree, msg, now, true);
       this.#labels.update(children, aim);
+      this.#project();
       this.#layoutLabels();
     }
-    this.#writeSpires(msg);
-    const slot = children.findIndex((n) => n.id === aim);
-    this.#routeRise = fresh && this.#reduced ? 0 : 1;
-    this.#aim(slot, now, !fresh);
-    if (forward && taken >= 0) this.#passage(1, now);
-    else if (moved && msg.reason === 'back' && slot >= 0) {
-      // Back: the gate we came through returns to its slot.
-      this.#passX = this.#slotX[slot];
-      this.#passZ = this.#slotZ[slot];
-      this.#passage(-1, now);
-    }
-    if (taken >= 0) this.#shared.uRoute.value[TAKEN_SLOT] = 1;
-    if (this.#qa) {
-      this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
-      // A frozen clock holds the CSS animations this message just started, too.
-      if (this.#qa.frozen)
-        for (const a of document.getAnimations())
-          if (!this.#qa.anims.has(a)) {
-            a.pause();
-            a.currentTime = 0;
-            this.#qa.anims.set(a, this.#qa.clock);
-          }
-    }
+    this.#aim(children.findIndex((n) => n.id === aim), now, !fresh);
+    this.#writeScroller();
+    if (this.#qa) this.#qaExpect(msg.reason, client.exploreAt, aim, children.length);
   }
 
-  /**
-   * The passage, all from the message frame: the heading swings toward the
-   * route (fastest at frame 0, level again by 300 ms), a gate ring sweeps
-   * over the camera (passing at ~110 ms, when the vignette edge brightens),
-   * and the course surges. A second one restarts from the current values.
-   */
-  #passage(dir: number, now: number) {
-    if (this.#reduced) return;
-    this.#yawFrom = this.#yaw;
-    const bearing = Math.atan2(this.#passX - CAMERA.x, CAMERA.z - this.#passZ);
-    this.#passYaw = Math.max(-SWING_MAX, Math.min(SWING_MAX, bearing)) * dir;
-    this.#passDir = dir;
-    this.#passT0 = now;
-    // The labels ride the swing (one compositor animation, written once).
-    const aspect = this.#width / this.#height;
-    const half = (this.#width / 2) / (Math.tan((FOV * Math.PI) / 360) * aspect);
-    const frames: Keyframe[] = [];
-    for (let k = 0; k <= 10; k++) {
-      const u = k / 10;
-      const yaw = this.#yawFrom * (1 - u) * (1 - u) + this.#passYaw * 6.75 * u * (1 - u) * (1 - u);
-      frames.push({ translate: `${(-Math.tan(yaw) * half).toFixed(1)}px 0`, offset: u });
-    }
-    this.#o.labels.animate(frames, { duration: PASSAGE_MS, easing: 'linear' });
-    if (dir > 0)
-      this.#o.gate?.animate(
-        [
-          { opacity: 0, offset: 0 },
-          { opacity: 0, offset: 0.27 },
-          { opacity: 0.2, offset: 0.42 },
-          { opacity: 0, offset: 1 },
-        ],
-        { duration: 260, easing: 'linear' },
-      );
-  }
-
-  /** Scouting ahead (dives since the last load): the land beyond is misted. */
+  /** Scouting ahead (dives since the last load): the signal beyond is weak. */
   setScouting(depth: number) {
     const target = depth > 0 ? 1 : 0;
     if (target === this.#mistTo) return;
-    this.#mistFrom = this.#shared.uMist.value;
+    this.#mistFrom = this.#mist;
     this.#mistTo = target;
     this.#mistT0 = this.#reduced ? -1e9 : this.#now();
   }
 
-  /** Keepers stand above their deck cards: centre x per deck and the strip's top (viewport px). */
-  setKeepers(xs: ArrayLike<number>, baseY: number) {
-    for (let i = 0; i < 4; i++) this.#keeperX[i] = xs[i] ?? 0;
-    this.#keeperBase = baseY;
-    this.#placeVessel();
+  /** The deck cards' centres and the strip's top (viewport px): the decks' lasers rise from there. */
+  setDecks(xs: ArrayLike<number>, baseY: number) {
+    for (let i = 0; i < 4; i++) this.#deckX[i] = xs[i] ?? 0;
+    this.#deckBase = baseY;
   }
-
-  /** Keepers 100–115 px tall at 1080p, in proportion elsewhere. */
-  #figure() {
-    return Math.round(Math.max(64, Math.min(115, this.#height * 0.1)));
-  }
-
-  /**
-   * The vessel they stand in: its bow crosses the water behind their legs, from 28 % up
-   * their figures (far edge) to 12 % (near edge), found by casting those screen rows onto
-   * the water.
-   */
-  #placeVessel() {
-    if (!this.#keeperBase) return;
-    const far = this.#waterZ(this.#keeperBase - this.#figure() * 0.28);
-    const near = this.#waterZ(this.#keeperBase - this.#figure() * 0.12);
-    // The tips stay on the water: 10 units either side, less where the river narrows.
-    const tip = Math.min(10, widthAt(far) - 1.5);
-    this.#gunwale.set(far, Math.max(0.4, near - far), this.#gunwale.z, tip * tip);
-  }
-  #waterZ(y: number) {
-    this.#rest.updateMatrixWorld();
-    this.#point.set(0, 1 - (2 * y) / this.#height, 0.5).unproject(this.#rest).sub(CAMERA).normalize();
-    const t = (-0.05 - CAMERA.y) / Math.min(-1e-3, this.#point.y);
-    return CAMERA.z + this.#point.z * t;
-  }
-  /** The bow: far-edge z, depth, centre x (the vessel's, 0), tip half-width squared. */
-  readonly #gunwale = new THREE.Vector4(0, 0, 0, 100);
 
   /** Aim from a local input (keys, wheel, click): lit in this event, reconciled by the server's echo. */
   aimLocal(target: number | string) {
@@ -537,7 +430,6 @@ export class ExploreEngine {
     this.#bottomInset = pixels;
     this.#layoutLabels();
   }
-  /** Header boxes the labels keep clear of (viewport px). */
   setObstacles(rects: Obstacle[]) {
     this.#obstacles = rects;
     this.#layoutLabels();
@@ -547,275 +439,334 @@ export class ExploreEngine {
   }
   setReducedMotion(reduced: boolean) {
     this.#reduced = reduced;
-    if (reduced) this.#impulseT0 = -1e9;
+    if (reduced) this.#endFlight();
   }
   refreshLabels() {
     this.#labels.refresh();
     this.#layoutLabels();
+    this.#writeScroller();
   }
 
+  /** Frame 0: the branch is lit and its head of light starts down it; the old aim decays from where it is. */
   #aim(slot: number, now: number, flourish: boolean) {
-    const s = this.#shared;
     const prev = this.#aimSlot;
     this.#aimSlot = slot;
-    const id = slot >= 0 ? this.#children[slot].id : null;
-    this.#labels.setAim(id);
+    this.#labels.setAim(slot >= 0 ? this.#children[slot].id : null);
     if (slot === prev) return;
-    // Frame 0: the new route and ring are fully lit; the old ones decay from where they are.
+    const t = this.#tree;
     if (slot >= 0) {
-      s.uRoute.value[slot] = this.#routeRise;
-      s.uGate.value[slot] = 1;
+      t.u.uLit.value[slot] = 1;
+      t.headT0[slot] = this.#reduced ? -1e9 : now;
+      t.sproutFrom[slot] = t.u.uGrandGrow.value[slot];
+      t.sproutT0[slot] = this.#reduced ? -1e9 : now;
     }
-    this.#routeRise = 1;
-    this.#aimAt = flourish ? now : -1e9;
-    // The beam snaps; its old direction fades over the aim's settle time.
-    const way = s.uWay.value,
-      wp = s.uWayPrev.value;
-    wp.x = way.z;
-    wp.y = way.w;
-    wp.z = prev >= 0 && slot >= 0 ? 1 : 0;
-    this.#beamT0 = now;
-    if (slot >= 0) {
-      this.#beamTo(slot);
-      const h = s.uHerald.value;
-      h.set(this.#wayX, WAY_Z, this.#slotX[slot], this.#slotZ[slot]);
-      s.uHeraldY.value = GATE_Y + 0.4;
-      s.uHeraldT.value = this.#reduced ? 2 : 0;
-    } else s.uHeraldT.value = -1;
+    if (prev >= 0 && prev < t.count) {
+      t.sproutFrom[prev] = t.u.uGrandGrow.value[prev];
+      t.sproutT0[prev] = this.#reduced ? -1e9 : now;
+    }
+    void flourish;
   }
 
-  #beamTo(slot: number) {
-    const way = this.#shared.uWay.value;
-    const dx = this.#slotX[slot] - this.#wayX,
-      dz = this.#slotZ[slot] - WAY_Z;
-    const len = Math.hypot(dx, dz) || 1;
-    way.z = dx / len;
-    way.w = dz / len;
-  }
-
-  #setBand(band: number, instant: boolean) {
+  #setBand(band: 'low' | 'mid' | 'high', instant: boolean) {
     const s = this.#shared;
-    this.#bandFrom = instant ? band : s.uBand.value;
-    this.#bandTarget = band;
-    this.#bandT0 = instant ? -1e9 : this.#now();
-    s.uRealmNow.value = band;
+    const pal = BAND_PALETTE[band];
+    this.#accentHex = pal.css;
     this.#accentFrom.copy(s.uAccent.value);
-    hexVec(BAND_PALETTE[band === 1 ? 'mid' : band === 2 ? 'high' : 'low'].css, this.#accentTo);
+    this.#hotFrom.copy(s.uHot.value);
+    hexVec(pal.css, this.#accentTo);
+    hexVec(pal.hot, this.#hotTo);
+    this.#hotTo.multiplyScalar(0.55);
+    this.#bandT0 = instant ? -1e9 : this.#now();
     if (instant) {
-      s.uBand.value = band;
       s.uAccent.value.copy(this.#accentTo);
+      s.uHot.value.copy(this.#hotTo);
     }
   }
 
-  /**
-   * New land ahead: another terrain seed takes over from 40 units on, swept in
-   * from the horizon in 300 ms (ahead of you, never under you). A third wipe
-   * before the second has passed replaces the far segment in place.
-   */
-  #wipe(seed: number, realm: number, now: number) {
-    const c = this.#course;
-    let j: number;
-    if (this.#bounds[0] <= NONE) j = 0;
-    else if (this.#bounds[1] <= NONE) j = 1;
-    else {
-      this.#seeds[2] = seed;
-      this.#realms[2] = realm;
-      this.#starts[1] = c;
-      return;
+  #writeScroller() {
+    const msg = this.#msg;
+    let text = 'X1 D·FOUR  ✦  LOAD A TRACK TO ENTER THE DATASTREAM';
+    if (msg?.current) {
+      const t = this.#o.track(msg.current);
+      const n = this.#children.length;
+      const pal = BAND_PALETTE[msg.band];
+      text = `NOW AT ${t?.title ?? msg.current}${t?.artist ? ` — ${t.artist}` : ''}  ✦  ${n} ${n === 1 ? 'PATH' : 'PATHS'} AHEAD  ✦  ${pal.place}  ✦  X1 D·FOUR`;
     }
-    this.#seeds[j + 1] = seed;
-    this.#realms[j + 1] = realm;
-    this.#starts[j] = c;
-    this.#sweep = j;
-    this.#sweepFrom = WIPE_FAR - c;
-    this.#sweepTo = WIPE_NEAR - c;
-    this.#sweepT0 = this.#reduced ? -1e9 : now;
-    this.#bounds[j] = this.#reduced ? this.#sweepTo : this.#sweepFrom;
-    if (j === 1) this.#bounds[1] = Math.min(this.#bounds[1], this.#bounds[0] - 1);
+    if (text === this.#scrollText) return;
+    this.#scrollText = text;
+    this.#scroller.draw(text, this.#accentHex);
   }
 
   // ---------------------------------------------------------------------------
-  // Layout: fixed slots on an arc (d = 44…92), projected only on change or resize.
+  // Layout and building a tree: slots on a fan, branch curves, grand paths.
 
-  #layoutSlots(msg: ExploreMsg) {
-    const n = this.#children.length;
+  /** Slot positions for `n` children in a tree's own frame: a fan across the view, centre ones farther. */
+  #slot(i: number, n: number, out: { x: number; y: number }) {
     const aspect = this.#width / this.#height;
-    const tan = Math.tan((FOV * Math.PI) / 360);
+    const tanH = Math.tan((FOV * Math.PI) / 360) * aspect;
+    const f = n === 1 ? 0.5 : 0.08 + (i * 0.84) / (n - 1);
+    const d = 40 + (1 - Math.abs(f - 0.5) * 2) * 26;
+    out.x = (f - 0.5) * 2 * d * tanH * 0.84;
+    out.y = -d;
+    return out;
+  }
+
+  /** (Re)write a tree's rails and gates for `msg`. Keeps the aim's light when `keep`. */
+  #build(t: Tree, msg: ExploreMsg | null, now: number, keep = false) {
+    const children = msg ? this.#children : [];
+    const n = children.length;
+    t.count = n;
+    if (!keep) {
+      t.u.uLit.value.fill(0);
+      t.u.uHead.value.fill(-9);
+      t.u.uGrandGrow.value.fill(0);
+      t.u.uGrandLit.value.fill(0);
+      t.headT0.fill(-1e9);
+      t.sproutT0.fill(-1e9);
+      t.sproutFrom.fill(0);
+    }
+    const r = t.rails;
+    let seg = 0;
+    if (n > 0) seg = strip(r, seg, TRUNK_SLOT, TRUNK_SEGMENTS, 0.34, (u, o) => ((o.x = 0), (o.y = TRUNK_FROM + (SPLIT_Z - TRUNK_FROM) * u)));
+    const p = this.#v2;
     for (let i = 0; i < n; i++) {
-      const f = n === 1 ? 0.5 : 0.09 + (i * 0.82) / (n - 1);
-      const d = 44 + (1 - Math.abs(f - 0.5) * 2) * 48;
-      this.#slotX[i] = (f - 0.5) * 2 * d * tan * aspect;
-      this.#slotZ[i] = 27 - d;
+      this.#slot(i, n, p);
+      const gx = p.x,
+        gz = p.y;
+      t.slotX[i] = gx;
+      t.slotZ[i] = gz;
+      t.sim[i] = children[i].sim;
+      // Leave the split straight ahead, arrive heading away from the split.
+      const dx = gx,
+        dz = gz - SPLIT_Z;
+      const len = Math.hypot(dx, dz) || 1;
+      const tx = dx / len,
+        tz = dz / len;
+      t.heading[i] = Math.atan2(-tx, -tz);
+      const ax = 0,
+        az = SPLIT_Z,
+        bx = 0,
+        bz = SPLIT_Z - len * 0.38,
+        cx = gx - tx * len * 0.38,
+        cz = gz - tz * len * 0.38;
+      const curve = (u: number, o: { x: number; y: number }) => bezier(ax, az, bx, bz, cx, cz, gx, gz, u, o);
+      seg = strip(r, seg, i, RAIL_SEGMENTS, 0.26, curve);
+      // The flight: 8 samples down the trunk from the camera, then the branch.
+      const P = t.paths,
+        base = i * PATH_SAMPLES * 2;
+      const q = { x: 0, y: 0 };
+      for (let k = 0; k < PATH_SAMPLES; k++) {
+        if (k < 8) {
+          P[base + k * 2] = 0;
+          P[base + k * 2 + 1] = (SPLIT_Z * k) / 8;
+        } else {
+          curve((k - 8) / (PATH_SAMPLES - 9), q);
+          P[base + k * 2] = q.x;
+          P[base + k * 2 + 1] = q.y;
+        }
+      }
+      // Gate, its inner solid, landing pad and light column.
+      const g = t.gates[i];
+      const id = children[i].id;
+      const kind = Math.floor(hashString(`${id}#k`) * 4) % 4;
+      g.outer.geometry = this.#geos[kind];
+      g.inner!.geometry = this.#geos[(kind + 1 + Math.floor(hashString(`${id}#i`) * 3)) % 4];
+      const size = GATE_R * (0.8 + 0.4 * children[i].sim);
+      g.outer.position.set(gx, GATE_Y, gz);
+      g.outer.scale.setScalar(size);
+      g.inner!.position.set(gx, GATE_Y, gz);
+      g.inner!.scale.setScalar(size * 0.42);
+      g.pad!.position.set(gx, 0.05, gz);
+      g.column!.position.set(gx, 0, gz);
+      g.spin = hashString(`${id}#s`) * Math.PI * 2;
+      g.tilt = (hashString(`${id}#t`) - 0.5) * 0.9;
+      g.outerU.uSim.value = children[i].sim;
+      g.innerU!.uSim.value = children[i].sim;
+      g.outer.visible = g.inner!.visible = g.pad!.visible = g.column!.visible = true;
     }
-    this.#layoutGrands(msg);
-    this.#project();
+    for (let i = n; i < MAX_CHILDREN; i++) {
+      const g = t.gates[i];
+      g.outer.visible = g.inner!.visible = g.pad!.visible = g.column!.visible = false;
+    }
+    // Grand paths: from each gate onward, heading on from the branch, fanned a little.
+    let k = 0;
+    for (let i = 0; i < n && msg; i++) {
+      const grands: ExploreNode[] = [];
+      for (const node of msg.nodes) if (node.parent === children[i].id && grands.length < 4) grands.push(node);
+      const gx = t.slotX[i],
+        gz = t.slotZ[i],
+        hd = t.heading[i];
+      const fx = -Math.sin(hd),
+        fz = -Math.cos(hd);
+      for (let j = 0; j < grands.length && k < MAX_GRANDS; j++, k++) {
+        const id = grands[j].id;
+        const lat = (j - (grands.length - 1) / 2) * 11 + (hashString(`${id}#x`) - 0.5) * 3;
+        const fwd = 18 + hashString(`${id}#z`) * 14;
+        rotY(lat, -fwd, hd, p);
+        const ex = gx + p.x,
+          ez = gz + p.y;
+        const len = Math.hypot(ex - gx, ez - gz);
+        const ux = (ex - gx) / len,
+          uz = (ez - gz) / len;
+        seg = strip(r, seg, 8 + i, GRAND_SEGMENTS, 0.2, (u, o) =>
+          bezier(gx, gz, gx + fx * len * 0.4, gz + fz * len * 0.4, ex - ux * len * 0.3, ez - uz * len * 0.3, ex, ez, u, o),
+        );
+        const g = t.grands[k];
+        g.outer.geometry = this.#geos[Math.floor(hashString(`${id}#k`) * 3) % 3];
+        g.outer.position.set(ex, GRAND_Y, ez);
+        g.spin = hashString(`${id}#s`) * Math.PI * 2;
+        g.tilt = (hashString(`${id}#t`) - 0.5) * 0.9;
+        g.outerU.uSim.value = grands[j].sim;
+        g.outer.visible = true;
+        t.grandParent[k] = i;
+        t.grandSim[k] = grands[j].sim;
+      }
+    }
+    t.grandCount = k;
+    for (let j = k; j < MAX_GRANDS; j++) t.grands[j].outer.visible = false;
+    r.mesh.geometry.setDrawRange(0, seg * 6);
+    r.aPos.needsUpdate = true;
+    r.aRail.needsUpdate = true;
+    void now;
   }
 
-  #layoutGrands(msg: ExploreMsg) {
-    this.#grandCount = 0;
-    for (let i = 0; i < this.#children.length; i++) {
-      let count = 0;
-      for (const n of msg.nodes) if (n.parent === this.#children[i].id && count < 4 && this.#grandCount < MAX_GRANDS) count++, this.#grandCount++;
-    }
-  }
-
-  /** Screen anchors of the spire tops and gates, from the resting camera. */
+  /** Screen anchors of the gate tops and centres, from the resting camera (labels, picking). */
   #project() {
     this.#rest.aspect = this.#width / this.#height;
     this.#rest.updateProjectionMatrix();
     this.#rest.updateMatrixWorld();
-    for (let i = 0; i < this.#children.length; i++) {
-      const id = this.#children[i].id;
-      const top = SPIRE_Y + SPIRE_TOPS[this.#kindOf(id, false)] * SPIRE_SCALE * this.#heightOf(id);
-      this.#slotTop[i] = top;
-      this.#point.set(this.#slotX[i], top, this.#slotZ[i]).project(this.#rest);
+    const t = this.#tree;
+    for (let i = 0; i < t.count; i++) {
+      const top = GATE_Y + GATE_R * (0.8 + 0.4 * t.sim[i]) * 1.15;
+      this.#point.set(t.slotX[i], top, t.slotZ[i]).project(this.#rest);
       this.#anchors[i * 2] = (this.#point.x * 0.5 + 0.5) * this.#width;
       this.#anchors[i * 2 + 1] = (-this.#point.y * 0.5 + 0.5) * this.#height;
-      this.#point.set(this.#slotX[i], GATE_Y, this.#slotZ[i]).project(this.#rest);
+      this.#point.set(t.slotX[i], GATE_Y, t.slotZ[i]).project(this.#rest);
       this.#gates[i * 2] = (this.#point.x * 0.5 + 0.5) * this.#width;
       this.#gates[i * 2 + 1] = (-this.#point.y * 0.5 + 0.5) * this.#height;
     }
+    this.#point.set(0, 0, -5000).project(this.#rest);
+    this.#post.composite.uniforms.uVanish.value.set(this.#point.x * 0.5 + 0.5, this.#point.y * 0.5 + 0.5);
   }
-
-  #heightOf(id: string) {
-    return 0.7 + hashString(`${id}#h`) * 0.65;
-  }
-
-  /** Silhouette: 0 broch (45 %), 1 needle (30 %), 2 ruin (25 %); half the far spires are ruins. */
-  #kindOf(id: string, grand: boolean) {
-    if (grand && hashString(`${id}#r`) < 0.5) return 2;
-    const k = hashString(`${id}#k`);
-    return k < 0.45 ? 0 : k < 0.75 ? 1 : 2;
-  }
-
-  /** A grandchild's place: scattered in depth beyond its child, a little to either side. */
-  #grandAt(i: number, j: number, count: number, id: string, out: Float32Array) {
-    const o = j - (count - 1) / 2;
-    out[0] = this.#slotX[i] + o * 4.6 + (hashString(`${id}#x`) - 0.5) * 8;
-    out[1] = this.#slotZ[i] - 12 - hashString(`${id}#z`) * 28;
-  }
-  readonly #grand = new Float32Array(2);
 
   #layoutLabels() {
     if (!this.#labels.items.length) return;
     this.#labels.layout(this.#anchors, this.#width, this.#height - this.#bottomInset - 16, this.#obstacles);
   }
 
-  #writeSpires(msg: ExploreMsg) {
-    const { spire, info, aSpire, aInfo, mesh } = this.#spires;
-    let k = 0;
-    const n = this.#children.length;
-    for (let i = 0; i < n; i++) {
-      const c = this.#children[i];
-      spire.set([this.#slotX[i], SPIRE_Y, this.#slotZ[i], SPIRE_SCALE], k * 4);
-      info.set([hashString(c.id), c.sim, i + 32 * this.#kindOf(c.id, false), this.#heightOf(c.id)], k * 4);
-      k++;
-      const bill = this.#bills.bill;
-      bill[i * 4] = this.#slotX[i];
-      bill[i * 4 + 1] = GATE_Y;
-      bill[i * 4 + 2] = this.#slotZ[i];
-      bill[i * 4 + 3] = GATE_R;
+  // ---------------------------------------------------------------------------
+  // The flight: down the taken branch, through its gate, onto the new forks.
+
+  /**
+   * The new fan is built at once, in a frame that stands on the taken gate
+   * (forward) or back down the trunk (back); the camera flies there along the
+   * branch, and the old fan fades behind it. On arrival the world is rebased
+   * so the new fan's frame is the world again.
+   */
+  #fly(from: Tree, slot: number, back: boolean, msg: ExploreMsg, now: number) {
+    const to = from === this.#trees[0] ? this.#trees[1] : this.#trees[0];
+    this.#build(to, msg, now);
+    let x = 0,
+      z = BACK_D,
+      yaw = 0;
+    if (!back) {
+      x = from.slotX[slot];
+      z = from.slotZ[slot];
+      yaw = from.heading[slot];
+      this.#flightPath.set(from.paths.subarray(slot * PATH_SAMPLES * 2, (slot + 1) * PATH_SAMPLES * 2));
+      // The taken branch burns while the others go dark.
+      from.u.uLit.value.fill(0);
+      from.u.uLit.value[slot] = 1.4;
+      from.u.uLit.value[TRUNK_SLOT] = 1;
+      from.u.uGrandGrow.value.fill(0);
     }
-    for (let i = n; i < MAX_CHILDREN; i++) this.#bills.bill[i * 4 + 3] = -1;
-    this.#bills.aBill.needsUpdate = true;
-    for (let i = 0; i < n; i++) {
-      const grands = this.#grandsOf(msg, this.#children[i].id);
-      for (let j = 0; j < grands.length && k < MAX_CHILDREN + MAX_GRANDS; j++) {
-        const g = grands[j];
-        this.#grandAt(i, j, grands.length, g.id, this.#grand);
-        spire.set([this.#grand[0], GRAND_Y, this.#grand[1], GRAND_SCALE], k * 4);
-        info.set([hashString(g.id), g.sim, 8 + i + 32 * this.#kindOf(g.id, true), this.#heightOf(g.id)], k * 4);
-        k++;
-      }
+    to.group.position.set(x, 0, z);
+    to.group.rotation.set(0, yaw, 0);
+    to.group.visible = true;
+    to.u.uAlpha.value = 0;
+    from.u.uAlpha.value = 1;
+    this.#old = from;
+    this.#tree = to;
+    this.#flight = { t0: now, dur: back ? BACK_MS : FLIGHT_MS, back, slot, x, z, yaw };
+    this.#o.gate?.animate(
+      [
+        { opacity: 0, offset: 0 },
+        { opacity: 0, offset: back ? 0.2 : 0.78 },
+        { opacity: 0.55, offset: back ? 0.35 : 0.9 },
+        { opacity: 0, offset: 1 },
+      ],
+      { duration: back ? BACK_MS : FLIGHT_MS + 120, easing: 'linear' },
+    );
+  }
+
+  /** Land at once (a new message mid-flight, or reduced motion): rebase onto the new frame. */
+  #endFlight() {
+    const f = this.#flight;
+    if (!f) return;
+    this.#flight = null;
+    // The grid keeps its place in the world: fold the new frame's transform into it.
+    rotY(f.x, f.z, this.#gridYaw, this.#v2);
+    this.#gridOff.x += this.#v2.x;
+    this.#gridOff.y += this.#v2.y;
+    this.#gridYaw += f.yaw;
+    this.#tree.group.position.set(0, 0, 0);
+    this.#tree.group.rotation.set(0, 0, 0);
+    this.#tree.u.uAlpha.value = 1;
+    this.#old.group.visible = false;
+  }
+
+  /** Camera along the flight; returns false when it has landed. */
+  #flightFrame(now: number) {
+    const f = this.#flight;
+    if (!f) return false;
+    const x = Math.min(1, (now - f.t0) / f.dur);
+    if (x >= 1) {
+      this.#endFlight();
+      return false;
     }
-    mesh.geometry.instanceCount = k;
-    aSpire.needsUpdate = true;
-    aInfo.needsUpdate = true;
-  }
-
-  #grandsOf(msg: ExploreMsg, id: string) {
-    const out: ExploreNode[] = [];
-    for (const n of msg.nodes) if (n.parent === id && out.length < 4) out.push(n);
-    return out;
-  }
-
-  #hideGates() {
-    for (let i = 0; i < MAX_CHILDREN; i++) this.#bills.bill[i * 4 + 3] = -1;
-    this.#bills.aBill.needsUpdate = true;
-  }
-
-  /** Ley routes from the vessel to every gate, and on to the far spires. */
-  #writeRoutes(msg: ExploreMsg) {
-    const r = this.#routes;
-    let seg = 0;
-    const n = this.#children.length;
-    for (let i = 0; i < n; i++) seg = this.#route(seg, i, 0, 9, this.#slotX[i], this.#slotZ[i], ROUTE_SEGMENTS, 0.5, 1.6);
-    // The taken route keeps its own place in the buffer (full light, fading over the passage).
-    seg = Math.max(seg, this.#takenAt(n));
-    if (this.#takenSlot >= 0) this.#route(seg, TAKEN_SLOT, 0, 9, this.#passX, this.#passZ, ROUTE_SEGMENTS, 0.5, 1.6);
-    seg += ROUTE_SEGMENTS;
-    for (let i = 0; i < n; i++) {
-      const grands = this.#grandsOf(msg, this.#children[i].id);
-      for (let j = 0; j < grands.length; j++) {
-        this.#grandAt(i, j, grands.length, grands[j].id, this.#grand);
-        seg = this.#route(seg, 8 + i, this.#slotX[i], this.#slotZ[i] - 1.5, this.#grand[0], this.#grand[1], GRAND_SEGMENTS, 0.35, 1);
-      }
+    // Fast out of the trunk, easing into the new fan.
+    const u = x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+    const cam = this.#camera.position;
+    const look = this.#point;
+    if (f.back) {
+      cam.set(0, CAM_H + Math.sin(Math.PI * u) * 2.5, f.z * u);
+      look.set(0, LOOK_Y, f.z * u - LOOK_D);
+      this.#passFlash = 0;
+    } else {
+      const P = this.#flightPath;
+      const at = u * (PATH_SAMPLES - 1);
+      const k = Math.min(PATH_SAMPLES - 2, Math.floor(at));
+      const w = at - k;
+      const px = P[k * 2] + (P[k * 2 + 2] - P[k * 2]) * w,
+        pz = P[k * 2 + 1] + (P[k * 2 + 3] - P[k * 2 + 1]) * w;
+      // Dip through the gate near the end, rising back to riding height on the far side.
+      const dip = Math.sin(Math.PI * Math.max(0, Math.min(1, (u - 0.55) / 0.45)));
+      cam.set(px, CAM_H + (GATE_Y + 0.2 - CAM_H) * dip, pz);
+      // Look down the branch, then settle onto the new fan's own line of sight.
+      const ahead = Math.min(PATH_SAMPLES - 1, k + 6);
+      const hx = P[ahead * 2],
+        hz = P[ahead * 2 + 1];
+      rotY(0, -LOOK_D, f.yaw, this.#v2);
+      const endX = f.x + this.#v2.x,
+        endZ = f.z + this.#v2.y;
+      let ax = hx - px,
+        az = hz - pz;
+      const al = Math.hypot(ax, az) || 1;
+      ax = px + (ax / al) * LOOK_D;
+      az = pz + (az / al) * LOOK_D;
+      const settle = smoothstep(0.62, 1, u);
+      look.set(ax + (endX - ax) * settle, LOOK_Y - 1.2 * (1 - settle), az + (endZ - az) * settle);
+      this.#passFlash = Math.exp(-Math.abs(u - 0.93) * 30) * 0.3;
     }
-    r.mesh.geometry.setDrawRange(0, seg * 6);
-    r.aPos.needsUpdate = true;
-    r.aRoute.needsUpdate = true;
-  }
-
-  #takenAt(n: number) {
-    return n * ROUTE_SEGMENTS;
-  }
-
-  /** One curved strip from (x0, z0) to (x1, z1): leaves straight ahead, bends late. */
-  #route(seg: number, slot: number, x0: number, z0: number, x1: number, z1: number, count: number, half: number, bend: number) {
-    const { positions: P, routes: R } = this.#routes;
-    let dist = 0;
-    for (let k = 0; k < count; k++) {
-      const t0 = k / count,
-        t1 = (k + 1) / count;
-      const ax = x0 + (x1 - x0) * t0 ** bend,
-        az = z0 + (z1 - z0) * t0;
-      const bx = x0 + (x1 - x0) * t1 ** bend,
-        bz = z0 + (z1 - z0) * t1;
-      const tx = bx - ax,
-        tz = bz - az;
-      const len = Math.hypot(tx, tz) || 1;
-      const nx = -tz / len,
-        nz = tx / len;
-      const d0 = dist,
-        d1 = dist + len;
-      dist = d1;
-      const v = seg * 6;
-      // Two triangles: (a−, a+, b+), (a−, b+, b−).
-      const corners = [
-        [ax, az, -1, t0, d0],
-        [ax, az, 1, t0, d0],
-        [bx, bz, 1, t1, d1],
-        [ax, az, -1, t0, d0],
-        [bx, bz, 1, t1, d1],
-        [bx, bz, -1, t1, d1],
-      ] as const;
-      for (let c = 0; c < 6; c++) {
-        const [cx, cz, side, u, d] = corners[c];
-        P[(v + c) * 3] = cx + nx * half * side;
-        P[(v + c) * 3 + 1] = 0;
-        P[(v + c) * 3 + 2] = cz + nz * half * side;
-        R[(v + c) * 4] = slot;
-        R[(v + c) * 4 + 1] = u;
-        R[(v + c) * 4 + 2] = side;
-        R[(v + c) * 4 + 3] = d;
-      }
-      seg++;
-    }
-    return seg;
+    this.#camera.lookAt(look);
+    // Fade the old fan out behind, the new one in ahead.
+    this.#tree.u.uAlpha.value = smoothstep(0.05, 0.7, u);
+    this.#old.u.uAlpha.value = 1 - smoothstep(0.6, 1, u);
+    return true;
   }
 
   // ---------------------------------------------------------------------------
-  // The frame: tempo-clocked travel, decays, uniforms, one render.
+  // The frame: tempo-clocked travel, decays, uniforms, one render plus post.
 
   #start() {
     if (this.#disposed || document.hidden) return;
@@ -850,66 +801,58 @@ export class ExploreEngine {
     const viz = this.#o.viz;
     const live = viz.at > 0 && now - viz.at < 500;
 
-    // Music: smoothed bands, spectrum, onsets.
-    const k = 1 - Math.exp(-dt / 1.4);
+    // Music: smoothed bands and onsets.
+    const k = 1 - Math.exp(-dt / 0.5);
     let energy = 0;
     for (let i = 0; i < 3; i++) {
       this.#levels[i] += ((live ? viz.bands[i] : 0) - this.#levels[i]) * k;
       energy += this.#levels[i] / 3;
     }
-    if (live && energy > 0.015) this.#musicTime += dt * (0.3 + energy * 0.7);
-    if (viz.onsets !== this.#onsets) {
-      this.#onsets = viz.onsets;
-      if (live) {
-        this.#gust = Math.min(1, this.#gust + 0.08);
-        this.#gustOnset = true;
-      }
-    }
-    this.#gust *= Math.exp(-dt / 1.8);
-    const spec = s.uSpectrum.value;
-    for (let i = 0; i < 64; i++) spec[i] += ((live ? viz.spectrum[i] : 0) - spec[i]) * k;
-    const kf = 1 - Math.exp(-dt / 0.4);
-    const bin0 = this.#bandTarget === 0 ? 0 : this.#bandTarget === 1 ? 22 : 44;
-    for (let i = 0; i < 8; i++) this.#flicker[i] += ((live ? viz.spectrum[bin0 + i] : 0) - this.#flicker[i]) * kf;
-    s.uFlicker.value.set(this.#flicker);
-    for (let i = 0; i < 4; i++) {
-      const d = live ? viz.decks[i] : undefined;
-      const target = d ? (d[0] + d[1] + d[2]) / 3 : 0;
-      s.uDecks.value.setComponent(i, s.uDecks.value.getComponent(i) + (target - s.uDecks.value.getComponent(i)) * k);
-    }
+    if (viz.onsets !== this.#onsets) this.#onsets = viz.onsets;
 
     this.#travel(now, dt, energy, live);
     this.#decays(now, dt);
+    this.#progression(now, dt, live);
 
+    // The beat: a sharp attack on every master beat, scaled by the low end.
+    const beats = this.#masterBeats(now);
+    const phase = beats === null ? (this.#time * (this.#bpm / 60)) % 1 : beats - Math.floor(beats);
+    const pulse = this.#playing && !this.#reduced ? Math.exp(-phase * 6) * (0.45 + 0.8 * this.#levels[0]) : 0;
+    s.uBeat.value = Math.min(1.4, pulse);
+    s.uBeatPhase.value = phase;
+    s.uEnergy.value = energy;
     s.uTime.value = this.#time;
-    s.uMotion.value = this.#reduced ? 0 : 1;
-    // Vigil: nothing playing. Wind to ambient, ley lines still, runes to embers; light holds.
-    this.#vigil = this.#playing
-      ? Math.max(0, this.#vigil - dt / 0.6)
-      : Math.min(1, this.#vigil + dt / 1.5);
+    this.#vigil = this.#playing ? Math.max(0, this.#vigil - dt / 0.4) : Math.min(1, this.#vigil + dt / 1.2);
     s.uVigil.value = this.#vigil;
-    s.uWind.value += (energy * (1 - this.#vigil * 0.7) + 0.06 * this.#vigil + this.#gust * 0.15 - s.uWind.value) * k;
-    s.uGrowth.value = 1 - Math.exp(-this.#musicTime / 100);
-    s.uLife.value += (Math.min(1, energy * 0.85 + s.uGrowth.value * 0.7) - s.uLife.value) * (1 - Math.exp(-dt / 8));
+    s.uScroll.value = (s.uScroll.value + dt * (0.035 + 0.05 * this.#speedF)) % 1;
 
-    this.#ages();
-    this.#progression(now, dt, live, energy);
-    this.#waystones();
-    this.#dragonFrame(now, dt);
-    this.#passageFrame(now);
-    this.#keepersFrame(now, dt, live);
-    this.#camera.position.copy(CAMERA);
-    this.#camera.lookAt(
-      CAMERA.x + Math.sin(this.#yaw) * (CAMERA.z - TARGET.z),
-      TARGET.y,
-      CAMERA.z - Math.cos(this.#yaw) * (CAMERA.z - TARGET.z),
-    );
+    // Gates spin faster when lit and kick on the beat.
+    this.#animateGates(this.#tree, dt, pulse);
+    if (this.#old.group.visible) this.#animateGates(this.#old, dt, pulse);
+
+    // Camera: at rest in the current fan (a flight overrides), with a beat bob and a drop's shake.
+    if (!this.#flightFrame(now)) {
+      const drop = Math.max(0, 1 - (now - this.#dropT0) / 600);
+      const shake = this.#reduced ? 0 : drop * 0.5;
+      this.#camera.position.set(Math.sin(this.#time * 61) * shake, CAM_H + pulse * 0.08 + Math.sin(this.#time * 47) * shake, 0);
+      this.#camera.lookAt(0, LOOK_Y, -LOOK_D);
+      this.#passFlash = 0;
+    }
+    const fovKick = this.#flight && !this.#flight.back ? Math.sin(Math.PI * Math.min(1, (now - this.#flight.t0) / this.#flight.dur)) * 10 : 0;
+    const dropKick = Math.max(0, 1 - (now - this.#dropT0) / 500) * 6;
+    const fov = FOV + (this.#reduced ? 0 : fovKick + dropKick);
+    if (fov !== this.#camera.fov) {
+      this.#camera.fov = fov;
+      this.#camera.updateProjectionMatrix();
+    }
     this.#camera.updateMatrixWorld();
+    this.#sky.position.copy(this.#camera.position);
+    this.#floor.position.set(this.#camera.position.x, 0, this.#camera.position.z);
+    this.#postFrame(now, pulse, live);
 
     if (!draw) return;
-    this.#pack();
     if (this.#qa) this.#gpuBegin();
-    this.#renderer.render(this.#scene, this.#camera);
+    this.#render();
     if (this.#qa) this.#gpuEnd();
     const cpu = performance.now() - begin;
     this.#drawEma += (cpu - this.#drawEma) * 0.05;
@@ -934,14 +877,245 @@ export class ExploreEngine {
       st.triangles = info.triangles;
       st.dpr = this.#dpr;
       st.frameMs = this.#drawEma;
-      st.growth = s.uGrowth.value;
-      st.age = s.uAge.value;
       st.course = this.#course;
       st.speed = this.#speed;
       st.gpuMs = this.#gpuMs;
       this.#o.onStats(st);
       this.#statsAt = now;
     }
+  }
+
+  #bpm = 120;
+
+  /** Course from tempo only (never from deck position): fast, and faster with energy. */
+  #travel(now: number, dt: number, energy: number, live: boolean) {
+    const s = this.#shared;
+    const st = waves.state;
+    let playing = false,
+      master = 0,
+      any = 0;
+    if (st)
+      for (let i = 0; i < st.decks.length; i++) {
+        const d = st.decks[i];
+        if (!d.track_id) continue;
+        if (d.playing) {
+          playing = true;
+          if (d.bpm && !any) any = d.bpm;
+        }
+        if (d.master && d.bpm) master = d.bpm;
+      }
+    const viz = this.#o.viz;
+    const bpm = (live && viz.bpm) || master || any || 120;
+    this.#bpm = bpm;
+    if (playing !== this.#playing) {
+      this.#playing = playing;
+      // Play: 50 % at once, full in 400 ms. Stop: half at once, then drift down.
+      if (playing) {
+        this.#rampFrom = Math.max(0.5, this.#speedF);
+        this.#rampT0 = now;
+        this.#speedF = this.#rampFrom;
+      } else this.#speedF *= 0.5;
+    }
+    if (playing) {
+      const u = Math.min(1, (now - this.#rampT0) / 400);
+      this.#speedF = this.#rampFrom + (1 - this.#rampFrom) * (1 - (1 - u) * (1 - u));
+    } else this.#speedF *= Math.exp(-dt / 0.5);
+    this.#energyS += (energy - this.#energyS) * (1 - Math.exp(-dt / 2));
+    // Units per beat: 14 at rest, up to 30 with energy; a drop surges ×2.5.
+    const surge = 1 + 1.5 * Math.exp(-(now - this.#dropT0) / 600);
+    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge;
+    this.#speed = this.#reduced ? 0 : v;
+    const ds = this.#speed * dt;
+    this.#course += ds;
+    // The grid streams under a resting camera (a flight moves the camera itself).
+    if (!this.#flight && ds) {
+      rotY(0, -ds, this.#gridYaw, this.#v2);
+      this.#gridOff.x += this.#v2.x;
+      this.#gridOff.y += this.#v2.y;
+      // Keep the offset small: the grid repeats every 8 units.
+      this.#gridOff.x %= 8000;
+      this.#gridOff.y %= 8000;
+    }
+    s.uGridYaw.value = this.#gridYaw;
+    s.uGridOff.value.copy(this.#gridOff);
+    s.uTravel.value = this.#course % 230;
+    s.uSpeed.value = this.#speed + (this.#flight && !this.#flight.back ? 90 : 0);
+    // Light packets race down the rails a little faster than we travel.
+    this.#flow = (this.#flow + (this.#reduced ? 0 : (this.#speed * 1.2 + 14 * (1 - this.#vigil)) * dt)) % (11.42397 * 600);
+    s.uFlow.value = this.#flow;
+  }
+
+  /** Flourish decays from the message frame; nothing eases toward a response. */
+  #decays(now: number, dt: number) {
+    const s = this.#shared;
+    const t = this.#tree;
+    const fall = dt / ((this.#reduced ? 150 : AIM_FALL_MS) / 1000);
+    const lit = t.u.uLit.value,
+      head = t.u.uHead.value,
+      grow = t.u.uGrandGrow.value,
+      glit = t.u.uGrandLit.value;
+    for (let i = 0; i < MAX_CHILDREN; i++) {
+      const aimed = i === this.#aimSlot;
+      lit[i] = aimed ? 1 : Math.max(0, lit[i] - fall);
+      const h = (now - t.headT0[i]) / HEAD_MS;
+      head[i] = h >= 0 && h < 1.3 ? h : -9;
+      // The aimed gate's paths sprout; the others shrink back to stubs.
+      const target = aimed ? 1 : STUB;
+      const u = Math.max(0, Math.min(1, (now - t.sproutT0[i] - (aimed ? SPROUT_DELAY : 0)) / SPROUT_MS));
+      const e = 1 - (1 - u) * (1 - u);
+      grow[i] = t.sproutT0[i] < -1e8 ? target : t.sproutFrom[i] + (target - t.sproutFrom[i]) * e;
+      glit[i] = 0.12 + 0.88 * lit[i];
+    }
+    lit[TRUNK_SLOT] = 0.55 + 0.45 * (this.#aimSlot >= 0 ? 1 : 0);
+    // Band colours settle in 180 ms.
+    const u = Math.min(1, (now - this.#bandT0) / 180);
+    const e = 1 - (1 - u) * (1 - u);
+    s.uAccent.value.lerpVectors(this.#accentFrom, this.#accentTo, e);
+    s.uHot.value.lerpVectors(this.#hotFrom, this.#hotTo, e);
+    const mu = Math.min(1, (now - this.#mistT0) / MIST_MS);
+    this.#mist = this.#mistFrom + (this.#mistTo - this.#mistFrom) * mu;
+  }
+
+  #animateGates(t: Tree, dt: number, pulse: number) {
+    const lit = t.u.uLit.value,
+      grow = t.u.uGrandGrow.value;
+    const still = this.#reduced ? 0 : 1;
+    for (let i = 0; i < t.count; i++) {
+      const g = t.gates[i];
+      const l = Math.min(1, lit[i]);
+      g.spin += dt * still * (0.5 + 2.8 * l + this.#speedF * 0.6) * (1 + pulse * 0.8);
+      g.outer.rotation.set(g.tilt + g.spin * 0.37, g.spin, 0);
+      g.inner!.rotation.set(-g.spin * 0.9, -g.spin * 1.6, g.tilt);
+      const size = GATE_R * (0.8 + 0.4 * t.sim[i]) * (1 + 0.14 * pulse * (0.4 + l) + 0.18 * l);
+      g.outer.scale.setScalar(size);
+      g.inner!.scale.setScalar(size * 0.42);
+      g.outerU.uLit.value = l;
+      g.innerU!.uLit.value = l;
+      g.padU!.uLit.value = l;
+      g.columnU!.uLit.value = l;
+      g.column!.visible = l > 0.01;
+    }
+    for (let j = 0; j < t.grandCount; j++) {
+      const g = t.grands[j];
+      const p = t.grandParent[j];
+      const shown = smoothstep(0.55, 1, grow[p]);
+      g.spin += dt * still * (0.6 + 1.5 * shown);
+      g.outer.rotation.set(g.tilt + g.spin * 0.4, g.spin, 0);
+      g.outer.scale.setScalar(GRAND_R * (0.25 + 0.75 * shown) * (0.8 + 0.4 * t.grandSim[j]) * (1 + 0.12 * pulse));
+      g.outerU.uLit.value = shown * (0.2 + 0.4 * Math.min(1, lit[p]));
+      g.outer.visible = grow[p] > 0.05;
+    }
+  }
+
+  /** Post uniforms: lasers, flashes, aberration, cuts, mist. */
+  #postFrame(now: number, pulse: number, live: boolean) {
+    const c = this.#post.composite.uniforms;
+    const st = waves.state;
+    const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
+    const kLevel = 0.2;
+    for (let i = 0; i < 4; i++) {
+      const d = st?.decks[i];
+      const loaded = !!d?.track_id;
+      const playing = loaded && !!d?.playing;
+      const v = live ? this.#o.viz.decks[i] : undefined;
+      const level = v ? (v[0] + v[1] + v[2]) / 3 : 0;
+      this.#deckLevel[i] += (level - this.#deckLevel[i]) * kLevel;
+      const focus = st?.focused === i ? 1.25 : 1;
+      c.uBeamLevel.value[i] = this.#deckBase > 0 ? (playing ? (0.12 + Math.min(1, this.#deckLevel[i] * 1.6) * 0.5) * focus : loaded ? 0.03 : 0) * (1 - this.#mist * 0.5) : 0;
+      c.uBeamX.value[i] = this.#deckX[i] / this.#width;
+      // Sway on the deck's own beat: synced decks swing together.
+      const grid = loaded ? client.deckInfo[i]?.grid : null;
+      let deckPhase = 0;
+      if (playing && grid && grid.bpm > 0 && !this.#reduced) {
+        const beats = ((d!.position + d!.rate * age - grid.first_beat) * grid.bpm) / 60;
+        deckPhase = beats;
+      }
+      c.uBeamSway.value[i] = this.#reduced ? 0 : Math.sin(Math.PI * deckPhase) * 0.05;
+      this.#shared.uDeckLevel.value[i] = playing ? 0.25 + Math.min(1, this.#deckLevel[i] * 1.8) * 0.75 : loaded ? 0.08 : 0;
+      this.#shared.uDeckPhase.value[i] = deckPhase;
+    }
+    c.uBeamY.value = this.#deckBase > 0 ? 1 - this.#deckBase / this.#height : 0;
+    const drop = Math.max(0, 1 - (now - this.#dropT0) / 160);
+    const cut = this.#reduced ? 0 : Math.max(0, 1 - (now - this.#cutT0) / CUT_MS);
+    const flying = this.#flight ? 1 : 0;
+    c.uFlash.value = this.#reduced ? 0 : this.#passFlash + drop * 0.55 + cut * 0.08 + pulse * 0.02 * this.#energyS;
+    c.uAberr.value = this.#reduced ? 0 : pulse * 0.8 + flying * 2.5 + drop * 5 + cut * 3;
+    c.uCut.value = cut;
+    c.uMist.value = this.#mist;
+    c.uTime.value = this.#time;
+    c.uBloom.value = 1 + 0.25 * pulse;
+    const ripple = (now - this.#dropT0) / 1200;
+    this.#shared.uRipple.value = ripple >= 0 && ripple < 1 && !this.#reduced ? ripple : -1;
+  }
+
+  /** A drop after a breakdown (low band under 0.25 for 8 s, then back above 0.6): flash, shock wave, surge. */
+  #progression(now: number, dt: number, live: boolean) {
+    const low = this.#levels[0];
+    const playing = this.#playing && live;
+    if (playing && low < 0.25) {
+      this.#breakdown += dt;
+      this.#lowBelowAt = now;
+    } else {
+      if (this.#breakdown >= 8) this.#breakdownEnd = now;
+      this.#breakdown = 0;
+    }
+    const after = this.#breakdown >= 8 || now - this.#breakdownEnd < 4000;
+    if (playing && after && low > 0.6 && now - this.#lowBelowAt < 2000 && now - this.#lastDrop > 20_000) {
+      this.#breakdownEnd = -1e9;
+      this.#drop(now);
+    }
+  }
+  #drop(now: number) {
+    this.#lastDrop = now;
+    this.#dropT0 = now;
+  }
+
+  /** The master deck's beat count from its grid and dead-reckoned position, or null. */
+  #masterBeats(now: number) {
+    const st = waves.state;
+    if (!st) return null;
+    for (let i = 0; i < st.decks.length; i++) {
+      const d = st.decks[i];
+      if (!d.master || !d.track_id) continue;
+      const grid = client.deckInfo[i]?.grid;
+      if (!grid || grid.bpm <= 0) return null;
+      const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
+      return ((d.position + (d.playing ? d.rate * age : 0) - grid.first_beat) * grid.bpm) / 60;
+    }
+    return null;
+  }
+
+  #render() {
+    const r = this.#renderer;
+    const p = this.#post;
+    r.setRenderTarget(this.#rtScene);
+    r.render(this.#scene, this.#camera);
+    const pass = (mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) => {
+      p.quad.material = mat;
+      r.setRenderTarget(target);
+      r.render(p.scene, p.camera);
+    };
+    p.bright.uniforms.tSrc.value = this.#rtScene.texture;
+    p.bright.uniforms.uTexel.value.set(1 / this.#rtScene.width, 1 / this.#rtScene.height);
+    pass(p.bright, this.#rtA);
+    const b = p.blur.uniforms;
+    b.tSrc.value = this.#rtA.texture;
+    b.uDir.value.set(1 / this.#rtA.width, 0);
+    pass(p.blur, this.#rtB);
+    b.tSrc.value = this.#rtB.texture;
+    b.uDir.value.set(0, 1 / this.#rtA.height);
+    pass(p.blur, this.#rtA);
+    b.tSrc.value = this.#rtA.texture;
+    b.uDir.value.set(2 / this.#rtA.width, 0);
+    pass(p.blur, this.#rtC);
+    b.tSrc.value = this.#rtC.texture;
+    b.uDir.value.set(0, 2 / this.#rtC.height);
+    pass(p.blur, this.#rtD);
+    const c = p.composite.uniforms;
+    c.tScene.value = this.#rtScene.texture;
+    c.tBloom.value = this.#rtA.texture;
+    c.tWide.value = this.#rtD.texture;
+    pass(p.composite, null);
   }
 
   // ---------------------------------------------------------------------------
@@ -953,6 +1127,7 @@ export class ExploreEngine {
   #timer: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null = null;
   readonly #queries: (WebGLQuery | null)[] = [null, null, null, null];
   #queryHead = 0;
+  #queryActive = false;
   #gpuMs = 0;
 
   #now() {
@@ -964,7 +1139,7 @@ export class ExploreEngine {
     this.#qa.pending = { reason, recv, handled: performance.now(), aim, count };
   }
 
-  /** In the first animation frame after a message: are its label text and lit route there? */
+  /** In the first animation frame after a message: are its label text and lit branch there? */
   #qaFrame(raf: number, begin: number) {
     const qa = this.#qa!;
     const p = qa.pending;
@@ -978,7 +1153,7 @@ export class ExploreEngine {
       labelOk &&= !!el && el.dataset.id === p.aim && !!el.querySelector('.xl-t')?.textContent && (!expected || el.querySelector('.xl-t')?.textContent === expected);
     }
     const slot = this.#aimSlot;
-    const routeOk = !p.aim || (slot >= 0 && this.#shared.uRoute.value[slot] >= 0.999 && this.#shared.uGate.value[slot] >= 1);
+    const routeOk = !p.aim || (slot >= 0 && this.#tree.u.uLit.value[slot] >= 0.999);
     qa.records.push({ reason: p.reason, recv: p.recv, handled: p.handled, raf, frame: begin, labelOk, routeOk });
     if (qa.records.length > 500) qa.records.shift();
   }
@@ -989,7 +1164,6 @@ export class ExploreEngine {
     if (!gl || !t) return;
     const q = this.#queries[this.#queryHead];
     if (q) {
-      // The query from four frames ago: read it if it's ready, else drop this frame's sample.
       if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) return;
       const ns = gl.getQueryParameter(q, gl.QUERY_RESULT) as number;
       if (!gl.getParameter(t.GPU_DISJOINT_EXT)) {
@@ -1002,7 +1176,6 @@ export class ExploreEngine {
     gl.beginQuery(t.TIME_ELAPSED_EXT, this.#queries[this.#queryHead]!);
     this.#queryActive = true;
   }
-  #queryActive = false;
   #gpuEnd() {
     if (!this.#queryActive || !this.#gl || !this.#timer) return;
     this.#gl.endQuery(this.#timer.TIME_ELAPSED_EXT);
@@ -1010,7 +1183,7 @@ export class ExploreEngine {
     this.#queryHead = (this.#queryHead + 1) % this.#queries.length;
   }
 
-  /** The QA handle (window.__wayfaring with ?qa). */
+  /** The QA handle (window.__datastream with ?qa). */
   qa() {
     if (!this.#qa) {
       this.#qa = { frozen: false, clock: 0, anims: new Map(), pending: null, records: [], gpu: [], cpu: new Float64Array(2048).fill(-1), cpuAt: 0 };
@@ -1030,11 +1203,8 @@ export class ExploreEngine {
     return {
       records: qa.records,
       gpu: qa.gpu,
-      /** Frame CPU samples (ms) since `from` = cpuMark(). */
       cpuMark: () => qa.cpu.fill(-1),
-      gpuMark: () => (qa.gpu.length = 0),
       cpuSamples: () => Array.from(qa.cpu).filter((v) => v >= 0),
-      /** Hold the world (and its CSS animations) still at this instant. */
       freeze: () => {
         qa.clock = performance.now();
         qa.frozen = true;
@@ -1044,11 +1214,7 @@ export class ExploreEngine {
           qa.anims.set(a, qa.clock - Number(a.currentTime ?? 0));
         }
       },
-      /**
-       * Step the frozen world by `ms` in 1/120 s steps, simulating without drawing
-       * (a burst of renders in one task would queue seconds of GPU work); the
-       * animation frames draw the result.
-       */
+      /** Step the frozen world by `ms` in 1/120 s steps, simulating without drawing. */
       advance: (ms: number) => {
         sync();
         let left = ms;
@@ -1066,31 +1232,8 @@ export class ExploreEngine {
         qa.anims.clear();
         this.#last = performance.now();
       },
-      /** Jump the mix to `minutes` of music; structures of past ages appear at once. */
-      setMinutes: (minutes: number) => {
-        this.#musicTime = minutes * 60;
-        this.#ages();
-        for (let i = 0; i < 3; i++) this.#ageCourse[i] = this.#shared.uAge.value >= i + 0.5 ? -1e9 : 1e9;
-      },
-      /**
-       * Force the dragon: 'far', 'flyover', 'perch' or 'drop' (the full drop, as if earned).
-       * `seed` (0..1) fixes its side and variant for repeatable captures.
-       */
-      dragon: (what: 'far' | 'flyover' | 'perch' | 'drop', seed?: number) => {
-        if (what === 'drop') {
-          this.#lastFlyover = -1e9;
-          this.#flownRoot = null;
-          this.#drop(this.#now());
-        } else this.#startDragon(what === 'far' ? 1 : what === 'perch' ? 3 : 2);
-        if (what === 'far') this.#buildUp = true;
-        if (seed !== undefined) this.#dragonSeed = seed;
-      },
-      /** Diagnostics: show or hide one scene mesh (by index) to price it. */
-      meshes: () => this.#scene.children.map((m, i) => `${i}:${(m as THREE.Mesh).geometry?.type}:${m.renderOrder}`),
-      toggle: (i: number, visible: boolean) => {
-        const m = this.#scene.children[i];
-        if (m) m.visible = visible;
-      },
+      /** Force a drop (flash, shock wave, surge). */
+      drop: () => this.#drop(this.#now()),
       gpuMedian: async (ms = 3000) => {
         qa.gpu.length = 0;
         await new Promise((r) => setTimeout(r, ms));
@@ -1100,16 +1243,11 @@ export class ExploreEngine {
       state: () => ({
         course: this.#course,
         speed: this.#speed,
-        yaw: this.#yaw,
         aimSlot: this.#aimSlot,
-        mist: this.#shared.uMist.value,
+        flying: !!this.#flight,
+        mist: this.#mist,
         vigil: this.#vigil,
-        age: this.#shared.uAge.value,
-        bars: this.#bars,
-        dragon: this.#dragonMode,
-        breakdown: this.#breakdown,
-        buildUp: this.#buildUp,
-        low: this.#low,
+        grandGrow: Array.from(this.#tree.u.uGrandGrow.value),
         anchors: Array.from(this.#anchors.slice(0, this.#children.length * 2)),
         calls: this.#renderer.info.render.calls,
         triangles: this.#renderer.info.render.triangles,
@@ -1117,438 +1255,6 @@ export class ExploreEngine {
         cpuMs: this.#drawEma,
       }),
     };
-  }
-
-  /** Course from tempo only (never from deck position), land streaming, the seed wipe. */
-  #travel(now: number, dt: number, energy: number, live: boolean) {
-    const s = this.#shared;
-    const st = waves.state;
-    let playing = false,
-      master = 0,
-      any = 0;
-    if (st)
-      for (let i = 0; i < st.decks.length; i++) {
-        const d = st.decks[i];
-        if (!d.track_id) continue;
-        if (d.playing) {
-          playing = true;
-          if (d.bpm && !any) any = d.bpm;
-        }
-        if (d.master && d.bpm) master = d.bpm;
-      }
-    const viz = this.#o.viz;
-    const bpm = (live && viz.bpm) || master || any || 120;
-    if (playing !== this.#playing) {
-      this.#playing = playing;
-      // Play: 40 % at once, full in 600 ms. Stop: half at once, then drift down (τ 0.6 s).
-      if (playing) {
-        this.#rampFrom = Math.max(0.4, this.#speedF);
-        this.#rampT0 = now;
-        this.#speedF = this.#rampFrom;
-      } else this.#speedF *= 0.5;
-    }
-    if (playing) {
-      const u = Math.min(1, (now - this.#rampT0) / 600);
-      this.#speedF = this.#rampFrom + (1 - this.#rampFrom) * (1 - (1 - u) * (1 - u));
-    } else this.#speedF *= Math.exp(-dt / 0.6);
-    this.#energyS += (energy - this.#energyS) * (1 - Math.exp(-dt / 4));
-    const perBar = 4.5 + 3 * this.#energyS;
-    this.#perBar = perBar;
-    const v = this.#speedF * (bpm / 240) * perBar;
-    // Bars from tempo (stopping halts them), pulled gently onto the master's phrase grid.
-    this.#bars += this.#speedF * (bpm / 240) * dt;
-    const masterBars = this.#masterBars(now);
-    if (masterBars !== null) {
-      const err = masterBars - this.#bars - 8 * Math.round((masterBars - this.#bars) / 8);
-      this.#bars += err * (1 - Math.exp(-dt / 2));
-    }
-    // Ley light flows with the journey, slower in a breakdown.
-    this.#flow += (this.#reduced ? 0 : this.#speed * 0.3 * (this.#breakdown >= 8 ? 0.4 : 1)) * dt;
-    s.uFlow.value = this.#flow % 1000;
-    const impulse = 5 * Math.exp(-(now - this.#impulseT0) / 1000 / IMPULSE_TAU) * this.#impulseDir * Math.max(v, 1.6);
-    this.#speed = this.#reduced ? 0 : v + impulse;
-    this.#course += this.#speed * dt;
-    const c = this.#course;
-    s.uCourse.value = c;
-    s.uCourseW.value = mod(c, RIPPLE_PERIOD);
-    s.uCourseK.value = mod(c, 1000);
-    const r0 = riverW(-c);
-    s.uRiver0.value = r0;
-    s.uSnap.value.set(mod(r0, LAND_DX), mod(c, LAND_DZ));
-    for (let i = 0; i < this.#wrapped.length; i++) {
-      const m = this.#wrapped[i];
-      const p = m.userData.period;
-      m.userData.wrap.value.set(mod(c, p), Math.floor(c / p));
-    }
-
-    // The wipe sweeps in from the horizon, then the old land is forgotten once far behind.
-    if (this.#sweep >= 0) {
-      const u = Math.min(1, (now - this.#sweepT0) / WIPE_MS);
-      const e = 1 - (1 - u) * (1 - u);
-      let b = this.#sweepFrom + (this.#sweepTo - this.#sweepFrom) * e;
-      if (this.#sweep === 1) b = Math.min(b, this.#bounds[0] - 1);
-      this.#bounds[this.#sweep] = b;
-      if (u >= 1) this.#sweep = -1;
-    }
-    if (this.#bounds[0] > NONE && this.#sweep !== 0 && c - this.#starts[0] > WIPE_FORGET) {
-      this.#seeds[0] = this.#seeds[1];
-      this.#realms[0] = this.#realms[1];
-      this.#seeds[1] = this.#seeds[2];
-      this.#realms[1] = this.#realms[2];
-      this.#bounds[0] = this.#bounds[1];
-      this.#starts[0] = this.#starts[1];
-      this.#bounds[1] = NONE;
-      this.#starts[1] = NONE;
-      if (this.#sweep === 1) this.#sweep = 0;
-    }
-    this.#props.wrap.value.set(mod(c, PROP_PERIOD), Math.floor(c / PROP_PERIOD));
-    s.uSeeds.value.set(this.#seeds[0], this.#seeds[1], this.#seeds[2]);
-    s.uBounds.value.set(this.#bounds[0], this.#bounds[1]);
-    s.uRealms.value.set(this.#realms[0], this.#realms[1], this.#realms[2]);
-    s.uStarts.value.set(this.#starts[0], this.#starts[1]);
-
-    // The Wayfinder rides the Current; its beam keeps pointing at the aimed gate.
-    this.#wayX = riverW(WAY_Z - c) - r0;
-    s.uWay.value.x = this.#wayX;
-    s.uWay.value.y = WAY_Z;
-    if (this.#aimSlot >= 0) this.#beamTo(this.#aimSlot);
-  }
-
-  #passageFrame(now: number) {
-    const s = this.#shared;
-    const t = now - this.#passT0;
-    if (t < PASSAGE_MS && !this.#reduced) {
-      const u = t / PASSAGE_MS;
-      this.#yaw = this.#yawFrom * (1 - u) * (1 - u) + this.#passYaw * 6.75 * u * (1 - u) * (1 - u);
-    } else this.#yaw = 0;
-    const pass = s.uPassage.value;
-    if (t < SWEEP_MS && !this.#reduced) {
-      const u = t / SWEEP_MS;
-      const e = 1 - (1 - u) * (1 - u);
-      // Forward: from the aimed gate to (just past) the camera; back: the reverse.
-      const k = this.#passDir > 0 ? e * 1.11 : 1.11 * (1 - e);
-      pass.set(
-        this.#passX + (CAMERA.x - this.#passX) * k,
-        GATE_Y + (CAMERA.y - 1 - GATE_Y) * k,
-        this.#passZ + (CAMERA.z - this.#passZ) * k,
-        GATE_R + (SWEEP_R - GATE_R) * (this.#passDir > 0 ? e : 1 - e),
-      );
-      s.uPassageA.value = (1 - smoothstep(0.72, 1, k)) * (this.#passDir > 0 ? 1 : smoothstep(0, 0.25, e));
-    } else pass.w = -1;
-    const mu = Math.min(1, (now - this.#mistT0) / PASSAGE_MS);
-    s.uMist.value = this.#mistFrom + (this.#mistTo - this.#mistFrom) * mu;
-  }
-
-  /**
-   * Keepers: flame = deck colour, brightness from the deck's level (τ 0.15 s),
-   * the lantern swinging ±9° at the deck's own beat phase (so synced decks
-   * swing together), still when paused; a load flares it 2× for 400 ms.
-   */
-  #keepersFrame(now: number, dt: number, live: boolean) {
-    const s = this.#shared;
-    const st = waves.state;
-    const K = this.#keepers;
-    const height = Math.round(this.#figure() / KEEPER_FIGURE);
-    const kLevel = 1 - Math.exp(-dt / 0.15);
-    const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
-    const aspect = this.#width / this.#height;
-    const reach = 2 * (CAMERA.z - POOL_Z) * Math.tan((FOV * Math.PI) / 360) * aspect;
-    const riverX = riverW(POOL_Z - this.#course) - s.uRiver0.value;
-    const poolZ = this.#gunwale.y > 0 ? this.#gunwale.x - 2.5 : POOL_Z;
-    const poolReach = 2 * (CAMERA.z - poolZ) * Math.tan((FOV * Math.PI) / 360) * aspect;
-    for (let i = 0; i < 4; i++) {
-      const d = st?.decks[i];
-      const loaded = !!d?.track_id;
-      const loading = !!d?.loading;
-      if ((loading && !this.#wasLoading[i]) || (loaded && d.track_id !== this.#wasTrack[i] && this.#wasTrack[i] !== null))
-        this.#flareAt[i] = now;
-      this.#wasLoading[i] = loading;
-      this.#wasTrack[i] = d?.track_id ?? null;
-      const v = live ? this.#o.viz.decks[i] : undefined;
-      const level = v ? (v[0] + v[1] + v[2]) / 3 : 0;
-      this.#keeperLevel[i] += (level - this.#keeperLevel[i]) * kLevel;
-      const flare = Math.max(0, 1 - (now - this.#flareAt[i]) / 400);
-      const playing = !!d?.playing && loaded;
-      let bright = loaded ? (playing ? 0.35 + Math.min(1, this.#keeperLevel[i] * 1.6) * 0.75 : 0.25) : 0.06;
-      bright *= 1 + flare;
-      let swing = K.state[i * 4 + 1];
-      const grid = loaded ? client.deckInfo[i]?.grid : null;
-      if (playing && grid && grid.bpm > 0 && !this.#reduced) {
-        const pos = d.position + d.rate * age;
-        const beats = ((pos - grid.first_beat) * grid.bpm) / 60;
-        swing = ((9 * Math.PI) / 180) * Math.cos(Math.PI * beats);
-      } else swing *= Math.exp(-dt / 0.12);
-      K.keeper[i * 4] = this.#keeperX[i];
-      K.keeper[i * 4 + 1] = this.#keeperBase + 4;
-      K.keeper[i * 4 + 2] = height;
-      K.keeper[i * 4 + 3] = st?.focused === i ? 1 : 0;
-      K.state[i * 4] = bright;
-      K.state[i * 4 + 1] = swing;
-      K.state[i * 4 + 2] = d?.master ? 1 : 0;
-      K.state[i * 4 + 3] = loaded ? 1 : 0;
-      // Their light on the water and banks ahead, and a rune ring beside a looping Keeper.
-      const x = (this.#keeperX[i] / this.#width - 0.5) * reach;
-      const pool = s.uLantern.value;
-      // Their light on the water and banks just beyond the gunwale: radius 2, about 0.35 of the deck's colour.
-      pool[i * 4] = (this.#keeperX[i] / this.#width - 0.5) * poolReach;
-      pool[i * 4 + 1] = poolZ;
-      pool[i * 4 + 2] = loaded ? bright * (st?.focused === i ? 1.4 : 1.15) * (this.#breakdown >= 8 ? 1.5 : 1) : 0;
-      pool[i * 4 + 3] = 2;
-      const ring = s.uLoop.value;
-      const loop = d?.loop;
-      const active = !!loop?.active && loop.start != null && loop.end != null && loop.end > loop.start;
-      ring[i * 4] = x * 0.82 + riverX * 0.18 + (i < 2 ? 3.6 : -3.6);
-      ring[i * 4 + 1] = POOL_Z - 1.5;
-      ring[i * 4 + 2] =
-        d && loop && active ? ((((d.position + (d.playing ? d.rate * age : 0) - loop.start!) / (loop.end! - loop.start!)) % 1) + 1) % 1 : 0;
-      ring[i * 4 + 3] = active ? 1 : 0;
-      if (this.#reduced) ring[i * 4 + 2] = 0;
-    }
-    // A long blend (two synced decks playing together for 2 min): their pools meet on the water.
-    let a = -1,
-      b = -1;
-    if (st)
-      for (let i = 0; i < 4; i++) {
-        const d = st.decks[i];
-        if (d?.playing && d.sync && d.track_id) {
-          if (a < 0) a = i;
-          else if (b < 0) b = i;
-        }
-      }
-    this.#blend = a >= 0 && b >= 0 ? this.#blend + dt : 0;
-    if (this.#blend > 120 && a >= 0 && b >= 0) {
-      const pool = s.uLantern.value;
-      const k = Math.min(1, (this.#blend - 120) / 8);
-      const mx = (pool[a * 4] + pool[b * 4]) / 2;
-      pool[a * 4] += (mx - 1.6 - pool[a * 4]) * k;
-      pool[b * 4] += (mx + 1.6 - pool[b * 4]) * k;
-      pool[a * 4 + 3] = pool[b * 4 + 3] = 2 + 2 * k;
-    }
-    K.view.set(this.#width, this.#height);
-  }
-
-  /** Flourish decays from the message frame; nothing eases toward a response. */
-  #decays(now: number, dt: number) {
-    const s = this.#shared;
-    const route = s.uRoute.value,
-      gate = s.uGate.value;
-    const fall = this.#reduced ? dt / 0.15 : dt / (AIM_MS / 1000);
-    for (let i = 0; i < MAX_CHILDREN; i++) {
-      if (i === this.#aimSlot) {
-        route[i] = Math.min(1, route[i] + (this.#reduced ? dt / 0.15 : 1));
-        gate[i] = 1 + 0.35 * Math.max(0, 1 - (now - this.#aimAt) / FLOURISH_MS);
-      } else {
-        route[i] = Math.max(0, route[i] - fall);
-        gate[i] = Math.max(0, gate[i] - fall);
-      }
-    }
-    route[TAKEN_SLOT] = Math.max(0, route[TAKEN_SLOT] - dt / 0.3);
-    const wp = s.uWayPrev.value;
-    wp.z = Math.max(0, 1 - (now - this.#beamT0) / AIM_MS) * (wp.z > 0 ? 1 : 0);
-    wp.w = 1 - this.#vigil * 0.55;
-    // The herald flies and circles; with reduced motion it waits at the gate.
-    if (s.uHeraldT.value >= 0) s.uHeraldT.value = this.#reduced ? 0.95 : Math.min(600, s.uHeraldT.value + dt);
-    // Realm colours: 180 ms, the biggest change in the first frame.
-    const u = Math.min(1, (now - this.#bandT0) / BAND_MS);
-    const e = 1 - (1 - u) * (1 - u);
-    s.uBand.value = this.#bandFrom + (this.#bandTarget - this.#bandFrom) * e;
-    s.uAccent.value.lerpVectors(this.#accentFrom, this.#accentTo, e);
-    this.#realmLight(s.uBand.value);
-    // The rune rings turn once per bar.
-    s.uBar.value = this.#barPhase(now);
-  }
-
-  /** Realm haze and zenith (crossfaded with the band), scaled by the age's light table in #ages. */
-  #realmLight(band: number) {
-    const s = this.#shared;
-    mixHex(REALM_SHADER.haze, band, s.uHaze.value);
-    mixHex(REALM_SHADER.zenith, band, s.uZenith.value);
-  }
-
-  /**
-   * The light table over the mix (monotonic `uAge`): the land grows older, the
-   * light goes dawn, day, dusk, night (and a second dawn); magic is brightest
-   * when the land is darkest. Structures spawn only after their age arrives.
-   */
-  #ages() {
-    const s = this.#shared;
-    const minutes = this.#musicTime / 60;
-    let age = 4;
-    for (let i = 1; i < AGE_KEYS.length; i++)
-      if (minutes <= AGE_KEYS[i][0]) {
-        const p = AGE_KEYS[i - 1],
-          q = AGE_KEYS[i];
-        age = p[1] + (q[1] - p[1]) * ((minutes - p[0]) / (q[0] - p[0]));
-        break;
-      }
-    s.uAge.value = age;
-    for (let i = 0; i < 3; i++) if (age >= i + 0.5 && this.#ageCourse[i] > 1e8) this.#ageCourse[i] = this.#course;
-    this.#props.ages.set(this.#ageCourse[0], this.#ageCourse[1], this.#ageCourse[2], 0);
-    const i0 = Math.min(3, Math.floor(age)) % 4;
-    const i1 = (i0 + 1) % 4;
-    const t = age >= 4 ? 0 : age - Math.floor(age);
-    const a = AGES[age >= 4 ? 0 : i0],
-      b = AGES[age >= 4 ? 0 : i1];
-    const day = AGES[1];
-    const ha = cacheHexGet(a.haze),
-      hb = cacheHexGet(b.haze),
-      hd = cacheHexGet(day.haze);
-    const za = cacheHexGet(a.zenith),
-      zb = cacheHexGet(b.zenith),
-      zd = cacheHexGet(day.zenith);
-    const sa = cacheHexGet(a.sun),
-      sb = cacheHexGet(b.sun);
-    const haze = s.uHaze.value,
-      zen = s.uZenith.value;
-    haze.set(
-      (haze.x * (ha[0] + (hb[0] - ha[0]) * t)) / hd[0],
-      (haze.y * (ha[1] + (hb[1] - ha[1]) * t)) / hd[1],
-      (haze.z * (ha[2] + (hb[2] - ha[2]) * t)) / hd[2],
-    );
-    zen.set(
-      (zen.x * (za[0] + (zb[0] - za[0]) * t)) / zd[0],
-      (zen.y * (za[1] + (zb[1] - za[1]) * t)) / zd[1],
-      (zen.z * (za[2] + (zb[2] - za[2]) * t)) / zd[2],
-    );
-    s.uSun.value.set(sa[0] + (sb[0] - sa[0]) * t, sa[1] + (sb[1] - sa[1]) * t, sa[2] + (sb[2] - sa[2]) * t);
-    const da = SUN_DIRS[age >= 4 ? 0 : i0],
-      db = SUN_DIRS[age >= 4 ? 0 : i1];
-    this.#sunA.set(da[0], da[1], da[2]);
-    this.#sunB.set(db[0], db[1], db[2]);
-    s.uSunDir.value.lerpVectors(this.#sunA, this.#sunB, t).normalize();
-    s.uFog.value = (a.fog + (b.fog - a.fog) * t) * (this.#breakdown >= 8 ? 1.3 : 1);
-    s.uLight.value = a.light + (b.light - a.light) * t;
-    s.uMagic.value = a.magic + (b.magic - a.magic) * t;
-    s.uNight.value = Math.max(0, 1 - Math.abs(age - 3));
-    s.uAurora.value = Math.max(0, Math.min(1, (age - 2.7) * 3)) * (age < 3.9 ? 1 : 0);
-  }
-
-  /** The master deck's bar count from its grid and dead-reckoned position, or null. */
-  #masterBars(now: number) {
-    const st = waves.state;
-    if (!st) return null;
-    for (let i = 0; i < st.decks.length; i++) {
-      const d = st.decks[i];
-      if (!d.master || !d.track_id || !d.playing) continue;
-      const grid = client.deckInfo[i]?.grid;
-      if (!grid || grid.bpm <= 0) return null;
-      const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
-      return ((d.position + d.rate * age - grid.first_beat) * grid.bpm) / 240;
-    }
-    return null;
-  }
-
-  /** Waystones every 8 bars of course, so one passes the bow on each phrase downbeat (larger every 32). */
-  #waystones() {
-    const w = this.#props.waystones;
-    const next = Math.ceil(this.#bars / 8) * 8;
-    const grown = Math.min(1, Math.max(0.5, this.#shared.uAge.value * 1.4));
-    for (let j = 0; j < 4; j++) {
-      const bar = next + (j - 1) * 8;
-      const z = BOW_Z - (bar - this.#bars) * this.#perBar;
-      w[j * 4] = z;
-      w[j * 4 + 1] = grown;
-      w[j * 4 + 2] = z > 40 || z < -230 ? 0 : Math.min(1, (z + 230) / 30);
-      w[j * 4 + 3] = mod(bar, 32) === 0 ? 1 : 0;
-    }
-  }
-
-  /**
-   * Within a track: a breakdown (low band under 0.25 for 8 s) thickens the fog
-   * and slows the ley flow; a build-up (energy rising over 16 bars) brings the
-   * far dragon round the horizon; a drop after a breakdown sends a wave of
-   * light down the aimed route and a gust through the grass, and, if earned
-   * (3 min apart, once per track), the dragon's flyover.
-   */
-  #progression(now: number, dt: number, live: boolean, energy: number) {
-    const low = this.#levels[0];
-    this.#low = low;
-    const playing = this.#playing && live;
-    if (playing && low < 0.25) {
-      this.#breakdown += dt;
-      this.#lowBelowAt = now;
-    } else {
-      if (this.#breakdown >= 8) this.#breakdownEnd = now;
-      this.#breakdown = 0;
-    }
-    // Onset rate over ~2 s against the track's typical rate.
-    const kr = 1 - Math.exp(-dt / 2);
-    this.#onsetRate += ((this.#gustOnset ? 1 / Math.max(dt, 1e-3) : 0) - this.#onsetRate) * kr;
-    this.#gustOnset = false;
-    if (playing) this.#onsetMedian += (this.#onsetRate - this.#onsetMedian) * (1 - Math.exp(-dt / 40));
-    const afterBreakdown = this.#breakdown >= 8 || now - this.#breakdownEnd < 4000;
-    if (playing && afterBreakdown && low > 0.6 && now - this.#lowBelowAt < 2000 && this.#onsetRate >= this.#onsetMedian) {
-      this.#breakdownEnd = -1e9;
-      this.#drop(now);
-    }
-    // Build-up: energy sampled per bar; rising over the last 16.
-    const bar = Math.floor(this.#bars);
-    if (bar !== this.#barIndex) {
-      this.#barIndex = bar;
-      this.#barEnergy.copyWithin(0, 1);
-      this.#barEnergy[16] = energy;
-      const e = this.#barEnergy;
-      this.#buildUp = playing && e[0] > 0 && e[16] - e[0] > 0.12 && e[16] >= e[12] && e[12] >= e[8] && e[8] >= e[4] && e[4] >= e[0];
-    }
-    this.#shared.uLeyWave.value = (now - this.#waveAt) / 1000;
-  }
-  #gustOnset = false;
-
-  #drop(now: number) {
-    this.#waveAt = now;
-    this.#gust = 1;
-    const root = this.#msg?.root ?? null;
-    if (now - this.#lastFlyover >= FLYOVER_COOLDOWN && root !== this.#flownRoot) {
-      this.#flownRoot = root;
-      this.#lastFlyover = now;
-      this.#startDragon(this.#reduced ? 3 : 2);
-    }
-  }
-
-  #startDragon(mode: number) {
-    this.#dragonMode = mode;
-    this.#dragonT = 0;
-    this.#dragonD = mode === 3 ? 20 : 14;
-    this.#dragonSeed = Math.random();
-  }
-
-  /** The dragon's modes, and its shadow on the land: shadow first, body second. */
-  #dragonFrame(now: number, dt: number) {
-    const s = this.#shared;
-    void now;
-    if (this.#dragonMode === 0 && this.#buildUp && !this.#reduced) this.#startDragon(1);
-    if (this.#dragonMode === 1 && !this.#buildUp) this.#dragonMode = 0;
-    if (this.#dragonMode >= 2) {
-      this.#dragonT += dt;
-      if (this.#dragonT > this.#dragonD) this.#dragonMode = 0;
-    } else if (this.#dragonMode === 1) this.#dragonT += dt;
-    const mode = this.#dragonMode;
-    this.#dragon.mesh.visible = mode !== 0;
-    this.#dragon.dragon.set(mode, mode === 3 ? 1 : this.#dragonT, this.#dragonD, this.#dragonSeed);
-    const sh = s.uShadow.value;
-    if (mode === 2) {
-      // A soft shadow on the land, 2 s ahead of the body along its course.
-      flyover(this.#dragonT + 2, this.#dragonD, this.#dragonSeed, this.#tmp);
-      const u = this.#dragonT / this.#dragonD;
-      sh.set(this.#tmp.x, this.#tmp.z, 18, 0.22 * Math.min(1, this.#dragonT / 1.2) * Math.min(1, (1 - u) * 6));
-    } else sh.w = 0;
-  }
-
-  #barPhase(now: number) {
-    const st = waves.state;
-    if (st) {
-      for (let i = 0; i < st.decks.length; i++) {
-        const d = st.decks[i];
-        if (!d.master || !d.track_id) continue;
-        const grid = client.deckInfo[i]?.grid;
-        if (!grid || grid.bpm <= 0) break;
-        const age = Math.min(1, Math.max(0, (now - waves.stateAt) / 1000));
-        const pos = d.position + (d.playing ? d.rate * age : 0);
-        const bars = ((pos - grid.first_beat) * grid.bpm) / 240;
-        return bars - Math.floor(bars);
-      }
-    }
-    return (this.#time * 0.5) % 1;
   }
 
   // ---------------------------------------------------------------------------
@@ -1559,31 +1265,38 @@ export class ExploreEngine {
     this.#width = Math.max(1, el.clientWidth);
     this.#height = Math.max(1, el.clientHeight);
     this.#applySize();
-    this.#placeVessel();
     if (this.#msg && this.#children.length) {
-      this.#layoutSlots(this.#msg);
-      this.#writeSpires(this.#msg);
-      this.#writeRoutes(this.#msg);
+      this.#endFlight();
+      this.#build(this.#tree, this.#msg, this.#now(), true);
+      this.#project();
       this.#layoutLabels();
-    }
+    } else this.#project();
   };
   #applySize() {
     this.#renderer.setPixelRatio(this.#dpr);
     this.#renderer.setSize(this.#width, this.#height, false);
     this.#camera.aspect = this.#width / this.#height;
     this.#camera.updateProjectionMatrix();
+    const w = Math.max(1, Math.round(this.#width * this.#dpr)),
+      h = Math.max(1, Math.round(this.#height * this.#dpr));
+    const make = (rw: number, rh: number, samples = 0) =>
+      new THREE.WebGLRenderTarget(Math.max(1, rw), Math.max(1, rh), { type: this.#rtType, samples, depthBuffer: samples > 0, colorSpace: THREE.NoColorSpace });
+    for (const rt of [this.#rtScene, this.#rtA, this.#rtB, this.#rtC, this.#rtD]) rt?.dispose();
+    this.#rtScene = make(w, h, 4);
+    this.#rtA = make(w >> 2, h >> 2);
+    this.#rtB = make(w >> 2, h >> 2);
+    this.#rtC = make(w >> 3, h >> 3);
+    this.#rtD = make(w >> 3, h >> 3);
+    this.#post.composite.uniforms.uRes.value.set(w, h);
   }
   #pick(e: MouseEvent) {
     const rect = this.#o.canvas.getBoundingClientRect();
     let best = -1;
-    let distance = 48;
+    let distance = 56;
     const x = e.clientX - rect.left,
       y = e.clientY - rect.top;
     for (let i = 0; i < this.#children.length; i++) {
-      const d = Math.min(
-        Math.hypot(x - this.#anchors[i * 2], y - this.#anchors[i * 2 + 1]),
-        Math.hypot(x - this.#gates[i * 2], y - this.#gates[i * 2 + 1]),
-      );
+      const d = Math.min(Math.hypot(x - this.#anchors[i * 2], y - this.#anchors[i * 2 + 1]), Math.hypot(x - this.#gates[i * 2], y - this.#gates[i * 2 + 1]));
       if (d < distance) {
         distance = d;
         best = i;
@@ -1630,14 +1343,15 @@ export class ExploreEngine {
     this.#o.labels.removeEventListener('click', this.#labelClick);
     this.#o.labels.removeEventListener('dblclick', this.#labelDoubleClick);
     this.#labels.clear();
-    this.#scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        obj.geometry.dispose();
-        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-        else obj.material.dispose();
-      }
-    });
-    this.#shared.uRunes.value?.dispose();
+    for (const t of this.#trees) t.dispose();
+    for (const g of this.#geos) g.dispose();
+    for (const m of [this.#sky, this.#floor, this.#streaks]) {
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    for (const m of [this.#post.bright, this.#post.blur, this.#post.composite]) m.dispose();
+    for (const rt of [this.#rtScene, this.#rtA, this.#rtB, this.#rtC, this.#rtD]) rt.dispose();
+    this.#scroller.tex.dispose();
     this.#renderer.dispose();
   }
 }
@@ -1649,7 +1363,6 @@ type Qa = {
   pending: { reason: string; recv: number; handled: number; aim: string | null; count: number } | null;
   records: { reason: string; recv: number; handled: number; raf: number; frame: number; labelOk: boolean; routeOk: boolean }[];
   gpu: number[];
-  /** Per-frame CPU time of the world (JS + draw submission), a ring of the last 2048 frames. */
   cpu: Float64Array;
   cpuAt: number;
 };
@@ -1658,57 +1371,65 @@ export function createExploreEngine(o: EngineOptions) {
   return new ExploreEngine(o);
 }
 
+type Rails = ReturnType<typeof makeRails>;
+type Pt = { x: number; y: number };
+const A: Pt = { x: 0, y: 0 },
+  B: Pt = { x: 0, y: 0 };
+
+/** One flat strip along `curve` (u 0..1 → x, z): `count` segments, `half` wide each side. */
+function strip(r: Rails, seg: number, slot: number, count: number, half: number, curve: (u: number, out: Pt) => void) {
+  const P = r.positions,
+    R = r.rails;
+  let dist = 0;
+  for (let k = 0; k < count; k++) {
+    const t0 = k / count,
+      t1 = (k + 1) / count;
+    curve(t0, A);
+    curve(t1, B);
+    const tx = B.x - A.x,
+      tz = B.y - A.y;
+    const len = Math.hypot(tx, tz) || 1;
+    const nx = -tz / len,
+      nz = tx / len;
+    const d0 = dist,
+      d1 = dist + len;
+    dist = d1;
+    const v = seg * 6;
+    for (let c = 0; c < 6; c++) {
+      // Two triangles: (a−, a+, b+), (a−, b+, b−).
+      const atB = c === 2 || c === 4 || c === 5;
+      const side = c === 1 || c === 2 || c === 4 ? 1 : -1;
+      const x = atB ? B.x : A.x,
+        z = atB ? B.y : A.y;
+      P[(v + c) * 3] = x + nx * half * side;
+      P[(v + c) * 3 + 1] = 0.03;
+      P[(v + c) * 3 + 2] = z + nz * half * side;
+      R[(v + c) * 4] = slot;
+      R[(v + c) * 4 + 1] = atB ? t1 : t0;
+      R[(v + c) * 4 + 2] = side;
+      R[(v + c) * 4 + 3] = atB ? d1 : d0;
+    }
+    seg++;
+  }
+  return seg;
+}
+
+function bezier(ax: number, az: number, bx: number, bz: number, cx: number, cz: number, dx: number, dz: number, u: number, o: Pt) {
+  const v = 1 - u;
+  const a = v * v * v,
+    b = 3 * v * v * u,
+    c = 3 * v * u * u,
+    d = u * u * u;
+  o.x = a * ax + b * bx + c * cx + d * dx;
+  o.y = a * az + b * bz + c * cz + d * dz;
+}
+
 function smoothstep(a: number, b: number, v: number) {
   const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
   return t * t * (3 - 2 * t);
 }
 
-function mod(a: number, p: number) {
-  return ((a % p) + p) % p;
-}
-
 function hexVec(hex: string, out: THREE.Vector3) {
   const n = Number.parseInt(hex.slice(1), 16);
   out.set(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
-}
-
-/** Interpolate a 3-stop hex table by band (0..2) into `out`, without allocating. */
-function mixHex(table: readonly string[], band: number, out: THREE.Vector3) {
-  const i = Math.min(1, Math.floor(band));
-  const t = Math.max(0, Math.min(1, band - i));
-  const a = HEX_CACHE.get(table[i]) ?? cacheHex(table[i]);
-  const b = HEX_CACHE.get(table[i + 1]) ?? cacheHex(table[i + 1]);
-  out.set(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t);
-}
-const HEX_CACHE = new Map<string, [number, number, number]>();
-function cacheHexGet(hex: string) {
-  return HEX_CACHE.get(hex) ?? cacheHex(hex);
-}
-
-/** CPU twin of the dragon's flyover path (props.ts), for its shadow. */
-function flyover(t: number, D: number, seed: number, out: THREE.Vector3) {
-  const u = Math.max(0, Math.min(1, t / D));
-  const side = seed < 0.5 ? 1 : -1;
-  const ax = 130 * side,
-    ay = 74,
-    az = -140,
-    bx = 20 * side,
-    by = 46,
-    bz = -230,
-    cx = -260 * side,
-    cy = 30,
-    cz = -300;
-  const abx = ax + (bx - ax) * u,
-    aby = ay + (by - ay) * u,
-    abz = az + (bz - az) * u;
-  const bcx = bx + (cx - bx) * u,
-    bcy = by + (cy - by) * u,
-    bcz = bz + (cz - bz) * u;
-  out.set(abx + (bcx - abx) * u, aby + (bcy - aby) * u, abz + (bcz - abz) * u);
-}
-function cacheHex(hex: string) {
-  const n = Number.parseInt(hex.slice(1), 16);
-  const v: [number, number, number] = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-  HEX_CACHE.set(hex, v);
-  return v;
 }

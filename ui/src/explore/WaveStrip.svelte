@@ -30,7 +30,7 @@
 </script>
 
 <div class="strip" role="img" aria-label="The Current: four deck waveforms, four seconds before and after the playhead">
-  <div class="caption"><span>THE CURRENT / −4 s</span><b>NOW</b><span>+4 s / FOUR KEEPERS · ONE CURRENT</span></div>
+  <div class="caption"><span>−4 s</span><b>NOW</b><span>+4 s / FOUR DECKS · ONE STREAM</span></div>
   <canvas bind:this={canvas}></canvas>
 </div>
 

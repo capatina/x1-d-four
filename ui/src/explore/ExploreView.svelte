@@ -126,8 +126,8 @@
     boxes.observe(sideEl);
     window.addEventListener('resize', obstacles);
 
-    // Keepers stand on the strip's top edge, each above its deck card.
-    const keepers = () => {
+    // The decks' lasers rise from the strip's top edge, one above each deck card.
+    const decks = () => {
       if (!engine) return;
       const strip = footerEl.querySelector('.strip')?.getBoundingClientRect();
       const cards = footerEl.querySelectorAll('.hud .deck');
@@ -135,11 +135,11 @@
         const r = c.getBoundingClientRect();
         return r.left + r.width / 2;
       });
-      if (strip && xs.length === 4) engine.setKeepers(xs, strip.top);
+      if (strip && xs.length === 4) engine.setDecks(xs, strip.top);
     };
-    const footerBox = new ResizeObserver(keepers);
+    const footerBox = new ResizeObserver(decks);
     footerBox.observe(footerEl);
-    window.addEventListener('resize', keepers);
+    window.addEventListener('resize', decks);
 
     // three.js lives in its own chunk, loaded the first time Explore opens.
     import('./engine')
@@ -158,10 +158,10 @@
           onStats: showStats ? (s) => (stats = { ...s }) : undefined,
         });
         local.engine = engine;
-        if (new URLSearchParams(location.search).has('qa')) (window as unknown as { __wayfaring: unknown }).__wayfaring = engine.qa();
+        if (new URLSearchParams(location.search).has('qa')) (window as unknown as { __datastream: unknown }).__datastream = engine.qa();
         engine.setExplore(client.explore);
         obstacles();
-        keepers();
+        decks();
       })
       .catch((err: unknown) => {
         if (!cancelled) failed = err instanceof Error ? err.message : String(err);
@@ -173,7 +173,7 @@
       boxes.disconnect();
       footerBox.disconnect();
       window.removeEventListener('resize', obstacles);
-      window.removeEventListener('resize', keepers);
+      window.removeEventListener('resize', decks);
       motion.removeEventListener('change', onMotion);
       local.engine = null;
       engine?.dispose();
@@ -181,7 +181,7 @@
     };
   });
 
-  // The realm cartouche comes and goes with the root.
+  // The sector title comes and goes with the root.
   $effect(() => {
     const el = realmEl;
     if (!el || !engine) return;
@@ -231,7 +231,7 @@
   style:--band-b={pal.b}
   style:--hot={pal.hot}
   role="application"
-  aria-label="Explore: the Wayfaring"
+  aria-label="Explore: the Datastream"
 >
   <div class="stage">
     <canvas bind:this={canvas} aria-hidden="true"></canvas>
@@ -316,7 +316,7 @@
             <span class="meter"><span style:transform="scaleX({analysis.total ? analysis.done / analysis.total : 0})"></span></span></span
           ><i>·</i>
         {/if}
-        {children.length} {children.length === 1 ? 'route' : 'routes'} from here <i>·</i> let the music lead
+        {children.length} {children.length === 1 ? 'path' : 'paths'} ahead <i>·</i> aim to branch, load to fly
         {#if (ex?.path.length ?? 0) > 1}
           <button type="button" class="upstream" onclick={() => client.send({ cmd: 'explore_back' })}>← Upstream</button>
         {/if}
@@ -342,7 +342,7 @@
   {#if showStats && stats}
     <div class="stats" role="status">
       {stats.fps} fps · {stats.calls} calls · {(stats.triangles / 1000).toFixed(0)}k tris · dpr {stats.dpr.toFixed(2)} · world {stats.frameMs.toFixed(2)} ms · wave {waveMs.toFixed(2)} ms
-      <span class="growth">growth {Math.round(stats.growth * 100)}% · age {stats.age.toFixed(2)} · course {stats.course.toFixed(0)} · {stats.speed.toFixed(2)} u/s{stats.gpuMs ? ` · gpu ${stats.gpuMs.toFixed(2)} ms` : ''}</span>
+      <span class="growth">course {stats.course.toFixed(0)} · {stats.speed.toFixed(1)} u/s{stats.gpuMs ? ` · gpu ${stats.gpuMs.toFixed(2)} ms` : ''}</span>
     </div>
   {/if}
 
@@ -352,7 +352,7 @@
   <!-- Empty / waiting states -->
   {#if failed}
     <div class="center">
-      <p class="big">The landscape needs WebGL</p>
+      <p class="big">The Datastream needs WebGL</p>
       <p class="sub">{failed}</p>
       {#if children.length}
         <ul class="fallback">
@@ -371,7 +371,7 @@
   {:else if !hasRoot}
     <div class="center">
       <p class="big">Load a track onto the focused deck</p>
-      <p class="sub">The journey starts from the focused deck's track, in {pal.place} ({pal.label.toLowerCase()} band).</p>
+      <p class="sub">The flight starts from the focused deck's track, in {pal.place} ({pal.label.toLowerCase()} band).</p>
       <div class="actions">
         {#if selected}
           <button type="button" class="primary" onclick={() => client.send({ cmd: 'explore_root', id: selected })}>
@@ -411,8 +411,28 @@
     inset: 0;
     z-index: 15;
     overflow: hidden;
-    background: #25392e;
+    background: #000;
     color: var(--text);
+    /* The demo's own ink: black glass, white type, the band's neon. */
+    --bg-0: #000;
+    --bg: #04020a;
+    --bg-1: #080512;
+    --bg-2: #0d0a1a;
+    --bg-3: #151126;
+    --bg-4: #221c38;
+    --line: #2a2342;
+    --line-2: #3d3460;
+    --text: #ffffff;
+    --text-2: #d6d9f0;
+    --text-3: #a4a8c8;
+    --text-4: #6b6f92;
+    --ok: #5dffb0;
+    --warn: #ffd23f;
+    --bad: #ff4d6d;
+    --focus: var(--band);
+    --parchment: #ffffff;
+    --font-display: 'JetBrains Mono', 'JetBrainsMono Nerd Font', ui-monospace, monospace;
+    --glass: rgba(4, 2, 12, 0.78);
     user-select: none;
     -webkit-user-select: none;
   }
@@ -433,7 +453,7 @@
     pointer-events: none;
     overflow: hidden;
   }
-  /* The edge of the view brightens in the realm's hot colour as a gate passes overhead. */
+  /* The edge of the view flashes in the band's hot colour as a gate passes overhead. */
   .gate-glow {
     position: absolute;
     inset: 0;
@@ -453,45 +473,51 @@
   .vignette {
     pointer-events: none;
     background:
-      linear-gradient(to bottom, #14291fd9, #172b1c00 130px),
-      linear-gradient(to top, #14251ef5, #1b3028b0 140px, transparent 32%);
+      linear-gradient(to bottom, #000000c0, #00000000 120px),
+      linear-gradient(to top, #000000f0, #000000a0 140px, transparent 30%);
   }
 
-  /* The realm's name: lore lives in place names only. */
-  .realm { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; max-width: min(40vw, 520px); pointer-events: none; color: var(--parchment); text-align: center; text-shadow: 0 2px 16px #121e17a0; }
-  .realm .eyebrow { font: 400 10px/1.2 var(--font-display); font-variant-caps: all-small-caps; letter-spacing: .18em; font-size: 12px; color: color-mix(in srgb, var(--band) 70%, var(--parchment)); }
-  .realm h1 { margin: 2px 0 0; font: 400 clamp(24px, 2.25vw, 40px)/1.05 var(--font-display); letter-spacing: -.02em; white-space: nowrap; }
-  .realm p { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; font-size: 11.5px; color: #e3e0cc; }
+  /* The sector's name: a chrome logo, demo style. */
+  .realm { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; max-width: min(44vw, 560px); pointer-events: none; text-align: center; }
+  .realm .eyebrow { font: 700 11px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: .32em; color: var(--band); text-shadow: 0 0 10px var(--band); }
+  .realm h1 {
+    margin: 2px 0 0; font: italic 900 clamp(26px, 2.6vw, 46px)/1 'Arial Black', 'Helvetica Neue', Impact, sans-serif; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap;
+    background: linear-gradient(#ffffff 0%, #e6ecff 44%, var(--band) 50%, #1a0b33 78%, #ffffff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    -webkit-text-stroke: 1px #00000080;
+    filter: drop-shadow(0 0 14px color-mix(in srgb, var(--band) 55%, transparent));
+  }
+  .realm p { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; font: 600 11px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: .12em; color: #d6d9f0; }
   .realm i { font-style: normal; color: var(--band); }
-  .realm .analysis { display: inline-flex; align-items: center; gap: 6px; font: 400 12px/1 var(--font-display); font-variant-caps: all-small-caps; letter-spacing: .12em; color: var(--band); }
-  .realm .analysis b { font: 650 11px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--parchment); letter-spacing: 0; }
-  .realm .analysis small { font-size: 10px; color: #c0c5b0; }
-  .upstream { pointer-events: auto; padding: 3px 8px; border: 1px solid #dedbb955; border-radius: 6px; background: #121e17cc; color: #eee9d3; font-size: 11.5px; cursor: pointer; }
+  .realm .analysis { display: inline-flex; align-items: center; gap: 6px; color: var(--band); }
+  .realm .analysis b { font: 650 11px var(--font-mono); font-variant-numeric: tabular-nums; color: #fff; letter-spacing: 0; }
+  .realm .analysis small { font-size: 10px; color: #a4a8c8; }
+  .upstream { pointer-events: auto; padding: 3px 8px; border: 1px solid var(--band); border-radius: 0; background: var(--glass); color: #fff; font: 700 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .1em; cursor: pointer; }
   .growth { display: block; opacity: .8; }
 
-  /* Route labels: ink and parchment; the aimed one gains a band rule and grows upward only. */
+  /* Path labels: black glass, a neon hairline, mono type; the aimed one locks on and grows upward only. */
   .labels :global(.xl) {
-    position: absolute; left: 0; top: 0; padding: 9px 11px 10px;
-    border: 0; border-top: 1px solid #e9ddaf40; border-radius: 0;
-    color: var(--parchment); background: #121e17cc;
-    text-align: center; pointer-events: auto; cursor: pointer;
-    box-shadow: 0 6px 22px #0c140f2e;
+    position: absolute; left: 0; top: 0; padding: 8px 10px 9px;
+    border: 1px solid color-mix(in srgb, var(--band) 35%, transparent); border-radius: 0;
+    color: #fff; background: var(--glass);
+    text-align: left; pointer-events: auto; cursor: pointer;
+    box-shadow: 0 0 18px #0008;
     will-change: transform;
   }
   .labels :global(.xl)::after {
     content: ''; position: absolute; height: var(--stem, 19px); width: 1px;
-    top: 100%; left: 50%; background: linear-gradient(#e6d8a788, #e6d8a720);
+    top: 100%; left: 50%; background: linear-gradient(color-mix(in srgb, var(--band) 70%, transparent), transparent);
   }
-  .labels :global(.xl:hover), .labels :global(.xl:focus-visible) { background: #182a20ee; }
+  .labels :global(.xl:hover), .labels :global(.xl:focus-visible) { background: #0d0a1aee; border-color: var(--band); }
   .labels :global(.xl-leaving) { pointer-events: none; }
   .labels :global(.xl-t), .labels :global(.xl-a), .labels :global(.xl-m) { display: block; }
-  .labels :global(.xl-t) { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; font: 560 clamp(12px, .84vw, 15px)/1.28 var(--font-ui); text-wrap: balance; }
-  .labels :global(.xl-a) { font-size: 11px; color: #cfcab3; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .labels :global(.xl-m) { margin-top: 6px; font: 500 10px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; color: #ddd3b4; white-space: pre; }
-  .labels :global(.xl[data-kind='aimed']) { z-index: 2; border-top: 2px solid var(--band); background: #121e17e6; box-shadow: 0 8px 26px #0c140f40, inset 0 1px 0 color-mix(in srgb, var(--band) 30%, transparent); }
-  .labels :global(.xl[data-kind='aimed'])::before { content: 'aimed · next gate'; display: block; margin-bottom: 4px; font: 400 12px/1.2 var(--font-display); font-variant-caps: all-small-caps; letter-spacing: .18em; color: var(--band); }
-  .labels :global(.xl[data-kind='aimed'] .xl-t) { font-family: var(--font-display); font-weight: 400; letter-spacing: -.01em; font-size: clamp(13px, .95vw, 17px); }
-  .labels :global(.xl[data-kind='aimed'])::after { background: linear-gradient(var(--band), color-mix(in srgb, var(--band) 20%, transparent)); }
+  .labels :global(.xl-t) { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; font: 700 clamp(12px, .84vw, 15px)/1.25 var(--font-ui); text-wrap: balance; }
+  .labels :global(.xl-a) { font-size: 11px; color: #a4a8c8; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .labels :global(.xl-m) { margin-top: 6px; font: 600 10px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--band) 60%, #fff); white-space: pre; }
+  .labels :global(.xl[data-kind='aimed']) { z-index: 2; border: 1px solid var(--band); background: #05020dee; box-shadow: 0 0 0 1px #000, 0 0 24px color-mix(in srgb, var(--band) 45%, transparent), inset 0 0 18px color-mix(in srgb, var(--band) 14%, transparent); }
+  .labels :global(.xl[data-kind='aimed'])::before { content: '▶ locked · next path'; display: block; margin: -8px -10px 6px; padding: 3px 10px; background: var(--band); font: 800 10px/1.3 var(--font-mono); text-transform: uppercase; letter-spacing: .16em; color: #000; }
+  .labels :global(.xl[data-kind='aimed'] .xl-t) { font-size: clamp(13px, .95vw, 17px); }
+  .labels :global(.xl[data-kind='aimed'])::after { width: 2px; background: linear-gradient(var(--band), transparent); box-shadow: 0 0 8px var(--band); }
   .labels :global(.xl[data-kind='aimed'] .xl-m) { color: var(--band); }
 
   /* Info strip */
@@ -511,19 +537,19 @@
   }
   .brand {
     margin-right: 6px;
-    font: 800 13px/1 var(--font-ui);
+    font: italic 900 14px/1 'Arial Black', var(--font-ui);
     letter-spacing: 0.18em;
     color: var(--text);
   }
   .brand span {
-    color: #c0c5b0;
+    color: #a4a8c8;
   }
   .bands {
     display: inline-flex;
     padding: 2px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
-    background: rgba(26, 40, 32, 0.78);
+    background: var(--glass);
   }
   .band {
     height: 26px;
@@ -533,7 +559,7 @@
     background: transparent;
     font: 750 11.5px/1 var(--font-ui);
     letter-spacing: 0.12em;
-    color: #c0c5b0;
+    color: #a4a8c8;
     cursor: pointer;
   }
   .band:hover {
@@ -542,8 +568,8 @@
   .band.on {
     background: color-mix(in srgb, var(--c) 22%, transparent);
     box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--c) 65%, transparent),
-      0 1px 4px #18251b33;
+      inset 0 0 0 1px var(--c),
+      0 0 12px color-mix(in srgb, var(--c) 45%, transparent);
     color: var(--c);
   }
   .chip {
@@ -554,7 +580,7 @@
     padding: 0 10px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
-    background: rgba(26, 40, 32, 0.78);
+    background: var(--glass);
     font-size: 12px;
     font-weight: 600;
     color: var(--text-2);
@@ -583,14 +609,14 @@
   }
   .chip small {
     font-size: 10px;
-    color: #c0c5b0;
+    color: #a4a8c8;
   }
   .k {
     font-size: 10.5px;
     font-weight: 650;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #c0c5b0;
+    color: #a4a8c8;
   }
   .meter {
     width: 70px;
@@ -627,7 +653,7 @@
   .where .artist {
     overflow: hidden;
     text-overflow: ellipsis;
-    color: #c0c5b0;
+    color: #a4a8c8;
   }
   .tag {
     padding: 0 5px;
@@ -646,7 +672,7 @@
     padding: 0 0 0 2px;
     list-style: none;
     font-size: 11.5px;
-    color: #c0c5b0;
+    color: #a4a8c8;
   }
   .crumbs li {
     max-width: 180px;
@@ -660,9 +686,8 @@
     color: var(--text-4);
   }
   .crumbs li.last {
-    color: var(--parchment);
-    font-family: var(--font-display);
-    font-size: 12.5px;
+    color: var(--band);
+    font-weight: 700;
   }
   .crumbs li.scout {
     margin-left: 8px;
@@ -696,7 +721,7 @@
     padding: 0 12px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
-    background: rgba(26, 40, 32, 0.78);
+    background: var(--glass);
     font: 600 12.5px/1 var(--font-ui);
     color: var(--text-2);
     white-space: nowrap;
@@ -726,7 +751,7 @@
   .hint {
     align-self: center;
     font-size: 13px;
-    color: #c0c5b0;
+    color: #a4a8c8;
   }
   .stats {
     position: absolute;
