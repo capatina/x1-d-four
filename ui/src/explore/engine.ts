@@ -20,6 +20,7 @@ import {
   LOOK_D,
   LOOK_Y,
   makeFloor,
+  makeArches,
   makeMonoliths,
   makePackets,
   makePlanet,
@@ -101,6 +102,8 @@ const WORLD_LAYERS: readonly (readonly [number, number, number, number])[] = [
   [0, 1, 0, 1],
   [0, 1, 1, 0],
 ];
+/** Seconds of (weighted) music between genome mutations. */
+const MUTATE_S = 75;
 /** A world evolves fully over this much music. */
 const EVO_S = 240;
 /** The hyperjump: 1.5 s, the world swapping under the white-out at 43 %. */
@@ -260,6 +263,7 @@ export class ExploreEngine {
   readonly #monoliths: THREE.Mesh;
   readonly #packets: THREE.Points;
   readonly #worldTunnel: THREE.Mesh;
+  readonly #arches: THREE.Mesh;
   /** One guardian per deck: its sigil as a big wireframe solid, in its colour, answering to its deck. */
   readonly #guardians: { mesh: THREE.Mesh; inner: THREE.Mesh; alpha: { value: number }; lit: { value: number }; innerLit: { value: number }; spin: number; scale: number }[] = [];
   readonly #deckBeat = new Float64Array(4);
@@ -338,6 +342,26 @@ export class ExploreEngine {
   #scratch = 0;
   // Worlds: where we are, how long we've been here (music s), the jump in progress, the climax watch
   #world = 0;
+  /** Hybrid worlds: where the land, the sky and the paths each come from. */
+  #worldF = 0;
+  #worldS = 0;
+  #worldP = 0;
+  /**
+   * The genome: 16 parameters that drift (τ 8 s) toward targets that mutate
+   * forever: every ~75 s of music (sooner with bass, MIDI and branches, bigger
+   * the deeper in the tree), and hard on every climax. Each session starts from
+   * its own seed, so the world never repeats.
+   */
+  readonly #genome = new Float32Array(16).fill(0.5);
+  readonly #genomeTarget = new Float32Array(16).fill(0.5);
+  #mutations = 0;
+  #mutateClock = 0;
+  readonly #seed = (Math.random() * 0xffffffff) >>> 0;
+  // Phrase arches: the bar clock (when no master grid), smoothed speed, last phrase passed
+  #barClock = 0;
+  #speedS = 0;
+  #phrase = -1;
+  #archPassT0 = -1e9;
   #worldTime = 0;
   #jumps = 0;
   #jumpT0 = -1e9;
@@ -429,6 +453,7 @@ export class ExploreEngine {
     this.#packets = makePackets(s);
     this.#worldTunnel = makeWorldTunnel(s);
     this.#worldTunnel.visible = false;
+    this.#arches = makeArches(s);
     // The decks' sigils (◆ ▲ ● ■): octahedron, tetrahedron, geodesic sphere, icosahedron.
     const sigil = [1, 2, 3, 0];
     for (let i = 0; i < 4; i++) {
@@ -452,7 +477,7 @@ export class ExploreEngine {
     this.#tunnel = makeTunnel(s);
     this.#planet = makePlanet(s, geos[3]);
     this.#renderer.sortObjects = true;
-    this.#scene.add(this.#sky, this.#floor, this.#worldTunnel, this.#monoliths, this.#planet.planet, this.#trees[0].group, this.#trees[1].group, this.#tunnel, this.#packets, this.#camera);
+    this.#scene.add(this.#sky, this.#floor, this.#worldTunnel, this.#monoliths, this.#planet.planet, this.#trees[0].group, this.#trees[1].group, this.#tunnel, this.#arches, this.#packets, this.#camera);
 
     this.#setBand('low', true);
     this.#rest.position.set(0, CAM_H, 0);
@@ -510,7 +535,10 @@ export class ExploreEngine {
       this.#endFlight();
       const from = this.#tree;
       this.#children = children;
-      if (taken >= 0) this.#genTime += GEN_PER_BRANCH_S;
+      if (taken >= 0) {
+        this.#genTime += GEN_PER_BRANCH_S;
+        this.#mutateClock += 15;
+      }
       if (!this.#reduced && taken >= 0) this.#fly(from, taken, false, msg, now);
       else if (!this.#reduced && moved && msg.reason === 'back') this.#fly(from, -1, true, msg, now);
       else {
@@ -549,6 +577,7 @@ export class ExploreEngine {
     if (now - this.#dataGenAt > 150) {
       this.#dataGenAt = now;
       this.#genTime += 1;
+      this.#mutateClock += 0.5;
     }
     if (msg.event === 'delta' && /jog$/.test(control)) this.#scratch += v * (control.includes('right') ? 0.6 : 2.2);
     if (this.#reduced) return;
@@ -636,7 +665,7 @@ export class ExploreEngine {
     this.#accentFrom.copy(s.uAccent.value);
     this.#hotFrom.copy(s.uHot.value);
     // The band's colour, tinted toward the world's, then toward the loudest deck's.
-    const w = WORLDS[this.#world];
+    const w = WORLDS[this.#worldS];
     hexVec(pal.css, this.#accentTo);
     hexVec(w.tint, this.#tint);
     this.#accentTo.lerp(this.#tint, w.mix);
@@ -666,21 +695,95 @@ export class ExploreEngine {
     }
   }
 
-  /** Land in world `w`: its look, its path shapes, its title card. */
-  #enterWorld(w: number, now: number) {
+  /**
+   * Land in the next world: for the first round, each world whole; after that,
+   * hybrids: the land, the sky and the paths each from a world of their own (125
+   * mixes, never the same twice in a row). `pure` forces world `w` whole.
+   */
+  #enterWorld(w: number, now: number, pure = false) {
     this.#world = w;
     this.#worldTime = 0;
+    let f = w,
+      sk = w,
+      pa = w;
+    if (!pure && this.#jumps >= WORLDS.length) {
+      const r = mulberry32(this.#seed ^ Math.imul(this.#jumps, 2654435761));
+      do {
+        f = Math.floor(r() * WORLDS.length);
+        sk = Math.floor(r() * WORLDS.length);
+        pa = Math.floor(r() * WORLDS.length);
+      } while (f === this.#worldF && sk === this.#worldS && pa === this.#worldP);
+    }
+    this.#worldF = f;
+    this.#worldS = sk;
+    this.#worldP = pa;
     const s = this.#shared;
-    s.uWorld.value = w;
+    s.uWorldF.value = f;
+    s.uWorldS.value = sk;
+    s.uWorldP.value = pa;
     s.uEvo.value = 0;
     s.uJumps.value = this.#jumps;
-    this.#floor.visible = w !== 2;
-    this.#worldTunnel.visible = w === 2;
+    this.#floor.visible = f !== 2;
+    this.#worldTunnel.visible = f === 2;
     this.#setBand(this.#band, true);
-    this.#post.composite.uniforms.uScan.value = WORLDS[w].scan;
+    this.#post.composite.uniforms.uScan.value = WORLDS[f].scan;
     // The paths take the new world's shape (same slots, so the labels stay put).
     if (this.#msg?.current && this.#children.length && !this.#flight) this.#build(this.#tree, this.#msg, now, true);
-    this.#o.onWorld?.(w, WORLDS[w].name);
+    this.#o.onWorld?.(pa, WORLDS[pa].name);
+  }
+
+  /** Mutate the genome's targets: each gene steps by up to ±strength, and now and then leaps anywhere. */
+  #mutate(strength: number) {
+    this.#mutations++;
+    const r = mulberry32(this.#seed ^ Math.imul(this.#mutations, 0x9e3779b1));
+    for (let i = 0; i < 16; i++) {
+      let t = this.#genomeTarget[i] + (r() - 0.5) * 2 * strength;
+      if (r() < 0.15 * strength) t = r();
+      // Reflect at the ends, so genes don't stick there.
+      if (t < 0) t = -t;
+      if (t > 1) t = 2 - t;
+      this.#genomeTarget[i] = Math.max(0, Math.min(1, t));
+    }
+  }
+
+  /** The genome drifts toward its targets; music time (and depth in the tree) brings the next mutation. */
+  #genomeFrame(dt: number, live: boolean) {
+    if (this.#playing && live) this.#mutateClock += dt * (0.6 + 0.8 * Math.min(1, this.#shared.uBass.value)) * this.#gate();
+    if (this.#mutateClock >= MUTATE_S) {
+      this.#mutateClock = 0;
+      const depth = Math.min(6, (this.#msg?.path.length ?? 1) - 1);
+      this.#mutate(0.25 + 0.07 * depth);
+    }
+    const k = 1 - Math.exp(-dt / 8);
+    for (let i = 0; i < 16; i++) this.#genome[i] += (this.#genomeTarget[i] - this.#genome[i]) * k;
+    this.#shared.uGenome.value.set(this.#genome);
+    this.#shared.uHue.value = (this.#genome[7] - 0.5) * 0.5;
+  }
+
+  /**
+   * Phrase arches: one on each of the next four 8-bar phrase downbeats, placed so
+   * we fly through it on the downbeat (its distance = time to the downbeat × our
+   * speed). The next one flashes as it reaches us.
+   */
+  #archFrame(now: number, dt: number) {
+    const beats = this.#masterBeats(now);
+    const bars = beats !== null ? beats / 4 : this.#barClock;
+    const perSec = Math.max(0.1, this.#bpm / 240);
+    this.#speedS += (this.#speed - this.#speedS) * (1 - Math.exp(-dt / 0.8));
+    const on = this.#playing && !this.#reduced ? this.#gate() : 0;
+    const phrase = Math.floor(bars / 8);
+    if (phrase !== this.#phrase) {
+      if (this.#phrase >= 0 && on > 0.3) this.#archPassT0 = now;
+      this.#phrase = phrase;
+    }
+    const arches = this.#shared.uArch.value;
+    for (let j = 0; j < 4; j++) {
+      const b = (phrase + 1 + j) * 8;
+      const dist = ((b - bars) / perSec) * Math.max(8, this.#speedS);
+      const sides = 3 + Math.floor(((this.#genome[14] + b * 0.1234) % 1) * 6);
+      const flash = Math.exp(-Math.max(0, dist) / 25);
+      arches[j].set(dist, sides, flash, on * smoothstep(1100, 600, dist));
+    }
   }
 
   /**
@@ -796,6 +899,7 @@ export class ExploreEngine {
   /** The hyperjump into the next world: stretch, white-out, swap, land. */
   #jump(now: number) {
     if (this.#jumpT0 + JUMP_MS > now) return;
+    this.#mutate(0.7);
     this.#lastJump = now;
     this.#jumps++;
     this.#drop(now);
@@ -890,7 +994,7 @@ export class ExploreEngine {
       const len = Math.hypot(dx, dz) || 1;
       const tx = dx / len,
         tz = dz / len;
-      const curve = pathCurve(this.#world, gx, gz, tx, tz, len, i);
+      const curve = pathCurve(this.#worldP, gx, gz, tx, tz, len, i);
       // Arrive heading the way the curve does (the flight lands facing along it).
       const q0 = { x: 0, y: 0 },
         q1 = { x: 0, y: 0 };
@@ -1164,6 +1268,8 @@ export class ExploreEngine {
     this.#travel(now, dt, energy, live);
     this.#decays(now, dt);
     this.#climax(now, dt, live);
+    this.#genomeFrame(dt, live);
+    this.#archFrame(now, dt);
     this.#masterFrame(now, dt);
     // Each mixer channel's bands, each driving its own part of the world.
     updateChannels(now);
@@ -1315,6 +1421,7 @@ export class ExploreEngine {
     const viz = this.#o.viz;
     const bpm = (live && viz.bpm) || master || any || 120;
     this.#bpm = bpm;
+    if (this.#playing) this.#barClock += dt * (bpm / 240);
     if (playing !== this.#playing) {
       this.#playing = playing;
       // Play: 50 % at once, full in 400 ms. Stop: half at once, then drift down.
@@ -1453,12 +1560,14 @@ export class ExploreEngine {
     const kick = this.#shared.uKick.value;
     const st2 = this.#stretch;
     const white = this.#jumpT0 + JUMP_MS > now ? Math.max(0, 1 - Math.abs((now - this.#jumpT0) / JUMP_MS - JUMP_SWAP) / 0.12) : 0;
-    c.uFlash.value = this.#reduced ? 0 : this.#passFlash + drop * 0.55 + cut * 0.08 + kick * 0.035 + white * 1.4;
-    c.uAberr.value = this.#reduced ? 0 : pulse * 0.5 + kick * 2 + flying * 2.5 + drop * 5 + cut * 3 + st2 * 10 + channels.bands[11] * 1.5;
+    // Passing through a phrase arch: a short flash and a fringe.
+    const arch = Math.max(0, 1 - (now - this.#archPassT0) / 250);
+    c.uFlash.value = this.#reduced ? 0 : this.#passFlash + drop * 0.55 + cut * 0.08 + kick * 0.035 + white * 1.4 + arch * 0.18;
+    c.uAberr.value = this.#reduced ? 0 : pulse * 0.5 + kick * 2 + flying * 2.5 + drop * 5 + cut * 3 + st2 * 10 + channels.bands[11] * 1.5 + Math.max(0, 1 - (now - this.#archPassT0) / 300) * 3;
     c.uCut.value = cut;
     c.uMist.value = this.#mist;
     c.uTime.value = this.#time;
-    c.uBloom.value = (1 + 0.15 * pulse + 0.25 * this.#shared.uBass.value + st2) * WORLDS[this.#world].bloom;
+    c.uBloom.value = (1 + 0.15 * pulse + 0.25 * this.#shared.uBass.value + st2) * WORLDS[this.#worldF].bloom;
     // The mix volume: near black in silence, full at a normal mix, brighter hot.
     const m = this.#shared.uMix.value;
     c.uExposure.value = 0.08 + 0.92 * Math.pow(Math.min(1, m / 0.75), 0.8) + 0.3 * Math.max(0, this.#mixBend());
@@ -1500,7 +1609,7 @@ export class ExploreEngine {
     const s = this.#shared;
     const minutes = this.#genTime / 60;
     const level = (i: number) => Math.max(0, Math.min(1, (minutes - GENERATIONS[i].at) * 60 / GEN_BUILD_S));
-    const m = WORLD_LAYERS[this.#world];
+    const m = WORLD_LAYERS[this.#worldF];
     const gate = (i: number) => (m[i] < 0 ? 1 : m[i] * level(i));
     s.uGen.value.set(gate(0), gate(1), gate(2), gate(3));
     s.uGen5.value = level(4);
@@ -1691,7 +1800,11 @@ export class ExploreEngine {
       /** Jump to the next world now, as a climax would. */
       climax: () => this.#jump(this.#now()),
       /** Go straight to world `n` (no jump). */
-      world: (n: number) => this.#enterWorld(((n % WORLDS.length) + WORLDS.length) % WORLDS.length, this.#now()),
+      world: (n: number) => this.#enterWorld(((n % WORLDS.length) + WORLDS.length) % WORLDS.length, this.#now(), true),
+      /** Mutate the genome now (strength 0..1). */
+      mutate: (strength = 0.5) => this.#mutate(strength),
+      /** Snap the genome to its targets (for captures). */
+      settle: () => this.#genome.set(this.#genomeTarget),
       /** A new track's land, swept in. */
       reseed: () => this.#reseed(this.#now()),
       /** Evolve the current world to `e` (0..1). */
@@ -1826,7 +1939,7 @@ export class ExploreEngine {
     for (const t of this.#trees) t.dispose();
     for (const g of this.#geos) g.dispose();
     for (const g of this.#guardians) for (const m of [g.mesh, g.inner]) (m.material as THREE.Material).dispose();
-    for (const m of [this.#sky, this.#floor, this.#streaks, this.#monoliths, this.#tunnel, this.#packets, this.#worldTunnel]) {
+    for (const m of [this.#sky, this.#floor, this.#streaks, this.#monoliths, this.#tunnel, this.#packets, this.#worldTunnel, this.#arches]) {
       m.geometry.dispose();
       (m.material as THREE.Material).dispose();
     }
@@ -1954,6 +2067,18 @@ function pathCurve(world: number, gx: number, gz: number, tx: number, tz: number
       return (u: number, o: Pt) => bezier(0, az, 0, bz, cx, cz, gx, gz, u, o);
     }
   }
+}
+
+/** A small seeded random generator (0..1). */
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function smoothstep(a: number, b: number, v: number) {

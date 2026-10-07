@@ -74,8 +74,19 @@ export function makeShared() {
      * The world (0 Neon Grid, 1 Chromozon, 2 Tunnelwerk, 3 Nachtflug, 4 Kupferzeit),
      * how far it has evolved since we arrived (0..1), and how many jumps so far.
      */
-    uWorld: { value: 0 },
+    uWorldF: { value: 0 },
+    uWorldS: { value: 0 },
+    uWorldP: { value: 0 },
     uEvo: { value: 0 },
+    /**
+     * The genome: 16 parameters (0..1) that drift toward targets which mutate
+     * forever, shaping everything (see GENES in the engine).
+     */
+    uGenome: { value: new Float32Array(16).fill(0.5) },
+    /** A slow turn of the palette's hue (turns), from the genome. Deck colours keep theirs. */
+    uHue: { value: 0 },
+    /** Phrase arches: (distance ahead, sides, flash, alpha) for the next four phrase downbeats. */
+    uArch: { value: Array.from({ length: 4 }, () => new THREE.Vector4(0, 6, 0, 0)) },
     uJumps: { value: 0 },
     /**
      * Track changes reseed the land: the old seed near, the new one beyond the
@@ -91,13 +102,28 @@ export function makeShared() {
 export type Shared = ReturnType<typeof makeShared>;
 
 const COMMON = /* glsl */ `
-  uniform float uTime, uFlow, uTravel, uSpeed, uBeat, uBeatPhase, uEnergy, uVigil, uBass, uKick, uKickAge, uData, uWorld, uEvo, uJumps, uSeedA, uSeedB, uSeedFront, uVariant, uMix;
+  uniform float uTime, uFlow, uTravel, uSpeed, uBeat, uBeatPhase, uEnergy, uVigil, uBass, uKick, uKickAge, uData, uWorldF, uWorldS, uWorldP, uEvo, uJumps, uSeedA, uSeedB, uSeedFront, uVariant, uMix, uHue;
   uniform float uChan[12];
+  uniform float uGenome[16];
   uniform vec3 uAccent, uHot;
   uniform vec4 uGen;
   float hash11(float p) { p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
   float hash21(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
-  vec3 neon(vec3 c) { float l = dot(c, vec3(0.299, 0.587, 0.114)); return max(vec3(0.0), mix(vec3(l), c, 2.2)); }
+  vec3 hueShift(vec3 c, float h) {
+    const vec3 k = vec3(0.57735);
+    float a = h * 6.28318, ca = cos(a);
+    return c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca);
+  }
+  /** The world's colours: saturated, and turned by the genome's hue. */
+  vec3 neon(vec3 c) { c = hueShift(c, uHue); float l = dot(c, vec3(0.299, 0.587, 0.114)); return max(vec3(0.0), mix(vec3(l), c, 2.2)); }
+  /** A deck's own colour: saturated, never turned (decks keep their identity). */
+  vec3 deckNeon(vec3 c) { float l = dot(c, vec3(0.299, 0.587, 0.114)); return max(vec3(0.0), mix(vec3(l), c, 2.2)); }
+  float gene(int i) { return uGenome[i]; }
+  /** Radius of a regular n-gon (unit inscribed circle at the corners) at angle a. */
+  float ngon(float a, float n) {
+    float seg = 6.28318 / n;
+    return cos(3.14159 / n) / cos(mod(a, seg) - seg * 0.5);
+  }
   float vnoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
@@ -108,7 +134,10 @@ const COMMON = /* glsl */ `
     for (int i = 0; i < 4; i++) { h += a * (1.0 - abs(vnoise(p) * 2.0 - 1.0)); p = p * 2.03 + 17.1; a *= 0.5; }
     return h * h;
   }
-  bool world(float w) { return abs(uWorld - w) < 0.5; }
+  /** Hybrid worlds: the land, the sky and the paths each come from a world of their own. */
+  bool wF(float w) { return abs(uWorldF - w) < 0.5; }
+  bool wS(float w) { return abs(uWorldS - w) < 0.5; }
+  bool wP(float w) { return abs(uWorldP - w) < 0.5; }
   /** The land's seed at this distance from the camera (the new one beyond the sweeping front). */
   vec2 seeded(vec2 p, float dist) {
     float seed = dist > uSeedFront ? uSeedB : uSeedA;
@@ -146,6 +175,8 @@ export function makeFloor(s: Shared) {
       void main() {
         vec4 w = modelMatrix * vec4(position, 1.0);
         vec2 p = rotY2(w.xz, uGridYaw) + uGridOff;
+        // The genome warps the land (strangeness) and sets its scale.
+        p += sin(p.yx * 0.018 + uTime * 0.3) * gene(15) * 26.0;
         // Beside and beyond the paths the land may rise; the fan in front stays flat.
         vec2 rel = w.xz - cameraPosition.xz;
         float mask = max(smoothstep(85.0, 220.0, abs(rel.x)), smoothstep(230.0, 420.0, -rel.y)) * step(rel.y, 60.0);
@@ -153,16 +184,16 @@ export function makeFloor(s: Shared) {
         float spec = uSpectrum[int(bin)];
         float h = 0.0;
         vec2 ps = seeded(p, length(rel));
-        if (world(0.0)) {
+        if (wF(0.0)) {
           // Generation 1, ridges, breathing with the bass and the spectrum.
-          h = ridged(ps * 0.012) * 34.0 * mask * uGen.x * (0.75 + 0.4 * uBass + 0.5 * spec);
-        } else if (world(1.0)) {
+          h = ridged(ps * 0.012 * mix(0.5, 2.0, gene(2))) * 34.0 * mix(0.4, 1.8, gene(3)) * mask * uGen.x * (0.75 + 0.4 * uBass + 0.5 * spec);
+        } else if (wF(1.0)) {
           // Chromozon: far swells of liquid chrome, growing as the world evolves.
-          h = (swell(ps) + 1.5) * mask * (6.0 + 10.0 * uEvo) * (0.7 + 0.6 * uBass);
-        } else if (world(3.0)) {
+          h = (swell(ps * mix(0.6, 1.8, gene(2))) + 1.5) * mask * (6.0 + 10.0 * uEvo) * mix(0.5, 1.8, gene(3)) * (0.7 + 0.6 * uBass);
+        } else if (wF(3.0)) {
           // Nachtflug: mountains all round, taller as the night goes on.
           float near = max(smoothstep(60.0, 160.0, abs(rel.x)), smoothstep(160.0, 320.0, -rel.y)) * step(rel.y, 60.0);
-          h = ridged(ps * 0.009) * (40.0 + 50.0 * uEvo) * near * (0.8 + 0.35 * uBass + 0.4 * spec);
+          h = ridged(ps * 0.009 * mix(0.5, 2.0, gene(2))) * (40.0 + 50.0 * uEvo) * mix(0.5, 1.6, gene(3)) * near * (0.8 + 0.35 * uBass + 0.4 * spec);
         }
         // Silence flattens the land; the mix raises it.
         // Channel 1's low raises the land.
@@ -191,12 +222,14 @@ export function makeFloor(s: Shared) {
         // The pattern shifts with the track (its seed) and the loudest channel (the variant).
         vec2 p = vGrid + (dist > uSeedFront ? uSeedB : uSeedA) * vec2(3.7, 5.3);
         if (variant(1.0) + variant(3.0) > 0.5) p = rot45(p);
+        // The genome turns and scales the floor's pattern.
+        p = rotY2(p, gene(1) * 0.785) / mix(0.6, 1.8, gene(0));
         float bass = clamp(uBass, 0.0, 1.3);
-        float fade = exp(-dist * 0.0075);
+        float fade = exp(-dist * 0.0075 * mix(0.6, 1.6, gene(13)));
         vec3 accent = neon(uAccent);
         vec3 col;
         float lines;
-        if (world(1.0)) {
+        if (wF(1.0)) {
           // Chromozon: a chrome sea. Wave normals (finer as it evolves) reflect the sunset.
           float k = (0.08 + 0.06 * uEvo) * (1.0 + 0.3 * uVariant);
           vec2 g = vec2(cos(p.x * k + uTime * 1.3) + 0.6 * cos((p.x + p.y) * k * 1.7 - uTime), sin(p.y * k * 0.8 - uTime * 1.1) + 0.6 * cos((p.y - p.x) * k * 1.3 + uTime * 0.8));
@@ -209,13 +242,13 @@ export function makeFloor(s: Shared) {
           lines = grid(p, 8.0, 1.2) * 0.25;
           col += accent * lines * fade * (0.3 + 0.4 * bass);
           col = mix(col, sunset(0.0) * 0.4, 1.0 - exp(-dist * 0.004));
-        } else if (world(3.0)) {
+        } else if (wF(3.0)) {
           // Nachtflug: deep blue land, teal wire, glowing peaks.
           lines = max(grid(p, 4.0, 1.0) * 0.15, grid(p, 12.0 + 4.0 * uVariant, 1.4 + bass));
           col = vec3(0.004, 0.01, 0.03) + accent * lines * fade * (0.25 + 0.5 * bass + 0.3 * uEvo);
           col += mix(accent, vec3(1.0), 0.5) * lines * smoothstep(20.0, 70.0, vHeight) * (0.6 + bass);
           col = mix(col, vec3(0.01, 0.03, 0.08), 1.0 - exp(-dist * 0.003));
-        } else if (world(4.0)) {
+        } else if (wF(4.0)) {
           // Kupferzeit: the classic checkerboard, scrolling faster as it evolves.
           vec2 c = p / ((10.0 - 4.0 * uEvo) * (1.0 + 0.35 * uVariant));
           vec2 fw = fwidth(c);
@@ -351,7 +384,7 @@ export function makePackets(s: Shared) {
         gl_PointSize = (1.0 - aTrail) * (8.0 + 12.0 * P.z) * uDpr * 40.0 / max(10.0, -mv.z);
         vFade = (1.0 - aTrail) * (1.0 - age / 1.3);
         int d = int(P.w + 0.5);
-        vColor = P.w >= 0.0 ? neon(vec3(uDeckColor[d * 3], uDeckColor[d * 3 + 1], uDeckColor[d * 3 + 2])) : neon(uAccent);
+        vColor = P.w >= 0.0 ? deckNeon(vec3(uDeckColor[d * 3], uDeckColor[d * 3 + 1], uDeckColor[d * 3 + 2])) : neon(uAccent);
       }`,
     fragmentShader: /* glsl */ `
       ${COMMON}
@@ -416,9 +449,14 @@ export function makeMonoliths(s: Shared) {
         float keep = step(h0, density) * (1.0 - lane) * (1.0 - fan);
         float grow = smoothstep(h0 * 0.6, h0 * 0.6 + 0.4, uGen.y);
         float pump = 1.0 + 0.35 * uBass * (0.5 + 0.5 * sin(h1 * 40.0 + uTime * 2.0)) + 0.25 * uKick;
-        float height = (10.0 + 46.0 * h2 * h2) * grow * pump * keep * (0.08 + 0.92 * smoothstep(0.0, 0.75, uMix));
+        float height = (10.0 + 46.0 * h2 * h2) * grow * pump * keep * (0.08 + 0.92 * smoothstep(0.0, 0.75, uMix)) * mix(0.5, 2.0, gene(6));
         float width = (2.5 + 4.0 * h1) * keep * step(0.01, grow);
         vec3 p = position * vec3(width, height, width);
+        // The genome twists and tapers them.
+        float up = position.y;
+        p.xz *= 1.0 - gene(5) * 0.8 * up;
+        float tw = (gene(4) - 0.5) * 4.0 * up + h1 * 6.28;
+        p.xz = vec2(p.x * cos(tw) - p.z * sin(tw), p.x * sin(tw) + p.z * cos(tw));
         vec4 w = vec4(p.x + wxz.x, p.y, p.z + wxz.y, 1.0);
         vUv = uv;
         vH = height;
@@ -459,25 +497,26 @@ export const RINGS = 10;
 export const RING_GAP = 42;
 
 export function makeTunnel(s: Shared) {
-  const R = 52,
+  // Rings of 48 segments; the shader bends each into the genome's polygon (3-8 sides).
+  const SEG = 48,
     T = 0.9;
   const pos: number[] = [],
     ring: number[] = [],
     side: number[] = [];
   for (let r = 0; r < RINGS; r++)
-    for (let k = 0; k < 6; k++) {
-      const a0 = (k / 6) * Math.PI * 2,
-        a1 = ((k + 1) / 6) * Math.PI * 2;
+    for (let k = 0; k < SEG; k++) {
+      const a0 = (k / SEG) * Math.PI * 2,
+        a1 = ((k + 1) / SEG) * Math.PI * 2;
       const pts = [
-        [Math.cos(a0) * (R - T), Math.sin(a0) * (R - T), -1],
-        [Math.cos(a0) * (R + T), Math.sin(a0) * (R + T), 1],
-        [Math.cos(a1) * (R + T), Math.sin(a1) * (R + T), 1],
-        [Math.cos(a1) * (R - T), Math.sin(a1) * (R - T), -1],
+        [a0, -1],
+        [a0, 1],
+        [a1, 1],
+        [a1, -1],
       ];
       for (const i of [0, 1, 2, 0, 2, 3]) {
-        pos.push(pts[i][0], pts[i][1], 0);
+        pos.push(pts[i][0], pts[i][1] * T, 0);
         ring.push(r);
-        side.push(pts[i][2]);
+        side.push(pts[i][1]);
       }
     }
   const geo = new THREE.BufferGeometry();
@@ -498,9 +537,10 @@ export function makeTunnel(s: Shared) {
       void main() {
         float z = 20.0 - mod(aRing * ${RING_GAP}.0 + uTunnel, ${RINGS * RING_GAP}.0);
         float spin = aRing * 0.35 + uTime * 0.15;
-        float c = cos(spin), sn = sin(spin);
-        float scale = 1.0 + 0.06 * uKick;
-        vec2 xy = vec2(position.x * c - position.y * sn, position.x * sn + position.y * c) * scale;
+        float sides = floor(mix(3.0, 8.99, gene(8)));
+        float r = (52.0 * mix(0.6, 1.4, gene(9)) + position.y) * ngon(position.x, sides) * (1.0 + 0.06 * uKick);
+        float a = position.x + spin;
+        vec2 xy = vec2(cos(a), sin(a)) * r;
         vec4 w = vec4(cameraPosition.x + xy.x, 16.0 + xy.y, cameraPosition.z + z, 1.0);
         vSide = aSide;
         vZ = z;
@@ -517,6 +557,71 @@ export function makeTunnel(s: Shared) {
         float flash = uKick * step(0.5, fract(vRing * 0.5 + 0.25));
         vec3 col = mix(accent, vec3(1.0), 0.15 + 0.4 * uKick) * core * (0.18 + 0.35 * uBass + 0.9 * flash);
         gl_FragColor = vec4(col * near * uGen.z * (1.0 - 0.6 * uVigil), 1.0);
+      }`,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+// ---------------------------------------------------------------------------
+// Phrase arches: a huge polygon frame on each coming 8-bar phrase downbeat, placed
+// so we fly through it exactly on the downbeat; it flashes as we pass.
+
+export function makeArches(s: Shared) {
+  const SEG = 48;
+  const pos: number[] = [],
+    idx: number[] = [];
+  for (let r = 0; r < 4; r++)
+    for (let k = 0; k < SEG; k++) {
+      const a0 = (k / SEG) * Math.PI * 2,
+        a1 = ((k + 1) / SEG) * Math.PI * 2;
+      const pts = [
+        [a0, -1],
+        [a0, 1],
+        [a1, 1],
+        [a1, -1],
+      ];
+      for (const i of [0, 1, 2, 0, 2, 3]) {
+        pos.push(pts[i][0], pts[i][1], 0);
+        idx.push(r);
+      }
+    }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aIdx', new THREE.Float32BufferAttribute(idx, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: { ...pick(s), uArch: s.uArch },
+    vertexShader: /* glsl */ `
+      ${COMMON}
+      uniform vec4 uArch[4];
+      attribute float aIdx;
+      varying float vSide, vFlash, vAlpha, vDepth;
+      void main() {
+        vec4 A = uArch[int(aIdx + 0.5)];
+        if (A.w <= 0.001) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vAlpha = 0.0; return; }
+        float r = (34.0 + position.y * (1.2 + 1.5 * A.z)) * ngon(position.x + aIdx * 0.7, A.y);
+        vec3 w = vec3(cameraPosition.x + cos(position.x + aIdx * 0.7) * r, 14.0 + sin(position.x + aIdx * 0.7) * r, cameraPosition.z - A.x);
+        vec4 mv = viewMatrix * vec4(w, 1.0);
+        vDepth = -mv.z;
+        vSide = position.y;
+        vFlash = A.z;
+        vAlpha = A.w;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */ `
+      ${COMMON}
+      varying float vSide, vFlash, vAlpha, vDepth;
+      void main() {
+        float core = exp(-vSide * vSide * 3.0);
+        vec3 accent = neon(uAccent);
+        vec3 col = mix(accent, vec3(1.0), 0.3 + 0.6 * vFlash) * core * (0.5 + 2.5 * vFlash);
+        col *= vAlpha * exp(-vDepth * 0.0025) * smoothstep(2.0, 18.0, vDepth + 8.0 * vFlash);
+        gl_FragColor = vec4(col, 1.0);
       }`,
   });
   const mesh = new THREE.Mesh(geo, mat);
@@ -576,7 +681,7 @@ export function makeSky(s: Shared) {
         vec3 accent = neon(uAccent);
         float dim = 1.0 - 0.5 * uVigil;
         vec3 col;
-        if (world(1.0)) {
+        if (wS(1.0)) {
           // Chromozon: sunset, and a striped sun that grows as the world evolves.
           col = sunset(max(el, 0.0)) * 0.75;
           vec2 sp = vec2(az, el - 0.05);
@@ -586,9 +691,9 @@ export function makeSky(s: Shared) {
           disc *= sp.y > 0.0 ? 1.0 : slits;
           col = mix(col, mix(vec3(1.0, 0.9, 0.4), vec3(1.0, 0.25, 0.5), smoothstep(0.1, -0.1, sp.y)), disc);
           col += vec3(1.0, 0.5, 0.3) * exp(-length(sp) * 9.0) * 0.35;
-        } else if (world(2.0)) {
+        } else if (wS(2.0)) {
           col = vec3(0.0);
-        } else if (world(3.0)) {
+        } else if (wS(3.0)) {
           // Nachtflug: deep night, dense stars and aurora curtains that spread as the night goes on.
           col = mix(vec3(0.0, 0.02, 0.06), vec3(0.0, 0.0, 0.01), smoothstep(0.0, 0.4, el));
           float curtain = 0.0;
@@ -601,7 +706,7 @@ export function makeSky(s: Shared) {
           }
           vec3 aur = mix(vec3(0.1, 1.0, 0.6), vec3(0.6, 0.2, 1.0), smoothstep(0.08, 0.25, el));
           col += aur * curtain * (0.25 + 0.6 * uEvo) * (0.5 + 0.5 * uBass + 0.9 * uChan[4]) * dim;
-        } else if (world(4.0)) {
+        } else if (wS(4.0)) {
           // Kupferzeit: rainbow copper bars fill the sky, more of them as it evolves.
           col = vec3(0.01, 0.0, 0.02);
           float bars = 5.0 + floor(uEvo * 9.0);
@@ -617,32 +722,32 @@ export function makeSky(s: Shared) {
         } else {
           col = mix(vec3(0.05, 0.0, 0.09), vec3(0.0, 0.0, 0.012), smoothstep(-0.02, 0.45, el));
         }
-        if (!world(1.0) && !world(2.0)) col += accent * exp(-abs(el) * 30.0) * (0.15 + 0.35 * uBass + 0.5 * uChan[3]) * dim;
-        if (uGen5 > 0.0 && (world(0.0) || world(4.0))) {
+        if (!wS(1.0) && !wS(2.0)) col += accent * exp(-abs(el) * 30.0) * (0.15 + 0.35 * uBass + 0.5 * uChan[3]) * dim;
+        if (uGen5 > 0.0 && (wS(0.0) || wS(4.0))) {
           vec2 q = vec2(az * 3.0, el * 9.0);
           float t = uTime * (0.4 + 0.8 * uBass);
           float v = sin(q.x * 2.0 + t) + sin(q.y * 3.0 - t * 1.3) + sin((q.x + q.y) * 1.7 + t * 0.7) + sin(length(q - vec2(sin(t * 0.3) * 3.0, 1.0)) * 3.0);
           vec3 pc = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + v * 1.4 + t * 0.2);
           col += mix(pc, accent, 0.45) * smoothstep(0.02, 0.12, el) * uGen5 * (0.12 + 0.25 * uBass) * dim;
         }
-        if (!world(2.0)) {
+        if (!wS(2.0)) {
           // Stars; more of them as any world evolves, and a sky full of them at night.
           vec2 sp = vec2(az * 60.0, el * 60.0);
           vec2 cell = floor(sp);
           float h = hash21(cell);
           vec2 f = fract(sp) - vec2(hash21(cell + 7.1), hash21(cell + 3.7));
-          float density = world(3.0) ? 0.8 : 0.93 - 0.05 * uEvo;
+          float density = (wS(3.0) ? 0.8 : 0.93 - 0.05 * uEvo) - 0.06 * gene(10);
           float star = step(density, h) * exp(-dot(f, f) * 90.0) * (0.5 + 0.5 * sin(uTime * (2.0 + h * 5.0) + h * 40.0));
-          col += vec3(0.8, 0.85, 1.0) * star * smoothstep(0.03, 0.2, el) * (world(1.0) ? 0.3 : 1.0) * (0.4 + 1.6 * uChan[5]);
+          col += vec3(0.8, 0.85, 1.0) * star * smoothstep(0.03, 0.2, el) * (wS(1.0) ? 0.3 : 1.0) * (0.4 + 1.6 * uChan[5]);
         }
         // Copper bars: one per deck, bouncing on the deck's own beat, lit by its level.
         for (int i = 0; i < 4; i++) {
-          vec3 dc = neon(vec3(uDeckColor[i * 3], uDeckColor[i * 3 + 1], uDeckColor[i * 3 + 2]));
+          vec3 dc = deckNeon(vec3(uDeckColor[i * 3], uDeckColor[i * 3 + 1], uDeckColor[i * 3 + 2]));
           float centre = 0.035 + float(i) * 0.026 + 0.01 * abs(sin(3.14159 * uDeckPhase[i]));
           float t = abs(el - centre) / 0.008;
           float bar = max(0.0, 1.0 - t);
           vec3 copper = mix(dc * 0.5, dc + 0.35, pow(bar, 3.0));
-          col += copper * bar * bar * uDeckLevel[i] * 0.55 * dim * (world(2.0) ? 0.0 : 1.0) * (0.6 + 0.8 * uChan[4]);
+          col += copper * bar * bar * uDeckLevel[i] * 0.55 * dim * (wS(2.0) ? 0.0 : 1.0) * (0.6 + 0.8 * uChan[4]);
         }
         gl_FragColor = vec4(col, 1.0);
       }`,
@@ -714,28 +819,28 @@ export function makeRails(s: Shared, u: TreeUniforms) {
         float halo = exp(-side * side * 2.2) * 0.35;
         vec3 accent = neon(uAccent);
         // Packets of light race down the rails toward the gates.
-        float packet = pow(0.5 + 0.5 * sin(dist * (0.55 + 0.45 * uEvo) - uFlow * 0.55), 14.0);
+        float packet = pow(0.5 + 0.5 * sin(dist * (0.55 + 0.45 * uEvo) * mix(0.6, 1.8, gene(11)) - uFlow * 0.55), 14.0);
         float front = exp(-abs(u - head) * 22.0) * step(u, head + 0.02);
         float look = 1.0;
         vec3 base = accent;
-        if (world(1.0)) {
+        if (wP(1.0)) {
           // Chromozon: wide chrome ribbons, banded like polished metal, glinting gold.
           core = smoothstep(1.0, 0.7, abs(side));
           halo = 0.0;
           float band = 0.5 + 0.5 * sin(side * 6.0 + dist * 0.05 - uTime);
           base = mix(sunset(0.05 + 0.3 * band), vec3(1.0, 0.85, 0.6), pow(band, 8.0));
-        } else if (world(2.0)) {
+        } else if (wP(2.0)) {
           // Tunnelwerk: a checkered track, block by block.
           float blocks = step(0.5, fract(dist * 0.25 + (side > 0.0 ? 0.5 : 0.0)));
           core = smoothstep(1.0, 0.85, abs(side)) * (0.25 + 0.75 * blocks);
           halo = 0.0;
           base = mix(vec3(0.9), accent, 0.3);
-        } else if (world(3.0)) {
+        } else if (wP(3.0)) {
           // Nachtflug: a runway of landing lights, chasing toward the gates.
           float light = exp(-pow(fract(dist * 0.3 - uFlow * 0.15) - 0.5, 2.0) * 120.0);
           core = exp(-side * side * 3.0) * light * 1.8 + exp(-side * side * 30.0) * 0.15;
           halo = 0.0;
-        } else if (world(4.0)) {
+        } else if (wP(4.0)) {
           // Kupferzeit: copper bars, rainbow along the rail.
           core = smoothstep(1.0, 0.6, abs(side)) * (0.6 + 0.4 * (1.0 - abs(side)));
           halo = 0.0;
@@ -818,22 +923,22 @@ export function wireMaterial(s: Shared, alpha: { value: number }) {
         vec3 accent = neon(uAccent);
         vec3 c = mix(accent, vec3(1.0), 0.1 + 0.35 * uLit);
         float fill = 0.0;
-        if (world(1.0)) {
+        if (wP(1.0)) {
           // Chromozon: filled chrome, reflecting the sunset at the rim.
           c = mix(sunset(0.1 + 0.4 * rim), vec3(1.0, 0.9, 0.7), 0.3 * uLit);
           fill = 0.25 + 0.5 * rim;
-        } else if (world(2.0)) {
+        } else if (wP(2.0)) {
           c = mix(vec3(1.0), accent, 0.25);
           width *= 1.8;
           wire = 1.0 - smoothstep(width - 0.6, width + 0.6, px);
-        } else if (world(3.0)) {
+        } else if (wP(3.0)) {
           glow *= 2.0;
-        } else if (world(4.0)) {
+        } else if (wP(4.0)) {
           c = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + vBary.x * 3.0 + vBary.y * 5.0 + uTime);
           fill = 0.12;
         }
         // A deck's guardian wears the deck's colour and answers only to its deck.
-        vec3 tint = neon(uTint);
+        vec3 tint = deckNeon(uTint);
         c = mix(c, mix(tint, vec3(1.0), 0.25 * uLit), uTintMix);
         accent = mix(accent, tint, uTintMix);
         vec3 col = c * (wire * (0.6 + 0.9 * uLit) + glow * (0.18 + 0.35 * uLit) + fill * (0.4 + 0.6 * uLit));
@@ -932,6 +1037,7 @@ export function makeStreaks(s: Shared, count = 1400) {
     uniforms: pick(s),
     vertexShader: /* glsl */ `
       uniform float uTravel, uSpeed, uEvo;
+      uniform float uGenome[16];
       attribute float aEnd;
       varying float vA;
       void main() {
@@ -940,7 +1046,7 @@ export function makeStreaks(s: Shared, count = 1400) {
         p.z -= aEnd * clamp(uSpeed * 0.06, 0.05, 14.0);
         vA = (1.0 - aEnd * 0.9) * smoothstep(-215.0, -150.0, p.z) * smoothstep(15.0, 2.0, p.z);
         // More of them as the world evolves, and all of them in a jump.
-        vA *= step(fract(position.x * 13.17 + position.y * 7.31), 0.45 + 0.55 * uEvo + uSpeed * 0.004);
+        vA *= step(fract(position.x * 13.17 + position.y * 7.31), (0.45 + 0.55 * uEvo) * mix(0.5, 1.2, uGenome[12]) + uSpeed * 0.004);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
       }`,
     fragmentShader: /* glsl */ `
@@ -1112,7 +1218,6 @@ function pick(s: Shared) {
     uKickAge: s.uKickAge,
     uGen: s.uGen,
     uData: s.uData,
-    uWorld: s.uWorld,
     uEvo: s.uEvo,
     uJumps: s.uJumps,
     uSeedA: s.uSeedA,
@@ -1121,6 +1226,11 @@ function pick(s: Shared) {
     uVariant: s.uVariant,
     uMix: s.uMix,
     uChan: s.uChan,
+    uWorldF: s.uWorldF,
+    uWorldS: s.uWorldS,
+    uWorldP: s.uWorldP,
+    uGenome: s.uGenome,
+    uHue: s.uHue,
   };
 }
 

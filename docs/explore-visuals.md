@@ -69,6 +69,36 @@ or a new fan appears.
 
 QA: `__datastream.climax()`, `world(n)`, `evolve(e)`, `reseed()`.
 
+## Endless progression
+
+**The genome.** 16 parameters (0..1) drift toward targets (τ 8 s). The targets
+mutate every 75 s of weighted music (faster with bass; each branch adds 15 s and
+each MIDI message 0.5 s), with a step of ±(0.25 + 0.07 × depth in the tree) and
+an occasional leap, and by ±0.7 at every climax. The seed is new each session.
+
+| Gene | Shapes |
+|---|---|
+| 0, 1 | floor grid scale and angle |
+| 2, 3 | terrain frequency and height (all land styles) |
+| 4, 5, 6 | monolith twist, taper and height |
+| 7 | palette hue turn (±¼ turn; deck colours keep theirs) |
+| 8, 9 | hexagon tunnel: 3-8 sides and radius |
+| 10 | star density |
+| 11 | rail packet spacing |
+| 12 | streak density |
+| 13 | fog |
+| 14 | phrase arch sides |
+| 15 | land warp (strangeness) |
+
+**Hybrid worlds.** From the sixth jump on, the land, the sky and the paths each
+come from a random world (never the same mix twice in a row). Tunnelwerk's land
+is its tunnel.
+
+**Phrase arches.** Four arches wait on the next four 8-bar phrase downbeats (the
+master's grid, else a tempo clock); each one's distance is the time to its
+downbeat × the smoothed speed, so we pass through it on the downbeat, with a
+short flash and fringe.
+
 ## MIDI data flow
 
 Every MIDI message from the mixer (`midi` messages; LED echoes and releases are
