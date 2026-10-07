@@ -1,3 +1,37 @@
+/* Pixel art: two open-licence pixel fonts, bundled (see assets/fonts/OFL-*.txt). */
+@font-face {
+  font-family: 'Pixelify Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: block;
+  src: url('./assets/fonts/pixelify-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Pixelify Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: block;
+  src: url('./assets/fonts/pixelify-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/vt323-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/vt323-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* Dark earth surfaces with warm, readable limestone text. */
 :root {
   color-scheme: dark;
@@ -22,17 +56,16 @@
   /* Keyboard focus + library selection: neutral cool white-blue, distinct from deck accents. */
   --focus: #e8d8a8;
 
-  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-ui: 'Pixelify Sans', 'Inter', system-ui, sans-serif;
   /* Display serif for realm names, the aimed title and the breadcrumb's current place. */
-  --font-display: 'Georgia', 'Noto Serif', 'DejaVu Serif', 'Liberation Serif', serif;
+  --font-display: 'Pixelify Sans', system-ui, sans-serif;
   --ink: #121e17;
   --parchment: #f0e7d2;
   --stone: #615d54;
-  --font-mono: 'JetBrains Mono', 'JetBrainsMono Nerd Font', 'SF Mono', 'Cascadia Mono', ui-monospace, Menlo,
-    Consolas, 'Liberation Mono', monospace;
+  --font-mono: 'Pixelify Sans', 'VT323', ui-monospace, monospace;
 
-  --radius: 8px;
-  --radius-sm: 6px;
+  --radius: 0;
+  --radius-sm: 0;
   --gap: 10px;
   --scrollbar-w: 10px;
 
@@ -73,8 +106,27 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 400 14px/1.4 var(--font-ui);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  /* The pixel fonts have different x-heights; scale every font to the same one. */
+  font-size-adjust: ex-height 0.52;
+  font-synthesis: none;
+}
+
+/* Pixel art everywhere: square corners, no blur, hard-edged canvases and images. */
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+canvas,
+img {
+  image-rendering: pixelated;
+}
+svg {
+  shape-rendering: crispEdges;
 }
 
 button,

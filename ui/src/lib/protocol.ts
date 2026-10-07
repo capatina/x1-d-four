@@ -251,6 +251,8 @@ export type VizMsg = {
   /** 0..1 phase within the beat, from the mixer's MIDI clock. */
   beat: number | null;
   bpm: number | null;
+  /** The mixer's record pairs' [low, mid, high] RMS, loudest since the last frame. */
+  returns?: number[][];
 };
 
 /**

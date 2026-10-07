@@ -32,7 +32,8 @@
       h = 0,
       dpr = 1;
     const resize = () => {
-      dpr = Math.min(2, window.devicePixelRatio || 1);
+      // Pixel art: a coarse grid, shown with hard pixels.
+      dpr = 0.5;
       w = canvas.clientWidth;
       h = canvas.clientHeight;
       canvas.width = Math.round(w * dpr);
@@ -112,7 +113,7 @@
           ctx.strokeStyle = accent;
           ctx.lineWidth = 1.2;
           ctx.shadowColor = accent;
-          ctx.shadowBlur = 6;
+          ctx.shadowBlur = 0;
           ctx.beginPath();
           for (let i = 0; i < count; i++) {
             const k = (L.count - count + i + LATENCY_KEEP * 4) % LATENCY_KEEP;

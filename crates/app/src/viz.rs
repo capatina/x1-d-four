@@ -112,6 +112,9 @@ pub fn run(app: Arc<App>, mut rx: rtrb::Consumer<f32>, stop: Arc<AtomicBool>) {
             "onset": onset,
             "beat": beat.map(round),
             "bpm": bpm,
+            // The mixer's record pairs, loudest since the last frame: the mix volume and each
+            // channel after its fader, at the feed's full rate.
+            "returns": app.shared.take_input_band_peaks().map(|p| p.map(|v| (v * 10000.0).round() / 10000.0)),
         }));
     }
 }

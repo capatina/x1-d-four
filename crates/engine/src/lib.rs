@@ -107,6 +107,9 @@ pub struct Shared {
     /// with channels 1-3's soundcard inputs on their channel post-fader, each mixer
     /// channel as you hear it, after its fader and EQ.
     pub input_bands: [[AtomicU32; 3]; 4],
+    /// The loudest of `input_bands` since the visualiser last took them (f32 bits; a
+    /// non-negative f32's bits order like the number, so `fetch_max` works).
+    pub input_band_peaks: [[AtomicU32; 3]; 4],
     /// While set, every frame the mixer sends back goes to the capture feed (recording).
     pub capture_on: AtomicBool,
     /// Frames the capture feed had no room for (the writer fell behind).
@@ -132,6 +135,11 @@ impl Shared {
     /// Low/mid/high RMS (0..~1) of each of the mixer's 4 record pairs in the last packet.
     pub fn input_bands(&self) -> [[f32; 3]; 4] {
         std::array::from_fn(|p| std::array::from_fn(|b| f32::from_bits(self.input_bands[p][b].load(Ordering::Relaxed))))
+    }
+
+    /// The loudest low/mid/high of each record pair since the last call (then reset).
+    pub fn take_input_band_peaks(&self) -> [[f32; 3]; 4] {
+        std::array::from_fn(|p| std::array::from_fn(|b| f32::from_bits(self.input_band_peaks[p][b].swap(0, Ordering::Relaxed))))
     }
 
     /// RMS (0..1) of the mixer's 8 record channels in the last packet.
@@ -544,7 +552,9 @@ impl Renderer for Rt {
             }
             self.input_split[p] = [lp1, lp2];
             for (b, v) in sq.iter().enumerate() {
-                self.shared.input_bands[p][b].store((v / FRAMES_PER_PACKET as f32).sqrt().to_bits(), Ordering::Relaxed);
+                let rms = (v / FRAMES_PER_PACKET as f32).sqrt().to_bits();
+                self.shared.input_bands[p][b].store(rms, Ordering::Relaxed);
+                self.shared.input_band_peaks[p][b].fetch_max(rms, Ordering::Relaxed);
             }
         }
         if self.shared.capture_on.load(Ordering::Relaxed) {

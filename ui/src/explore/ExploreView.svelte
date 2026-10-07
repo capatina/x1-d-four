@@ -31,11 +31,8 @@
   let failed = $state<string | null>(null);
   let stats = $state.raw<EngineStats | null>(null);
   let waveMs = $state(0);
-  /** The title card of the generation that just started building (demo style). */
-  let genCard = $state<{ eyebrow: string; name: string; key: number; big?: boolean } | null>(null);
   /** The world we're in (its index), for the labels' look. */
   let world = $state(0);
-  let genTimer = 0;
   const showStats = new URLSearchParams(location.search).has('stats');
   const ex = $derived(client.explore);
   const band = $derived<Band>(ex?.band ?? 'low');
@@ -109,12 +106,6 @@
     return `${BAND_PALETTE[b].label}: ${BAND_PALETTE[b].hint}${k ? ` (${keyText(k)})` : ''}`;
   }
 
-  function showCard(eyebrow: string, name: string, big: boolean) {
-    genCard = { eyebrow, name, big, key: (genCard?.key ?? 0) + 1 };
-    clearTimeout(genTimer);
-    genTimer = window.setTimeout(() => (genCard = null), big ? 3200 : 2600);
-  }
-
   onMount(() => {
     let cancelled = false;
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -175,11 +166,7 @@
           onAimDelta: (delta) => client.send({ cmd: 'explore_aim', delta }),
           reducedMotion: motion.matches,
           onStats: showStats ? (s) => (stats = { ...s }) : undefined,
-          onGeneration: (level, name) => showCard(`GEN ${String(level).padStart(2, '0')}`, name, false),
-          onWorld: (w, name) => {
-            world = w;
-            showCard(`WORLD ${String(w + 1).padStart(2, '0')}`, name, true);
-          },
+          onWorld: (w) => (world = w),
         });
         local.engine = engine;
         if (new URLSearchParams(location.search).has('qa')) (window as unknown as { __datastream: unknown }).__datastream = engine.qa();
@@ -201,7 +188,6 @@
       window.removeEventListener('resize', decks);
       motion.removeEventListener('change', onMotion);
       local.engine = null;
-      clearTimeout(genTimer);
       engine?.dispose();
       engine = null;
     };
@@ -254,14 +240,6 @@
   </div>
 
   <div class="vignette" aria-hidden="true"></div>
-  {#if genCard}
-    {#key genCard.key}
-      <div class="gen-card" class:big={genCard.big} role="status">
-        <span class="gen-n">{genCard.eyebrow}</span>
-        <span class="gen-name">{genCard.name}</span>
-      </div>
-    {/key}
-  {/if}
   <div class="gate-glow" aria-hidden="true" bind:this={gateEl}></div>
 
   <!-- Top-left: band, follow, analysis, tempo, where we are -->
@@ -493,30 +471,6 @@
       linear-gradient(to top, #000000f0, #000000a0 140px, transparent 30%);
   }
 
-  /* A new generation of the world: a title card slammed in, demo style. */
-  .gen-card {
-    position: absolute; left: 50%; top: 34%; display: grid; justify-items: center; gap: 2px;
-    transform: translate(-50%, -50%); pointer-events: none; z-index: 3;
-    animation: gen-card 2.6s cubic-bezier(.2,.8,.2,1) both;
-  }
-  .gen-n { font: 800 13px/1 var(--font-mono); letter-spacing: .5em; color: #000; background: var(--band); padding: 4px 6px 4px 12px; }
-  .gen-name {
-    font: italic 900 clamp(44px, 6vw, 110px)/1 'Arial Black', Impact, sans-serif; text-transform: uppercase; letter-spacing: .02em;
-    background: linear-gradient(#ffffff 0%, #e6ecff 44%, var(--band) 50%, #1a0b33 80%, #ffffff 100%);
-    -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-stroke: 1px #00000090;
-    filter: drop-shadow(0 0 24px color-mix(in srgb, var(--band) 60%, transparent));
-  }
-  @keyframes gen-card {
-    0% { opacity: 0; transform: translate(-50%, -50%) scale(2.4, .2); filter: blur(6px); }
-    8% { opacity: 1; transform: translate(-50%, -50%) scale(1.06, 1.06); filter: blur(0); }
-    14% { transform: translate(-50%, -50%) scale(1); }
-    78% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.6, .05); }
-  }
-  .gen-card.big { top: 40%; animation-duration: 3.2s; }
-  .gen-card.big .gen-name { font-size: clamp(56px, 8.5vw, 150px); }
-  @media (prefers-reduced-motion: reduce) { .gen-card { animation: gen-fade 2.6s linear both; } }
-
   /* Each world dresses the path labels its own way. */
   /* Chromozon: chrome pills in the sunset. */
   .explore[data-world='1'] .labels :global(.xl) { border-radius: 14px; border-color: #ff9a3d80; background: linear-gradient(#2a1030ee, #12061aee); }
@@ -533,7 +487,6 @@
   /* Kupferzeit: copper-bar rainbow headers on deep purple. */
   .explore[data-world='4'] .labels :global(.xl) { border: 0; border-top: 3px solid transparent; border-image: linear-gradient(90deg, #ff3d3d, #ffb347, #fff35c, #3dff8a, #3dc8ff, #b84dff) 1; background: #140626ee; }
   .explore[data-world='4'] .labels :global(.xl[data-kind='aimed'])::before { background: linear-gradient(90deg, #ff3d3d, #ffb347, #fff35c, #3dff8a, #3dc8ff, #b84dff); }
-  @keyframes gen-fade { 0%, 100% { opacity: 0; } 10%, 85% { opacity: 1; } }
 
   .growth { display: block; opacity: .8; }
 

@@ -109,7 +109,7 @@ type Track = {
 
 **`recorded`**: `{ type: "recorded", file: string | null, seconds: number }`, when a recording of the mix has been saved to `~/Music/recordings`.
 
-`state` also carries `recording: { active, pair, seconds?, file?, peak_db?, dropped? }` (`pair` is the mixer's record pair that carries its mix: 3 = soundcard input 7/8, with channel 4's soundcard input switch on Mix) and `inputs: number[]`, the level of each of the mixer's 8 record channels in dBFS (−99 = silent). `returns: number[][]` is each record pair's [low, mid, high] RMS: 1/2, 3/4 and 5/6 carry channels 1-3 (with their soundcard input switches on Channel, Post fader), 7/8 the main mix.
+`state` also carries `recording: { active, pair, seconds?, file?, peak_db?, dropped? }` (`pair` is the mixer's record pair that carries its mix: 3 = soundcard input 7/8, with channel 4's soundcard input switch on Mix) and `inputs: number[]`, the level of each of the mixer's 8 record channels in dBFS (−99 = silent). `returns: number[][]` (also in every `viz` message, as the loudest values since the previous one) is each record pair's [low, mid, high] RMS: 1/2, 3/4 and 5/6 carry channels 1-3 (with their soundcard input switches on Channel, Post fader), 7/8 the main mix.
 
 **`shift`**: `{ type: "shift", deck: number, ms: number }`, sent the moment a deck is shifted by hand (the right jog), so the waveform strip moves with the wheel before the next `state`. The deck glides through the shift at up to a 25 % speed bend while playing, at normal speed while paused.
 

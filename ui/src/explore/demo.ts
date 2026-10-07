@@ -166,9 +166,9 @@ export function makeFloor(s: Shared) {
         }
         // Silence flattens the land; the mix raises it.
         // Channel 1's low raises the land.
-        float flat = (0.06 + 0.94 * smoothstep(0.0, 0.75, uMix)) * (0.55 + 0.9 * uChan[0]);
-        w.y += h * flat;
-        h *= flat;
+        float rise = (0.06 + 0.94 * smoothstep(0.0, 0.75, uMix)) * (0.55 + 0.9 * uChan[0]);
+        w.y += h * rise;
+        h *= rise;
         vHeight = h;
         vWorld = w.xyz;
         vGrid = p;
@@ -226,14 +226,14 @@ export function makeFloor(s: Shared) {
           col += accent * 0.06 * (1.0 - fade);
         } else {
           float cell = 8.0 * (1.0 + 0.5 * mod(uVariant, 2.0));
-          float minor = grid(p, cell / 4.0, 1.0) * 0.1 * (1.0 - 0.6 * variant(2.0));
-          float major = grid(p, cell, 1.4 + 1.2 * bass);
+          float minor = grid(p, cell / 4.0, 0.8) * 0.05 * (1.0 - 0.6 * variant(2.0));
+          float major = grid(p, cell, 0.9 + 0.6 * bass);
           // As the grid world evolves, diagonal traces join the grid.
           vec2 dp = vec2(p.x + p.y, p.x - p.y) * 0.7071;
           float diag = grid(dp, 16.0, 1.0) * smoothstep(0.3, 0.8, uEvo) * 0.35;
           lines = max(max(minor, major), diag);
           col = vec3(0.012, 0.004, 0.03);
-          col += accent * lines * fade * (0.28 + 0.5 * bass + 0.2 * uEnergy) * (1.0 - 0.55 * uVigil);
+          col += accent * lines * fade * (0.18 + 0.4 * bass + 0.15 * uEnergy) * (1.0 - 0.55 * uVigil);
           col += mix(accent, uHot * 2.0, 0.5) * lines * smoothstep(8.0, 30.0, vHeight) * (0.4 + 0.6 * bass) * fade;
           // A laser sweeps the grid once the world has grown.
           float sweep = exp(-abs(fract(p.y / 300.0 - uTime * 0.25) - 0.5) * 60.0) * smoothstep(0.5, 1.0, uEvo);
@@ -404,11 +404,16 @@ export function makeMonoliths(s: Shared) {
         float seed = length(cellCentre) > uSeedFront ? uSeedB : uSeedA;
         vec2 sc = cell + seed * 17.0;
         float h0 = hash21(sc), h1 = hash21(sc + 13.7), h2 = hash21(sc + 71.3);
-        vec2 g = (cell + vec2(0.2 + 0.6 * h1, 0.2 + 0.6 * h2)) * ${MONO_CELL}.0;
+        vec2 g = (cell + vec2(0.1 + 0.8 * h1, 0.1 + 0.8 * h2)) * ${MONO_CELL}.0;
         vec2 wxz = rotY2(g - uGridOff, -uGridYaw);
         vec2 rel = wxz - cameraPosition.xz;
         // Only some cells, never on the paths ahead, and they rise as the generation builds.
-        float keep = step(h0, 0.42) * (1.0 - step(abs(rel.x), 70.0) * step(rel.y, 40.0) * step(-130.0, rel.y));
+        // We fly between them: they crowd up beside our line, leave a narrow lane on it,
+        // and keep off the paths and gates ahead.
+        float lane = step(abs(rel.x), 5.0 + 3.0 * h1);
+        float fan = step(abs(rel.x), 62.0) * step(rel.y, -30.0) * step(-95.0, rel.y);
+        float density = 0.42 + 0.4 * step(abs(rel.x), 45.0) * step(-30.0, rel.y);
+        float keep = step(h0, density) * (1.0 - lane) * (1.0 - fan);
         float grow = smoothstep(h0 * 0.6, h0 * 0.6 + 0.4, uGen.y);
         float pump = 1.0 + 0.35 * uBass * (0.5 + 0.5 * sin(h1 * 40.0 + uTime * 2.0)) + 0.25 * uKick;
         float height = (10.0 + 46.0 * h2 * h2) * grow * pump * keep * (0.08 + 0.92 * smoothstep(0.0, 0.75, uMix));
@@ -793,11 +798,12 @@ export function wireMaterial(s: Shared, alpha: { value: number }) {
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
-    uniforms: { ...pick(s), uAlpha: alpha, uLit: { value: 0 }, uSim: { value: 0.5 }, uWidth: { value: 1.4 }, uFog: { value: 0.006 } },
+    uniforms: { ...pick(s), uAlpha: alpha, uLit: { value: 0 }, uSim: { value: 0.5 }, uWidth: { value: 1.4 }, uFog: { value: 0.006 }, uTint: { value: new THREE.Vector3() }, uTintMix: { value: 0 } },
     vertexShader: WIRE_VERT,
     fragmentShader: /* glsl */ `
       ${COMMON}
-      uniform float uAlpha, uLit, uSim, uWidth, uFog;
+      uniform float uAlpha, uLit, uSim, uWidth, uFog, uTintMix;
+      uniform vec3 uTint;
       varying vec3 vBary;
       varying vec3 vNormalV;
       varying vec3 vViewDir;
@@ -826,9 +832,13 @@ export function wireMaterial(s: Shared, alpha: { value: number }) {
           c = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + vBary.x * 3.0 + vBary.y * 5.0 + uTime);
           fill = 0.12;
         }
+        // A deck's guardian wears the deck's colour and answers only to its deck.
+        vec3 tint = neon(uTint);
+        c = mix(c, mix(tint, vec3(1.0), 0.25 * uLit), uTintMix);
+        accent = mix(accent, tint, uTintMix);
         vec3 col = c * (wire * (0.6 + 0.9 * uLit) + glow * (0.18 + 0.35 * uLit) + fill * (0.4 + 0.6 * uLit));
         col += accent * rim * (0.04 + 0.12 * uLit);
-        col *= (0.55 + 0.45 * uSim) * (0.6 + 0.4 * uBass + 0.6 * uKick + 0.4 * uBeat * uLit + 0.7 * uChan[7]) * (1.0 - 0.5 * uVigil);
+        col *= mix((0.55 + 0.45 * uSim) * (0.6 + 0.4 * uBass + 0.6 * uKick + 0.4 * uBeat * uLit + 0.7 * uChan[7]), 1.0, uTintMix) * (1.0 - 0.5 * uVigil);
         col *= uAlpha * exp(-vDepth * uFog);
         gl_FragColor = vec4(col, 1.0);
       }`,
@@ -996,6 +1006,8 @@ export function makePost() {
       uBloom: { value: 1 },
       uScan: { value: 0.2 },
       uExposure: { value: 1 },
+      /** The virtual pixel grid the world is drawn on (pixel art). */
+      uLow: { value: new THREE.Vector2(480, 270) },
       uVanish: { value: new THREE.Vector2(0.5, 0.5) },
       uBeamX: { value: new Float32Array(4) },
       uBeamY: { value: 0 },
@@ -1007,7 +1019,7 @@ export function makePost() {
     vertexShader: QUAD_VERT,
     fragmentShader: /* glsl */ `
       uniform sampler2D tScene, tBloom, tWide;
-      uniform vec2 uRes, uVanish;
+      uniform vec2 uRes, uVanish, uLow;
       uniform float uTime, uAberr, uFlash, uCut, uMist, uBloom, uBeamY, uScan, uExposure;
       uniform float uBeamX[4];
       uniform float uBeamLevel[4];
@@ -1017,47 +1029,60 @@ export function makePost() {
       float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
       vec3 neon(vec3 c) { float l = dot(c, vec3(0.299, 0.587, 0.114)); return max(vec3(0.0), mix(vec3(l), c, 2.2)); }
       vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+      // 4×4 Bayer matrix, for ordered dithering.
+      float bayer(vec2 c) {
+        vec2 a = mod(c, 4.0);
+        int i = int(a.x) + int(a.y) * 4;
+        float m[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+        return m[i] / 16.0 - 0.47;
+      }
       void main() {
-        vec2 uv = vUv;
-        // A cut: the frame tears into horizontal slices for an instant.
+        // Pixel art: everything is computed once per virtual pixel, then shown as a hard square.
+        vec2 cell = floor(vUv * uLow);
+        vec2 uv = (cell + 0.5) / uLow;
+        // A cut: the frame tears into horizontal slices, whole pixels at a time.
         if (uCut > 0.0) {
           float band = floor(uv.y * 24.0 + floor(uTime * 40.0));
           float r = hash(vec2(band, floor(uTime * 30.0)));
-          uv.x += (r - 0.5) * 0.12 * uCut * step(0.55, r);
+          uv.x += floor((r - 0.5) * 0.12 * uCut * step(0.55, r) * uLow.x) / uLow.x;
         }
         vec2 dir = uv - 0.5;
-        float ab = uAberr * dot(dir, dir) * 0.06 + uAberr * 0.0015;
+        // Colour fringes in whole pixels.
+        vec2 ab = floor(dir * (uAberr * dot(dir, dir) * 0.06 + uAberr * 0.0015) * uLow + 0.5) / uLow;
         vec3 col;
-        col.r = texture2D(tScene, uv + dir * ab).r;
+        col.r = texture2D(tScene, uv + ab).r;
         col.g = texture2D(tScene, uv).g;
-        col.b = texture2D(tScene, uv - dir * ab).b;
+        col.b = texture2D(tScene, uv - ab).b;
         col += (texture2D(tBloom, uv).rgb * 0.7 + texture2D(tWide, uv).rgb * 0.5) * uBloom;
-        // Deck lasers: from each deck card toward the vanishing point, swaying on its beat.
+        // Deck lasers, on the pixel grid.
         vec2 px = uv * uRes;
+        float pscale = uRes.y / uLow.y;
         for (int i = 0; i < 4; i++) {
           if (uBeamLevel[i] <= 0.001) continue;
           vec2 a = vec2(uBeamX[i], uBeamY) * uRes;
           vec2 b = (uVanish + vec2(uBeamSway[i], 0.0)) * uRes;
           vec2 ab2 = b - a;
           float t = clamp(dot(px - a, ab2) / dot(ab2, ab2), 0.0, 1.0);
-          float d = length(px - (a + ab2 * t));
-          float w = mix(3.5, 0.6, t);
+          float d = length(px - (a + ab2 * t)) / pscale;
+          float w = mix(1.2, 0.5, t);
           vec3 dc = neon(vec3(uDeckColor[i * 3], uDeckColor[i * 3 + 1], uDeckColor[i * 3 + 2]));
-          col += mix(dc, vec3(1.0), 0.2) * (exp(-d * d / (w * w)) + exp(-d / (w * 6.0)) * 0.08) * uBeamLevel[i] * (1.0 - t * 0.8);
+          col += mix(dc, vec3(1.0), 0.2) * (step(d, w) + exp(-d / (w * 4.0)) * 0.08) * uBeamLevel[i] * (1.0 - t * 0.8);
         }
         // Scouting: the signal is weak beyond the last claimed track.
         if (uMist > 0.0) {
           float l = dot(col, vec3(0.299, 0.587, 0.114));
           col = mix(col, vec3(l) * vec3(0.75, 0.9, 1.0), 0.6 * uMist);
-          col += (hash(px + fract(uTime) * 100.0) - 0.5) * 0.04 * uMist;
+          col += (hash(cell + floor(uTime * 12.0)) - 0.5) * 0.06 * uMist;
         }
         col *= uExposure;
         col += vec3(uFlash);
         col = aces(col * 1.1);
-        // Scanlines and vignette.
-        col *= 1.0 - uScan * (0.5 - 0.5 * sin(px.y * 3.14159 * 0.5));
+        // Every other pixel row a touch darker (a CRT feel), and the vignette.
+        col *= 1.0 - uScan * 0.35 * mod(cell.y, 2.0);
         col *= 1.0 - 0.55 * pow(length(dir * vec2(1.0, 0.8)) * 1.25, 3.0);
         col = pow(max(col, 0.0), vec3(1.0 / 2.2));
+        // A small palette: 8 levels per channel, light ordered dithering between them.
+        col = clamp(floor(col * 7.0 + 0.5 + bayer(cell) * 0.55) / 7.0, 0.0, 1.0);
         gl_FragColor = vec4(col, 1.0);
       }`,
   });

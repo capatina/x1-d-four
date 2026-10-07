@@ -39,7 +39,8 @@ export function updateChannels(now: number) {
   channels.at = now;
   const st = waves.state;
   const live = viz.at > 0 && now - viz.at < 500;
-  const returns = st?.device?.state === 'running' ? st.returns : undefined;
+  // The 120 Hz feed's peaks first (bare-metal fast), the 60 Hz state as a fallback.
+  const returns = st?.device?.state === 'running' ? (live && viz.returns ? viz.returns : st.returns) : undefined;
   // What each deck sends (viz levels are rms × 2.5, capped at 1).
   const sent = (d: number, b: number) => (live && viz.decks[d] ? viz.decks[d][b] / 2.5 : 0);
   let others = 0;
@@ -58,16 +59,16 @@ export function updateChannels(now: number) {
   const share = mixTotal > 1e-4 ? Math.max(0, Math.min(1, Math.sqrt(Math.max(0, mixTotal * mixTotal - others)) / mixTotal)) : mix ? 0 : 1;
   channels.postFader[3] = !!mix && mixTotal > 1e-4;
   for (let b = 0; b < 3; b++) raw[9 + b] = sent(3, b) * (mix ? share : 1);
-  // Fast up, slower down; peaks hold, then fall.
+  // Instant up, a short fall (60 ms) so it doesn't flicker; peaks hold, then fall.
   for (let i = 0; i < 12; i++) {
     const v = toLevel(raw[i]);
-    channels.bands[i] += (v - channels.bands[i]) * (1 - Math.exp(-dt / (v > channels.bands[i] ? 0.03 : 0.3)));
+    channels.bands[i] = v > channels.bands[i] ? v : channels.bands[i] + (v - channels.bands[i]) * (1 - Math.exp(-dt / 0.06));
   }
   for (let c = 0; c < 4; c++) {
     const rms = Math.hypot(raw[c * 3], raw[c * 3 + 1], raw[c * 3 + 2]);
     channels.db[c] = rms > 1e-5 ? 20 * Math.log10(rms) : -99;
     const v = toLevel(rms);
-    channels.level[c] += (v - channels.level[c]) * (1 - Math.exp(-dt / (v > channels.level[c] ? 0.03 : 0.3)));
+    channels.level[c] = v > channels.level[c] ? v : channels.level[c] + (v - channels.level[c]) * (1 - Math.exp(-dt / 0.06));
     channels.peak[c] = Math.max(v, channels.peak[c] - dt * 0.35);
   }
 }

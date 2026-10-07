@@ -5,7 +5,7 @@ demoscene: black, crisp neon lines, wireframe solids, copper bars, a chrome
 sine scroller, bloom and hard flashes on the beat. The visuals are the track
 browser: the paths ahead are the tracks most similar to where you are.
 
-![Aiming sprouts the paths beyond a gate](screenshots/datastream/02-aim-sprouts-paths-1080.webp)
+![The Datastream in motion](screenshots/datastream/demo.gif)
 
 ## What each element means
 
@@ -94,7 +94,7 @@ you take counts as 20 s, and the MIDI data flow adds to it.
 | 4 Orbit | 5 min | a giant wireframe planet with a ring, rising behind the ridges |
 | 5 Plasma | 8 min | an old-school plasma rolling in the sky |
 
-Each new generation gets a title card. `__datastream.setGen(n)` and `kick()`
+No title cards appear. `__datastream.setGen(n)` and `kick()`
 force them for QA.
 
 ## Travel

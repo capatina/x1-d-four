@@ -8,6 +8,7 @@ import { client } from '../lib/client.svelte';
 import { DECK_DASHES, DECK_SHADES, hexToRgb, rgba } from '../lib/decks';
 import { SIGIL_CELL, tintedCell } from '../lib/runes';
 import { DECK_COUNT, type BeatGrid, type DeckState, type StateMsg } from '../lib/protocol';
+import { widgetPixelScale } from '../lib/pixel';
 import { waves, type DeckWave } from '../lib/waves';
 
 /** Seconds visible on each side of the playhead. */
@@ -150,7 +151,8 @@ export class WaveRenderer {
   };
 
   #onResize(): void {
-    const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    // Pixel art: drawn on a coarse grid, shown with hard pixels (image-rendering: pixelated).
+    const dpr = 1 / widgetPixelScale();
     const w = this.#canvas.clientWidth;
     const h = this.#canvas.clientHeight;
     if (w === this.#w && h === this.#h && dpr === this.#dpr) return;
@@ -176,9 +178,9 @@ export class WaveRenderer {
       this.#headGlow.addColorStop(0, '#ede4b900');
       this.#headGlow.addColorStop(0.5, '#ede4b928');
       this.#headGlow.addColorStop(1, '#ede4b900');
-      const px = Math.round(9 * dpr);
+      const px = Math.max(4, Math.round(9 * dpr));
       this.#sigils = DECK_SHADES.map((c, i) => tintedCell(SIGIL_CELL(i), px, c.mid));
-      this.#runeTicks = DECK_SHADES.map((c, i) => tintedCell((i * 5 + 3) % 16, Math.round(8 * dpr), c.mid));
+      this.#runeTicks = DECK_SHADES.map((c, i) => tintedCell((i * 5 + 3) % 16, Math.max(4, Math.round(8 * dpr)), c.mid));
       this.#loopGradients.length = 0;
       for (let i = 0; i < DECK_COUNT; i++) {
         const g = ctx.createLinearGradient(0, 0, 0, h);
@@ -204,7 +206,7 @@ export class WaveRenderer {
     const dt = Math.min(0.1, Math.max(0, (now - this.#last) / 1000));
     this.#last = now;
     // Moved to a screen with another pixel ratio (no resize event for that).
-    if (Math.min(2, Math.max(1, window.devicePixelRatio || 1)) !== this.#dpr) this.#onResize();
+    if (1 / widgetPixelScale() !== this.#dpr) this.#onResize();
     const st = waves.state;
     this.#advance(st, now, dt);
     const t0 = performance.now();

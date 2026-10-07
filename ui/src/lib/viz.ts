@@ -26,6 +26,8 @@ export type VizFrame = {
   /** Beat phase 0..1 at `at`, from the mixer's MIDI clock. */
   beat: number | null;
   bpm: number | null;
+  /** The mixer's record pairs' [low, mid, high] RMS (1/2, 3/4, 5/6, 7/8), loudest since the last frame. */
+  returns: number[][] | null;
 };
 
 export const viz: VizFrame = {
@@ -38,6 +40,7 @@ export const viz: VizFrame = {
   onsets: 0,
   beat: null,
   bpm: null,
+  returns: null,
 };
 
 export function applyViz(msg: VizMsg): void {
@@ -57,6 +60,7 @@ export function applyViz(msg: VizMsg): void {
   if (msg.onset) viz.onsets++;
   viz.beat = typeof msg.beat === 'number' && Number.isFinite(msg.beat) ? msg.beat : null;
   viz.bpm = typeof msg.bpm === 'number' && msg.bpm > 0 ? msg.bpm : null;
+  viz.returns = Array.isArray(msg.returns) && msg.returns.length === 4 ? msg.returns : null;
 }
 
 function clamp01(v: number): number {

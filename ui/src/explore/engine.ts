@@ -48,6 +48,7 @@ import {
   type TreeUniforms,
 } from './demo';
 import { Labels, type Obstacle } from './labels';
+import { pixelScale } from '../lib/pixel';
 import { BAND_PALETTE } from './palette';
 
 export type EngineStats = {
@@ -259,6 +260,9 @@ export class ExploreEngine {
   readonly #monoliths: THREE.Mesh;
   readonly #packets: THREE.Points;
   readonly #worldTunnel: THREE.Mesh;
+  /** One guardian per deck: its sigil as a big wireframe solid, in its colour, answering to its deck. */
+  readonly #guardians: { mesh: THREE.Mesh; inner: THREE.Mesh; alpha: { value: number }; lit: { value: number }; innerLit: { value: number }; spin: number; scale: number }[] = [];
+  readonly #deckBeat = new Float64Array(4);
   readonly #tunnel: THREE.Mesh;
   readonly #planet: ReturnType<typeof makePlanet>;
   readonly #trees: [Tree, Tree];
@@ -425,6 +429,26 @@ export class ExploreEngine {
     this.#packets = makePackets(s);
     this.#worldTunnel = makeWorldTunnel(s);
     this.#worldTunnel.visible = false;
+    // The decks' sigils (◆ ▲ ● ■): octahedron, tetrahedron, geodesic sphere, icosahedron.
+    const sigil = [1, 2, 3, 0];
+    for (let i = 0; i < 4; i++) {
+      const alpha = { value: 1 };
+      const om = wireMaterial(s, alpha),
+        im = wireMaterial(s, alpha);
+      for (const m of [om, im]) {
+        m.uniforms.uTintMix.value = 1;
+        m.uniforms.uFog.value = 0.0015;
+        hexVec(DECK_COLORS[i], m.uniforms.uTint.value as THREE.Vector3);
+      }
+      om.uniforms.uWidth.value = 1.6;
+      const mesh = new THREE.Mesh(geos[sigil[i]], om);
+      const inner = new THREE.Mesh(geos[(sigil[i] + 2) % 4], im);
+      inner.scale.setScalar(0.45);
+      mesh.add(inner);
+      mesh.frustumCulled = inner.frustumCulled = false;
+      this.#guardians.push({ mesh, inner, alpha, lit: om.uniforms.uLit as { value: number }, innerLit: im.uniforms.uLit as { value: number }, spin: i * 1.3, scale: 0 });
+      this.#scene.add(mesh);
+    }
     this.#tunnel = makeTunnel(s);
     this.#planet = makePlanet(s, geos[3]);
     this.#renderer.sortObjects = true;
@@ -667,27 +691,73 @@ export class ExploreEngine {
    */
   #masterFrame(now: number, dt: number) {
     const st = waves.state;
-    const inputs = st?.device?.state === 'running' ? st.inputs : undefined;
+    const running = st?.device?.state === 'running';
+    const pair = st?.recording?.pair ?? 3;
+    // The mix's level: the 120 Hz feed's peak since the last frame (bare-metal fast), else the state.
+    const viz = this.#o.viz;
+    const fresh = viz.returns && now - viz.at < 500 ? viz.returns[pair] : null;
+    let db = -99;
+    if (fresh) {
+      const rms = Math.hypot(fresh[0], fresh[1], fresh[2]);
+      db = rms > 1e-5 ? 20 * Math.log10(rms) : -99;
+    } else if (st?.inputs) db = Math.max(st.inputs[pair * 2] ?? -99, st.inputs[pair * 2 + 1] ?? -99);
     let n: number;
-    if (inputs) {
-      const pair = st?.recording?.pair ?? 3;
-      const db = Math.max(inputs[pair * 2] ?? -99, inputs[pair * 2 + 1] ?? -99);
-      // Fast up, slower down, in dB.
-      this.#masterDb += (db - this.#masterDb) * (1 - Math.exp(-dt / (db > this.#masterDb ? 0.03 : 0.3)));
+    if (running && (fresh || st?.inputs)) {
+      // Instant up; a 50 ms fall so silence between beats doesn't strobe.
+      this.#masterDb = db > this.#masterDb ? db : this.#masterDb + (db - this.#masterDb) * (1 - Math.exp(-dt / 0.05));
       n = Math.max(0, Math.min(1, (this.#masterDb + 48) / 40));
     } else n = Math.min(1, this.#energyS * 2.5 * (this.#playing ? 1 : 0));
     const was = this.#master;
     this.#master = n;
     if (n < 0.3) this.#masterLowAt = now;
     if (n > 0.7 && was <= 0.7 && now - this.#masterLowAt < 1200 && now - this.#lastJump > CLIMAX_GAP_MS) this.#jump(now);
-    // The world's level: rises quickly with the mix, sinks slower when it goes.
-    this.#mix += (n - this.#mix) * (1 - Math.exp(-dt / (n > this.#mix ? 0.08 : 0.7)));
+    // The world's level follows at once; it sinks over 120 ms when the mix goes.
+    this.#mix = n > this.#mix ? n : this.#mix + (n - this.#mix) * (1 - Math.exp(-dt / 0.12));
     this.#shared.uMix.value = this.#reduced ? Math.max(0.5, this.#mix) : this.#mix;
   }
+  /** How much the world may react at all: 0 with no mix volume (nothing bumps), 1 from a quiet mix up. */
+  #gate() {
+    const m = this.#shared.uMix.value;
+    const t = Math.max(0, Math.min(1, m / 0.45));
+    return t * t * (3 - 2 * t);
+  }
+
   /** −1 silent … 0 at a normal mix … +1 hot. */
   #mixBend() {
     const m = this.#shared.uMix.value;
     return m < 0.75 ? (m - 0.75) / 0.75 : (m - 0.75) / 0.25;
+  }
+
+  /**
+   * The decks' guardians, across the top of the view, each answering to its own
+   * deck (after the mixer's fader where it's measured): low = size, mid = glow,
+   * high = spin and sparkle, and a kick on the deck's own beat. A silent deck's
+   * guardian shrinks to a dim speck.
+   */
+  #guardiansFrame(dt: number) {
+    const ch = channels.bands;
+    const gate = this.#gate();
+    const cam = this.#camera.position;
+    for (let i = 0; i < 4; i++) {
+      const g = this.#guardians[i];
+      const low = ch[i * 3] * gate,
+        mid = ch[i * 3 + 1] * gate,
+        high = ch[i * 3 + 2] * gate;
+      const level = channels.level[i] * gate;
+      const beat = this.#deckBeat[i];
+      const kick = beat >= 0 && !this.#reduced ? Math.exp(-(beat - Math.floor(beat)) * 6) * level : 0;
+      // Size follows the deck at once, falls back over 150 ms.
+      const target = 0.25 + 6.5 * low + 1.8 * kick;
+      g.scale = target > g.scale ? target : g.scale + (target - g.scale) * (1 - Math.exp(-dt / 0.15));
+      g.spin += dt * (this.#reduced ? 0.1 : 0.3 + 3.5 * high + 1.2 * mid);
+      g.mesh.position.set(cam.x + (i - 1.5) * 34, 22 + 3 * Math.sin(this.#time * 0.6 + i * 1.7) * (0.3 + level), cam.z - 115);
+      g.mesh.rotation.set(g.spin * 0.6 + i, g.spin, Math.sin(g.spin * 0.3) * 0.4);
+      g.inner.rotation.set(-g.spin * 1.4, -g.spin * 0.8, 0);
+      g.mesh.scale.setScalar(Math.max(0.2, g.scale));
+      g.lit.value = Math.min(1.2, 0.1 + 1.1 * mid + 0.4 * kick);
+      g.innerLit.value = Math.min(1.2, 0.2 + 1.4 * high + kick);
+      g.alpha.value = 0.25 + 0.75 * Math.min(1, level * 1.5);
+    }
   }
 
   /** A new track: new land, swept in from the horizon to the camera in 2.5 s. */
@@ -754,6 +824,11 @@ export class ExploreEngine {
    */
   #climax(now: number, dt: number, live: boolean) {
     if (!this.#playing || !live) return;
+    // A silent mix can't climax (the slam has to be heard).
+    if (this.#gate() < 0.5) {
+      this.#lowFor = 0;
+      return;
+    }
     const b = this.#bass;
     if (this.#bassRef < 0.02) this.#bassRef = b;
     if (b > this.#bassRef * 0.5) this.#bassRef += (b - this.#bassRef) * (1 - Math.exp(-dt / 20));
@@ -1093,6 +1168,10 @@ export class ExploreEngine {
     // Each mixer channel's bands, each driving its own part of the world.
     updateChannels(now);
     s.uChan.value.set(channels.bands);
+    {
+      const g = this.#gate();
+      for (let i = 0; i < 12; i++) s.uChan.value[i] *= g;
+    }
     const ch = channels.bands;
     this.#channel(now, dt);
     if (!this.#labelsIdle && now - this.#labelsAt > 3000 && this.#children.length) {
@@ -1114,10 +1193,10 @@ export class ExploreEngine {
     // The beat: a sharp attack on every master beat, scaled by the low end.
     const beats = this.#masterBeats(now);
     const phase = beats === null ? (this.#time * (this.#bpm / 60)) % 1 : beats - Math.floor(beats);
-    const pulse = this.#playing && !this.#reduced ? Math.exp(-phase * 6) * (0.45 + 0.8 * this.#levels[0]) : 0;
+    const pulse = this.#playing && !this.#reduced ? Math.exp(-phase * 6) * (0.45 + 0.8 * this.#levels[0]) * this.#gate() : 0;
     s.uBeat.value = Math.min(1.4, pulse);
     s.uBeatPhase.value = phase;
-    s.uEnergy.value = energy;
+    s.uEnergy.value = energy * this.#gate();
     s.uTime.value = this.#time;
     this.#vigil = this.#playing ? Math.max(0, this.#vigil - dt / 0.4) : Math.min(1, this.#vigil + dt / 1.2);
     s.uVigil.value = this.#vigil;
@@ -1134,14 +1213,14 @@ export class ExploreEngine {
       const shake = m * (drop * 0.5 + kick * 0.12);
       const t = this.#time;
       // Always drifting a little; the kick punches down, the bass rocks it.
-      const sway = m * (0.4 + 0.6 * this.#energyS);
+      const sway = m * (0.4 + 0.6 * this.#energyS) * (0.3 + 0.7 * this.#gate());
       this.#camera.position.set(
         Math.sin(t * 0.29) * 0.9 * sway + Math.sin(t * 61) * shake,
         CAM_H + m * (pulse * 0.08 - kick * 0.55 + Math.sin(t * 0.41) * 0.3 * sway) + Math.sin(t * 47) * shake,
         0,
       );
       this.#camera.lookAt(Math.sin(t * 0.17) * 2 * sway, LOOK_Y, -LOOK_D);
-      this.#camera.rotateZ(m * (Math.sin(t * 0.19) * 0.022 * sway + this.#kickSide * kick * 0.012 + Math.sin(t * 0.7) * 0.006 * this.#bassN));
+      this.#camera.rotateZ(m * (Math.sin(t * 0.19) * 0.022 * sway + this.#kickSide * kick * 0.012 + Math.sin(t * 0.7) * 0.006 * this.#shared.uBass.value));
       this.#passFlash = 0;
     }
     const fovKick = this.#flight && !this.#flight.back ? Math.sin(Math.PI * Math.min(1, (now - this.#flight.t0) / this.#flight.dur)) * 10 : 0;
@@ -1167,11 +1246,12 @@ export class ExploreEngine {
       planet.planet.position.set(this.#camera.position.x - 380, 75, this.#camera.position.z - 800);
       planet.planet.rotation.y += dt * 0.05;
       planet.planet.rotation.z = 0.35;
-      planet.planet.scale.setScalar(120 * (1 + 0.035 * this.#bassN + 0.03 * kick));
+      planet.planet.scale.setScalar(120 * (1 + 0.035 * this.#shared.uBass.value + 0.03 * kick));
       planet.alpha.value = s.uGen.value.w;
-      planet.lit.value = 0.1 + 0.3 * this.#bassN;
-      planet.ringLit.value = 0.3 + 0.6 * this.#bassN;
+      planet.lit.value = 0.1 + 0.3 * this.#shared.uBass.value;
+      planet.ringLit.value = 0.3 + 0.6 * this.#shared.uBass.value;
     }
+    this.#guardiansFrame(dt);
     this.#monoliths.visible = s.uGen.value.y > 0.001;
     if (this.#worldTunnel.visible) this.#worldTunnel.position.set(this.#camera.position.x, 10, this.#camera.position.z);
     this.#tunnel.visible = s.uGen.value.z > 0.001;
@@ -1251,7 +1331,7 @@ export class ExploreEngine {
     this.#energyS += (energy - this.#energyS) * (1 - Math.exp(-dt / 2));
     // Units per beat: 14 at rest, up to 30 with energy; a drop surges ×2.5.
     const surge = 1 + 1.5 * Math.exp(-(now - this.#dropT0) / 600);
-    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge * (1 + 0.45 * this.#bassN + 0.4 * this.#shared.uKick.value) * (1 + 7 * this.#stretch) * (0.2 + 0.8 * Math.min(1, this.#shared.uMix.value / 0.75) + 0.25 * Math.max(0, this.#mixBend())) * (0.75 + 0.6 * channels.bands[9]);
+    const v = this.#speedF * (bpm / 60) * (14 + 16 * this.#energyS) * surge * (1 + 0.45 * this.#shared.uBass.value + 0.4 * this.#shared.uKick.value) * (1 + 7 * this.#stretch) * (0.2 + 0.8 * Math.min(1, this.#shared.uMix.value / 0.75) + 0.25 * Math.max(0, this.#mixBend())) * (0.75 + 0.6 * channels.bands[9]);
     this.#speed = this.#reduced ? 0 : v;
     // A jog scratches the world with the wheel (applied over ~50 ms).
     const scratch = this.#reduced ? 0 : this.#scratch * (1 - Math.exp(-dt / 0.05));
@@ -1352,7 +1432,7 @@ export class ExploreEngine {
       const level = v ? (v[0] + v[1] + v[2]) / 3 : 0;
       this.#deckLevel[i] += (level - this.#deckLevel[i]) * kLevel;
       const focus = st?.focused === i ? 1.25 : 1;
-      c.uBeamLevel.value[i] = this.#deckBase > 0 ? (playing ? (0.12 + Math.min(1, this.#deckLevel[i] * 1.6) * 0.5) * focus : loaded ? 0.03 : 0) * (1 - this.#mist * 0.5) : 0;
+      c.uBeamLevel.value[i] = this.#deckBase > 0 ? (playing ? (0.12 + Math.min(1, this.#deckLevel[i] * 1.6) * 0.5) * focus : loaded ? 0.03 : 0) * (1 - this.#mist * 0.5) * this.#gate() : 0;
       c.uBeamX.value[i] = this.#deckX[i] / this.#width;
       // Sway on the deck's own beat: synced decks swing together.
       const grid = loaded ? client.deckInfo[i]?.grid : null;
@@ -1361,8 +1441,9 @@ export class ExploreEngine {
         const beats = ((d!.position + d!.rate * age - grid.first_beat) * grid.bpm) / 60;
         deckPhase = beats;
       }
+      this.#deckBeat[i] = playing ? deckPhase : -1;
       c.uBeamSway.value[i] = this.#reduced ? 0 : Math.sin(Math.PI * deckPhase) * 0.05;
-      this.#shared.uDeckLevel.value[i] = playing ? 0.25 + Math.min(1, this.#deckLevel[i] * 1.8) * 0.75 : loaded ? 0.08 : 0;
+      this.#shared.uDeckLevel.value[i] = (playing ? 0.25 + Math.min(1, this.#deckLevel[i] * 1.8) * 0.75 : loaded ? 0.08 : 0) * this.#gate();
       this.#shared.uDeckPhase.value[i] = deckPhase;
     }
     c.uBeamY.value = this.#deckBase > 0 ? 1 - this.#deckBase / this.#height : 0;
@@ -1377,7 +1458,7 @@ export class ExploreEngine {
     c.uCut.value = cut;
     c.uMist.value = this.#mist;
     c.uTime.value = this.#time;
-    c.uBloom.value = (1 + 0.15 * pulse + 0.25 * this.#bassN + st2) * WORLDS[this.#world].bloom;
+    c.uBloom.value = (1 + 0.15 * pulse + 0.25 * this.#shared.uBass.value + st2) * WORLDS[this.#world].bloom;
     // The mix volume: near black in silence, full at a normal mix, brighter hot.
     const m = this.#shared.uMix.value;
     c.uExposure.value = 0.08 + 0.92 * Math.pow(Math.min(1, m / 0.75), 0.8) + 0.3 * Math.max(0, this.#mixBend());
@@ -1402,9 +1483,11 @@ export class ExploreEngine {
       this.#kickSide = -this.#kickSide;
     }
     this.#bassN = this.#reduced ? n * 0.4 : n;
-    s.uBass.value = this.#bassN * (1 - this.#vigil);
+    // No mix volume, no bumping: every reaction scales with the mix.
+    const gate = this.#gate();
+    s.uBass.value = this.#bassN * (1 - this.#vigil) * gate;
     const age = (now - this.#kickAt) / 1000;
-    s.uKick.value = this.#reduced ? 0 : Math.exp(-age / 0.09);
+    s.uKick.value = this.#reduced ? 0 : Math.exp(-age / 0.09) * gate;
     s.uKickAge.value = Math.min(99, age);
     const spec = s.uSpectrum.value;
     const k = 1 - Math.exp(-dt / 0.06);
@@ -1653,23 +1736,38 @@ export class ExploreEngine {
       this.#layoutLabels();
     } else this.#project();
   };
+  /**
+   * Pixel art: the world renders on a virtual grid about 360 pixels tall, without
+   * anti-aliasing, and the composite shows each virtual pixel as a hard square.
+   */
   #applySize() {
-    this.#renderer.setPixelRatio(this.#dpr);
+    this.#renderer.setPixelRatio(Math.min(this.#dpr, 1));
     this.#renderer.setSize(this.#width, this.#height, false);
     this.#camera.aspect = this.#width / this.#height;
     this.#camera.updateProjectionMatrix();
-    const w = Math.max(1, Math.round(this.#width * this.#dpr)),
-      h = Math.max(1, Math.round(this.#height * this.#dpr));
+    const scale = pixelScale(this.#height);
+    const w = Math.max(1, Math.ceil(this.#width / scale)),
+      h = Math.max(1, Math.ceil(this.#height / scale));
     const make = (rw: number, rh: number, samples = 0) =>
-      new THREE.WebGLRenderTarget(Math.max(1, rw), Math.max(1, rh), { type: this.#rtType, samples, depthBuffer: samples > 0, colorSpace: THREE.NoColorSpace });
+      new THREE.WebGLRenderTarget(Math.max(1, rw), Math.max(1, rh), {
+        type: this.#rtType,
+        samples,
+        depthBuffer: true,
+        colorSpace: THREE.NoColorSpace,
+        minFilter: THREE.NearestFilter,
+        magFilter: THREE.NearestFilter,
+      });
     for (const rt of [this.#rtScene, this.#rtA, this.#rtB, this.#rtC, this.#rtD]) rt?.dispose();
-    this.#rtScene = make(w, h, 4);
-    this.#rtA = make(w >> 2, h >> 2);
-    this.#rtB = make(w >> 2, h >> 2);
-    this.#rtC = make(w >> 3, h >> 3);
-    this.#rtD = make(w >> 3, h >> 3);
-    this.#post.composite.uniforms.uRes.value.set(w, h);
-    this.#shared.uDpr.value = this.#dpr;
+    this.#rtScene = make(w, h, 0);
+    this.#rtA = make(w >> 1, h >> 1);
+    this.#rtB = make(w >> 1, h >> 1);
+    this.#rtC = make(w >> 2, h >> 2);
+    this.#rtD = make(w >> 2, h >> 2);
+    const full = this.#renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.#post.composite.uniforms.uRes.value.copy(full);
+    this.#post.composite.uniforms.uLow.value.set(w, h);
+    // Point sprites are sized in render-target pixels.
+    this.#shared.uDpr.value = 1 / scale;
   }
   #pick(e: MouseEvent) {
     const rect = this.#o.canvas.getBoundingClientRect();
@@ -1727,6 +1825,7 @@ export class ExploreEngine {
     this.#labels.clear();
     for (const t of this.#trees) t.dispose();
     for (const g of this.#geos) g.dispose();
+    for (const g of this.#guardians) for (const m of [g.mesh, g.inner]) (m.material as THREE.Material).dispose();
     for (const m of [this.#sky, this.#floor, this.#streaks, this.#monoliths, this.#tunnel, this.#packets, this.#worldTunnel]) {
       m.geometry.dispose();
       (m.material as THREE.Material).dispose();
