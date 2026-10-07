@@ -181,7 +181,7 @@ pub struct Rt {
     parser: MidiParser,
     midi_out: MidiOutQueue,
     mix: [[f32; 2]; FRAMES_PER_PACKET],
-    /// One-pole low-pass states per deck at 250 Hz and 3 kHz (the band splits).
+    /// One-pole low-pass states per deck at 120 Hz and 3 kHz (the band splits).
     split: [[f32; 2]; DECKS],
     split_coef: [f32; 2],
     /// Mono mix of all decks for the visualiser; pushes fail silently when nobody reads.
@@ -256,9 +256,10 @@ impl ClockTempo {
     }
 }
 
-/// Band-split coefficients for 250 Hz and 3 kHz one-pole low-passes.
+/// Band-split coefficients for 120 Hz and 3 kHz one-pole low-passes: the low band is
+/// the deep bass (sub and kick), so the visuals react to it and not to bass harmonics.
 fn split_coefficients() -> [f32; 2] {
-    [250.0f32, 3000.0].map(|fc| 1.0 - (-std::f32::consts::TAU * fc / SAMPLE_RATE as f32).exp())
+    [120.0f32, 3000.0].map(|fc| 1.0 - (-std::f32::consts::TAU * fc / SAMPLE_RATE as f32).exp())
 }
 
 /// The control side.

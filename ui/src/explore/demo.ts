@@ -1117,7 +1117,10 @@ export function makePost() {
       uVanish: { value: new THREE.Vector2(0.5, 0.5) },
       uBeamX: { value: new Float32Array(4) },
       uBeamY: { value: 0 },
-      uBeamLevel: { value: new Float32Array(4) },
+      /** Deck volume bars: each deck's level (0..1, −48…0 dB), its peak hold, and whether it's loaded. */
+      uBarLevel: { value: new Float32Array(4) },
+      uBarPeak: { value: new Float32Array(4) },
+      uBarOn: { value: new Float32Array(4) },
       uBeamSway: { value: new Float32Array(4) },
       uDeckColor: { value: new Float32Array(12) },
       uFrame: { value: new THREE.Vector4(0, 0, 0, 0) },
@@ -1128,12 +1131,15 @@ export function makePost() {
       uniform vec2 uRes, uVanish, uLow;
       uniform float uTime, uAberr, uFlash, uCut, uMist, uBloom, uBeamY, uScan, uExposure;
       uniform float uBeamX[4];
-      uniform float uBeamLevel[4];
+      uniform float uBarLevel[4];
+      uniform float uBarPeak[4];
+      uniform float uBarOn[4];
       uniform float uBeamSway[4];
       uniform float uDeckColor[12];
       varying vec2 vUv;
       float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
       vec3 neon(vec3 c) { float l = dot(c, vec3(0.299, 0.587, 0.114)); return max(vec3(0.0), mix(vec3(l), c, 2.2)); }
+      vec3 deckNeon(vec3 c) { return neon(c); }
       vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
       // 4×4 Bayer matrix, for ordered dithering.
       float bayer(vec2 c) {
@@ -1160,19 +1166,37 @@ export function makePost() {
         col.g = texture2D(tScene, uv).g;
         col.b = texture2D(tScene, uv - ab).b;
         col += (texture2D(tBloom, uv).rgb * 0.7 + texture2D(tWide, uv).rgb * 0.5) * uBloom;
-        // Deck lasers, on the pixel grid.
+        // Deck volume bars: from each deck card toward the vanishing point, a stack of
+        // pixel segments in the deck's colour; the lit length is the deck's volume, white
+        // toward the top and red in the last tenth, with a peak-hold block and ghosts above.
         vec2 px = uv * uRes;
         float pscale = uRes.y / uLow.y;
         for (int i = 0; i < 4; i++) {
-          if (uBeamLevel[i] <= 0.001) continue;
+          if (uBarOn[i] <= 0.001) continue;
           vec2 a = vec2(uBeamX[i], uBeamY) * uRes;
           vec2 b = (uVanish + vec2(uBeamSway[i], 0.0)) * uRes;
           vec2 ab2 = b - a;
-          float t = clamp(dot(px - a, ab2) / dot(ab2, ab2), 0.0, 1.0);
-          float d = length(px - (a + ab2 * t)) / pscale;
-          float w = mix(1.2, 0.5, t);
-          vec3 dc = neon(vec3(uDeckColor[i * 3], uDeckColor[i * 3 + 1], uDeckColor[i * 3 + 2]));
-          col += mix(dc, vec3(1.0), 0.2) * (step(d, w) + exp(-d / (w * 4.0)) * 0.08) * uBeamLevel[i] * (1.0 - t * 0.8);
+          float len = length(ab2);
+          vec2 dir = ab2 / len;
+          vec2 q = px - a;
+          float u = dot(q, dir) / (len * 0.78);
+          if (u < 0.0 || u > 1.0) continue;
+          float s = abs(dot(q, vec2(-dir.y, dir.x))) / pscale;
+          float halfw = mix(5.0, 1.5, u);
+          if (s > halfw + 3.0) continue;
+          const float SEGS = 20.0;
+          float seg = floor(u * SEGS);
+          float body = step(s, halfw) * step(fract(u * SEGS), 0.7);
+          float lit = step((seg + 0.5) / SEGS, uBarLevel[i]);
+          float peak = step(abs(seg - floor(uBarPeak[i] * SEGS - 0.001)), 0.5) * step(0.03, uBarPeak[i]);
+          vec3 dc = deckNeon(vec3(uDeckColor[i * 3], uDeckColor[i * 3 + 1], uDeckColor[i * 3 + 2]));
+          float h = seg / SEGS;
+          vec3 c = mix(dc, vec3(1.0), smoothstep(0.55, 0.88, h));
+          c = mix(c, vec3(1.0, 0.25, 0.35), step(0.9, h));
+          col += c * body * lit * 1.15;
+          col += vec3(1.0) * body * peak * (1.0 - lit) * 1.3;
+          col += dc * body * (1.0 - lit) * 0.06 * uBarOn[i];
+          col += dc * lit * exp(-max(0.0, s - halfw) * 0.9) * 0.12 * step(s, halfw + 3.0);
         }
         // Scouting: the signal is weak beyond the last claimed track.
         if (uMist > 0.0) {

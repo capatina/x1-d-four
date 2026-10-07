@@ -1538,8 +1538,10 @@ export class ExploreEngine {
       const v = live ? this.#o.viz.decks[i] : undefined;
       const level = v ? (v[0] + v[1] + v[2]) / 3 : 0;
       this.#deckLevel[i] += (level - this.#deckLevel[i]) * kLevel;
-      const focus = st?.focused === i ? 1.25 : 1;
-      c.uBeamLevel.value[i] = this.#deckBase > 0 ? (playing ? (0.12 + Math.min(1, this.#deckLevel[i] * 1.6) * 0.5) * focus : loaded ? 0.03 : 0) * (1 - this.#mist * 0.5) * this.#gate() : 0;
+      // The deck's volume bar: its channel's level (after the fader where measured) and peak.
+      c.uBarOn.value[i] = this.#deckBase > 0 && loaded ? 1 - this.#mist * 0.5 : 0;
+      c.uBarLevel.value[i] = channels.level[i];
+      c.uBarPeak.value[i] = channels.peak[i];
       c.uBeamX.value[i] = this.#deckX[i] / this.#width;
       // Sway on the deck's own beat: synced decks swing together.
       const grid = loaded ? client.deckInfo[i]?.grid : null;
@@ -1576,13 +1578,20 @@ export class ExploreEngine {
   }
 
   /**
-   * Bass: the low band through a fast envelope (12 ms attack, 160 ms release),
+   * Bass: the deep bass (about 30-90 Hz) through a fast envelope (12 ms attack, 160 ms release),
    * levelled against its recent peak so quiet and loud tracks both move the
    * world; a kick is a sharp rise above the slow average.
    */
   #bassFrame(now: number, dt: number, live: boolean) {
     const s = this.#shared;
-    const raw = live && this.#playing ? Math.max(this.#o.viz.bands[0], (this.#o.viz.spectrum[0] + this.#o.viz.spectrum[1] + this.#o.viz.spectrum[2]) / 3) : 0;
+    // The deep bass: the spectrum's sub and kick range (bins 0-10, about 30-90 Hz), back
+    // from its dB scale to a linear level, so kicks stand out the way they hit the body.
+    let raw = 0;
+    if (live && this.#playing) {
+      const spec = this.#o.viz.spectrum;
+      for (let i = 0; i <= 10; i++) raw += Math.pow(10, (spec[i] * 72 - 72) / 20) * (i < 7 ? 1.2 : 0.7);
+      raw = Math.min(1, raw * 0.6);
+    }
     this.#bass += (raw - this.#bass) * (1 - Math.exp(-dt / (raw > this.#bass ? 0.012 : 0.16)));
     this.#bassPeak = Math.max(0.08, this.#bass, this.#bassPeak * Math.exp(-dt / 6));
     const n = Math.min(1.3, this.#bass / this.#bassPeak);
